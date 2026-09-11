@@ -1,0 +1,45 @@
+{
+  "name": "full-duplex-code",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Talk to Claude Code while it works. A full-duplex voice companion powered by GPT Live 1.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "test": "node --test test/*.test.js",
+    "doctor": "node src/cli.js doctor",
+    "usage": "node src/cli.js usage",
+    "test:integration": "node scripts/test-integration.mjs",
+    "test:terminal": "node scripts/test-terminal-context.mjs",
+    "test:ui": "node scripts/test-ui-context.mjs",
+    "test:browser": "node scripts/test-browser.mjs",
+    "test:correction": "node scripts/test-correction.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "node-pty": "^1.1.0",
+    "playwright": "^1.63.0"
+  },
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CakeCrusher/full_duplex_code.git"
+  },
+  "homepage": "https://github.com/CakeCrusher/full_duplex_code#readme",
+  "bugs": {
+    "url": "https://github.com/CakeCrusher/full_duplex_code/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "voice",
+    "full-duplex",
+    "gpt-live",
+    "coding-agent"
+  ]
+}
