@@ -73,7 +73,7 @@ The browser shows voice captions and agent activity. Terminal prompts appear und
 
 ## Approvals and attention
 
-Approve tools and respond to Claude's permission prompts in the terminal. The companion can tell you that attention is needed, but it does not approve tools for you.
+By default, approve tools and respond to Claude's permission prompts in the terminal. The companion can tell you that attention is needed, but it does not approve tools for you. To launch Claude with tool permission checks disabled, pass `--dangerously-skip-permissions` as shown below.
 
 If Claude asks a question, you can answer by voice or in the terminal. Keep the terminal visible so you can inspect changes, commands, and any prompts that require direct interaction.
 
@@ -106,6 +106,7 @@ Add options after `npm start --`:
 | --- | --- |
 | `--cwd /path/to/project` | Choose the folder Claude works in. |
 | `--resume SESSION_ID` | Continue a specific Claude conversation. |
+| `--session-id UUID` | Choose the full UUID for a new conversation. Use either this or `--resume`. |
 | `--no-open` | Print the companion link without opening the browser. |
 | `--max-minutes 10` | Limit this voice connection to ten minutes. Default: 30. |
 | `--observe transcript` | Observe saved conversation text if display hooks are unavailable. |
@@ -118,6 +119,32 @@ npm start -- --cwd /path/to/project --no-open --max-minutes 10
 ```
 
 Run `npm start -- --help` to see all options. Transcript observation depends on when Claude saves messages, so updates can arrive later than in the default mode.
+
+### Pass arguments to Claude Code
+
+The launcher handles the companion options listed above, plus `--voice` and `--help`. It forwards every other argument to Claude Code, in the order you supplied it, after the generated Claude options. Claude applies its normal override and merge rules; for example, you can choose its model or permission mode. Quoted prompts and option values are passed as arguments, without shell evaluation.
+
+Start with Claude's permission checks disabled:
+
+```sh
+npm start -- --dangerously-skip-permissions
+```
+
+Or combine Claude flags with a project path and an existing conversation:
+
+```sh
+npm start -- --cwd /path/to/project --resume CLAUDE_SESSION_ID --dangerously-skip-permissions --model opus
+```
+
+You can also pass an initial prompt:
+
+```sh
+npm start -- --model opus "Explain this project"
+```
+
+The first `--` tells npm to pass the arguments to the launcher. An additional `--` stops the launcher's option parsing and sends the remaining arguments directly to Claude. For example, `npm start -- -- --help` displays Claude's help instead of the companion's help. Put companion options and `--resume` / `--session-id` before this additional separator so the companion tracks the selected session. To pass a value that itself matches a companion flag, use this separator or Claude's `--option=value` form.
+
+These options are passed to the normal terminal process. Options that replace Claude's hooks or channel configuration also replace the companion connections they provide. See the [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) for flag behavior.
 
 ## Costs
 

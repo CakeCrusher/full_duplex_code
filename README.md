@@ -26,6 +26,12 @@ Start from this folder, using the path to your project:
 npm start -- --cwd /path/to/your/project
 ```
 
+Claude Code flags work here too. To skip its tool permission prompts:
+
+```sh
+npm start -- --cwd /path/to/your/project --dangerously-skip-permissions
+```
+
 1. Accept Claude's development-channel notice and any workspace trust prompt in the terminal.
 2. In the browser companion, click **Start voice** and allow microphone access. If the page doesn't open, use the link printed in the terminal.
 3. Start talking: “Ask Claude to add a dark mode.” You can also type into Claude and ask, “What did I just tell Claude?”

@@ -4,21 +4,20 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { parseArgs } from 'node:util';
 import { Harness } from './server.js';
 import { Budget } from './budget.js';
 import { claudeArgs } from './agent.js';
+import { parseLaunchArgs } from './cli-options.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 try { process.loadEnvFile(path.join(root, '.env')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-  cwd: { type: 'string', default: process.cwd() }, resume: { type: 'string' },
-  'no-open': { type: 'boolean', default: false }, 'max-minutes': { type: 'string', default: '30' },
-  voice: { type: 'string', default: 'marin' }, observe: { type: 'string', default: 'hooks' },
-  port: { type: 'string', default: '0' }, help: { type: 'boolean', short: 'h' },
-} });
+const { values, extraArgs, command } = parseLaunchArgs(process.argv.slice(2));
 if (values.help) {
-  console.log(`Usage: npm start -- [--cwd /project] [--resume SESSION_ID] [--no-open]
+  console.log(`Usage: npm start -- [companion options] [Claude Code arguments]
+  --cwd /project        Folder where Claude works (default: current directory)
+  --resume SESSION_ID   Resume a Claude conversation by its full UUID
+  --session-id UUID     Choose the UUID for a new Claude conversation
+  --no-open             Print the companion link without opening the browser
   --max-minutes 30       Maximum voice connection duration; Claude stays open
   --voice marin         GPT Live voice
   --observe hooks       Live display hooks (default), or transcript file tail
@@ -26,13 +25,20 @@ if (values.help) {
   npm run doctor        Check local prerequisites without API spending
   npm run usage         Show the local $25 voice spending budget
 
+Other arguments are forwarded unchanged after the generated Claude options.
+Claude applies its normal override/merge rules. Examples:
+  npm start -- --dangerously-skip-permissions
+  npm start -- --cwd /project --resume UUID --model opus --permission-mode plan
+Use an extra -- to pass a launcher option name to Claude instead:
+  npm start -- -- --help
+
 Claude opens in your terminal. Open the companion URL and click Start voice once
-to enable the microphone and speaker. Ordinary Claude permission prompts remain
-in the terminal. End voice stops API billing while leaving Claude available.`);
+to enable the microphone and speaker. Claude's permission mode controls tool
+approvals. End voice stops API billing while leaving Claude available.`);
   process.exit(0);
 }
-if (positionals[0] === 'usage') { console.log(JSON.stringify(new Budget(path.join(root, '.runs/budget.json')).summary(), null, 2)); process.exit(0); }
-if (positionals[0] === 'doctor') {
+if (command === 'usage') { console.log(JSON.stringify(new Budget(path.join(root, '.runs/budget.json')).summary(), null, 2)); process.exit(0); }
+if (command === 'doctor') {
   const version = spawnSync('claude', ['--version'], { encoding: 'utf8' });
   const auth = spawnSync('claude', ['auth', 'status'], { encoding: 'utf8' });
   let loggedIn = false; try { loggedIn = JSON.parse(auth.stdout).loggedIn; } catch {}
@@ -46,8 +52,8 @@ const maxSeconds = Number(values['max-minutes']) * 60; const port = Number(value
 if (!Number.isFinite(maxSeconds) || maxSeconds < 15 || maxSeconds > 14400) throw new Error('--max-minutes must be between 0.25 and 240');
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port');
 const cwd = fs.realpathSync(values.cwd);
-const sessionId = values.resume ?? randomUUID();
-if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(sessionId)) throw new Error('--resume must be a Claude session UUID');
+const sessionId = values.resume ?? values['session-id'] ?? randomUUID();
+if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(sessionId)) throw new Error('--resume and --session-id require a Claude session UUID');
 const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId.slice(0, 8)}`);
 const harness = await new Harness({ root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY, maxSeconds, port, voice: values.voice, observation: values.observe }).start();
 console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nClaude will open here. Click Start voice in the browser when the channel is ready.\nLocal run: ${runDir}\n`);
@@ -57,7 +63,7 @@ if (!values['no-open']) {
 }
 const childEnv = { ...process.env, FD_BRIDGE_TOKEN: harness.channelToken };
 delete childEnv.OPENAI_API_KEY;
-const child = spawn('claude', claudeArgs({ config: harness.config, sessionId, resume: Boolean(values.resume) }), { cwd, env: childEnv, stdio: 'inherit' });
+const child = spawn('claude', claudeArgs({ config: harness.config, sessionId, resume: Boolean(values.resume), extraArgs }), { cwd, env: childEnv, stdio: 'inherit' });
 let stopping = false;
 async function stop() {
   if (stopping) return; stopping = true;

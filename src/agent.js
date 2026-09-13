@@ -20,8 +20,11 @@ export function claudeArgs({ config, sessionId, resume = false, extraArgs = [] }
   return [
     '--mcp-config', config.mcpFile, '--settings', config.settingsFile,
     '--dangerously-load-development-channels', 'server:voice',
+    '--allowedTools', 'mcp__voice__acknowledge,mcp__voice__reply',
+    // End defaults with a scalar option so a forwarded positional prompt cannot
+    // be consumed as another value of Claude's variadic --allowedTools option.
     resume ? '--resume' : '--session-id', sessionId,
-    '--allowedTools', 'mcp__voice__acknowledge,mcp__voice__reply', ...extraArgs,
+    ...extraArgs,
   ];
 }
 
