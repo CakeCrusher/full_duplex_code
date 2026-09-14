@@ -23,7 +23,8 @@ export class Mediator {
   liveEvent(event) {
     if (event.type === 'session.started') this.context.pump();
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
-      const fragment = this.history.add(event); this.publish({ type: 'caption', ...fragment });
+      const fragment = this.history.add(event);
+      this.publish({ type: 'caption', ...fragment, voiceSessionId: this.live.id, voiceStartedAt: this.live.startedAt });
     }
     if (event.type === 'session.delegation.created' && event.delegation?.target === 'client') {
       const id = event.delegation.id;

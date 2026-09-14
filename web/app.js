@@ -1,40 +1,15 @@
+import { TimelineView } from './timeline.js';
+
 const $ = id => document.getElementById(id);
 const token = location.hash.slice(1) || sessionStorage.getItem('fd-voice-token');
 if (location.hash) { sessionStorage.setItem('fd-voice-token', token); history.replaceState(null, '', location.pathname); }
-let ws, context, stream, node, mic, active = false, starting = false, muted = false, currentStatus, follow = true;
+let ws, context, stream, node, mic, active = false, starting = false, muted = false, currentStatus;
 let generation = 0;
-const captions = new Map(); const tasks = new Map();
+const timeline = new TimelineView();
 
 function notice(text) { $('notice').textContent = text; }
-function scroll(feed) { if (follow) feed.scrollTop = feed.scrollHeight; }
-$('captions').addEventListener('scroll', () => { const el = $('captions'); follow = el.scrollHeight - el.scrollTop - el.clientHeight < 45; });
-$('latest').onclick = () => { follow = true; $('captions').scrollTop = $('captions').scrollHeight; };
-function caption(event) {
-  const feed = $('captions'); feed.querySelector('.empty')?.remove();
-  // Display grouping is provisional. Timed fragments remain independently stored
-  // for each speaker, allowing overlap rather than enforcing artificial turns.
-  let group = captions.get(event.role);
-  if (!group || event.startMs - group.endMs > 1800) {
-    const row = document.createElement('div'); row.className = `caption ${event.role}`;
-    const label = document.createElement('div'); label.className = 'speaker'; label.textContent = event.role === 'operator' ? 'You' : 'Voice companion';
-    const text = document.createElement('p'); row.append(label, text); feed.append(row);
-    group = { row, text, endMs: event.endMs }; captions.set(event.role, group);
-  }
-  group.text.textContent += event.text; group.endMs = Math.max(group.endMs, event.endMs); scroll(feed);
-}
-function activity(event) {
-  const feed = $('activity'); feed.querySelector('.empty')?.remove();
-  let row = event.type === 'task' ? tasks.get(event.id) : null;
-  if (!row) {
-    row = document.createElement('div'); row.className = 'activity'; row.append(document.createElement('small'), document.createElement('code')); feed.append(row);
-    if (event.type === 'task') tasks.set(event.id, row);
-  }
-  row.firstChild.textContent = event.type === 'task' ? `Your request · ${event.state}` : event.type === 'agent_input' ? 'Input to Claude Code' : 'Claude Code';
-  row.lastChild.textContent = event.text;
-  while (feed.children.length > 200) feed.firstChild.remove();
-  feed.scrollTop = feed.scrollHeight;
-}
 function handle(event) {
+  timeline.handle(event);
   if (event.type === 'status') {
     currentStatus = event;
     $('connection').textContent = active ? muted ? 'Microphone muted' : 'Listening' : event.channel ? 'Agent connected' : 'Waiting for Claude';
@@ -45,12 +20,9 @@ function handle(event) {
     $('budget').textContent = `$${event.remainingUsd.toFixed(2)} experiment budget available`;
   }
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
-  if (event.type === 'caption') caption(event);
-  if (['task', 'agent_input', 'agent_text'].includes(event.type)) activity(event);
   if (event.type === 'history') for (const item of event.events) handle(item);
   if (event.type === 'fault') { notice(event.message); if (starting && !active) { starting = false; releaseAudio(); } }
   if (event.type === 'voice_started') {
-    captions.clear();
     active = true; starting = false; notice('');
     $('mute').disabled = false; $('stop').disabled = false; $('audioState').textContent = 'Microphone on';
   }
@@ -89,6 +61,7 @@ async function start() {
     if (attempt !== generation) { stream.getTracks().forEach(track => track.stop()); return; }
     await context.audioWorklet.addModule('/audio-worklet.js');
     node = new AudioWorkletNode(context, 'duplex-audio', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+    const audioEpoch = Date.now() - context.currentTime * 1000;
     node.port.onmessage = ({ data }) => {
       if (data.type === 'input' && ws?.readyState === WebSocket.OPEN && (active || starting)) {
         if (ws.bufferedAmount > 128000) { notice('The audio connection is too slow. Please reconnect.'); stop(); return; }
@@ -96,6 +69,7 @@ async function start() {
       }
       if (data.type === 'level') {
         $('level').value = Math.min(1, data.rms * 5);
+        if (ws?.readyState === WebSocket.OPEN && (active || starting)) ws.send(JSON.stringify({ type: 'audio_level', at: audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, outputRms: data.outputRms }));
         if (data.backlogMs > 2000) { notice('Audio playback fell behind. Please reconnect.'); stop(); }
       }
     };
@@ -106,6 +80,7 @@ async function start() {
   } catch (error) { if (attempt !== generation) return; releaseAudio(); notice(error.name === 'NotAllowedError' ? 'Allow microphone access in Chrome, then click Start voice.' : error.message); if (currentStatus) handle(currentStatus); }
 }
 function releaseAudio() {
+  if (node && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'audio_stopped' }));
   generation++;
   active = false; starting = false; stream?.getTracks().forEach(track => track.stop()); stream = null;
   mic?.disconnect(); mic = null; node?.disconnect(); node = null; context?.close().catch(() => {}); context = null;

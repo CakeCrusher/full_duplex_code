@@ -69,13 +69,29 @@ The companion can answer from the conversation and agent updates it already has.
 
 You do not need to wait for Claude to finish before speaking. Interrupting the companion's speech does not interrupt Claude's work. New spoken instructions do not press Escape or cancel an active Claude operation.
 
-The browser shows voice captions and agent activity. Terminal prompts appear under **Input to Claude Code**; Claude's displayed replies appear alongside them. Assistant text arrives in batches, so a short reply may appear only once it finishes. The companion also receives full tool data in the background, even when it is collapsed in Claude’s terminal or absent from the browser activity panel.
+## Read the live timeline
+
+The browser shows five tracks on one clock:
+
+| Track | What it shows |
+| --- | --- |
+| Operator audio | Microphone activity estimated from the incoming audio level. Silence and mute leave gaps. |
+| Live speech | Audio actually rendered by the browser, including overlap with your microphone. |
+| Transcript | Your words and the companion's words on separate rows, aligned to the voice session's audio timestamps. |
+| Claude batches | A thin marker whenever a displayed text batch arrives from Claude. |
+| Requests to Claude | Spoken request delivery and prompts submitted directly in the terminal. |
+
+Hover over an item to see its text and timing. Click or tap to pin the full details below the chart; keyboard focus works too. Use **Window** to zoom, the arrow buttons or history slider to look back, and **Follow live** to return to the current moment. Inspecting or reviewing the chart does not pause the microphone, the companion, or Claude.
+
+Bars represent durations; thin markers represent instant events. Request durations describe delivery, not how long Claude spends executing a task. Transcript timing may differ from playback because text and audio travel separately. Microphone activity is a level estimate, not a guarantee that every sound is speech.
+
+The timeline remains available across page reloads while the launcher is running. It starts fresh with a new launcher. Full tool payloads still go to the companion in the background; the chart is a visual view of the five tracks, not the entire context feed.
 
 ## What the companion follows
 
 Claude's hooks are the main observation path. Each hook payload is forwarded with its fields intact, including tool inputs, completed results, edit patches, metadata, and errors. Known connection credentials and recognizable API keys are redacted. Assistant messages from `MessageDisplay` go to GPT Live as commentary; other hooks go as background thinking. The companion decides how to explain useful information without reading every log aloud.
 
-Claude responds normally in its terminal. The channel has no acknowledgment or reply tools; its only job is to deliver spoken requests into the conversation. The activity panel's **sent** label means the channel delivered a request, not that Claude completed it. Follow Claude's observed activity and results for progress.
+Claude responds normally in its terminal. The channel has no acknowledgment or reply tools; its only job is to deliver spoken requests into the conversation. A request marked **Delivered to channel** has been sent; **Received by Claude** means its prompt hook was observed. Neither status means Claude completed the work. Follow Claude's observed activity and results for progress.
 
 The bridge does not trim hook fields or discard older observations to save context. It splits text into small appends for the Live API's per-append limit and keeps the observations for a voice restart. An append failure ends voice with an error so reconnecting can replay the saved observations. A single local hook request has a 32 MiB transport limit; oversized events are reported instead of silently truncated. The model's own context capacity still applies.
 
@@ -197,7 +213,7 @@ Treat logs and companion links as private. When reporting a problem, share the e
 
 ## Checking an installation
 
-`npm test` runs offline checks without OpenAI spending. `npm run test:ui` checks the browser activity panel in Chrome without a voice connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session.
+`npm test` runs offline checks without OpenAI spending. `npm run test:ui` checks the live timeline, hover details, navigation, reload, and real browser audio capture/playback with a virtual microphone and no paid API connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session.
 
 The other integration commands in `package.json` start real Claude and OpenAI voice sessions. They require macOS `say`, `ffmpeg`, and the relevant browser setup; they consume API credits. Ordinary use does not require these test tools.
 

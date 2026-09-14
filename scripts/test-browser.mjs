@@ -30,8 +30,8 @@ try {
   await page.screenshot({ path: path.join(test.runDir, 'before.png'), fullPage: true });
   await page.getByRole('button', { name: 'Start voice', exact: true }).click();
   await until(() => test.harness.live?.state === 'active', { label: 'browser voice startup' });
-  await page.waitForFunction(() => document.querySelector('#captions').textContent.includes('Claude'), { timeout: 30000 });
-  await page.waitForFunction(() => [...document.querySelectorAll('.caption.operator p')].some(p => p.textContent.includes('coding agent')), { timeout: 30000 });
+  await page.waitForFunction(() => document.querySelector('[data-lane=transcript]').textContent.includes('Claude'), { timeout: 30000 });
+  await page.waitForFunction(() => [...document.querySelectorAll('.timeline-item[data-role=operator]')].some(p => p.textContent.includes('coding agent')), { timeout: 30000 });
   await delay(4000);
   await page.getByRole('button', { name: 'Mute microphone', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Unmute microphone', exact: true }).getAttribute('aria-pressed'), 'true');

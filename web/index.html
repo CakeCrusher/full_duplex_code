@@ -2,25 +2,42 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Full-Duplex Code · Claude Code</title><link rel="stylesheet" href="/style.css">
+  <title>Full-Duplex Code · Claude Code</title><link rel="stylesheet" href="/style.css"><link rel="icon" type="image/svg+xml" href="/icon.svg">
 </head>
 <body>
   <main>
     <header><div class="brand">Full-Duplex Code <span>for Claude Code</span></div><span id="connection" role="status">Connecting…</span></header>
-    <section class="intro"><h1>Talk through the work.</h1><p>Your coding agent stays in the terminal. Speak here to make a request, change direction, or hear how it’s going.</p></section>
+    <section class="intro"><h1>Talk through the work.</h1><p>Talk while Claude works. Watch your voice, its progress, and the companion’s responses unfold together.</p></section>
     <section class="controls" aria-label="Voice controls">
       <button id="start" disabled>Start voice</button><button id="mute" disabled aria-pressed="false">Mute microphone</button><button id="stop" disabled>End voice</button>
       <div class="levels"><span id="audioState">Microphone off</span><meter id="level" min="0" max="1" value="0" aria-label="Microphone level"></meter></div>
     </section>
     <p id="notice" role="alert"></p>
     <section class="workspace"><div><span class="label">Claude Code</span><p id="agentState">Waiting for the terminal session</p></div><div><span class="label">Voice session</span><p id="usage">Not connected · $0.05/min</p></div></section>
-    <div class="columns">
-      <section><div class="section-label">Conversation <button id="latest" class="text-button">Follow latest</button></div><div id="captions" class="feed" role="log" aria-label="Voice conversation"><p class="empty">Your conversation will appear here. You can speak while your agent works.</p></div></section>
-      <section><div class="section-label">Agent activity</div><div id="activity" class="feed" role="log" aria-label="Claude Code activity"><p class="empty">Claude’s progress and your requests will appear here.</p></div></section>
-    </div>
+    <section class="timeline" aria-labelledby="timeline-title">
+      <div class="timeline-heading"><div><div class="eyebrow">ONE CONVERSATION · FIVE TRACKS</div><h2 id="timeline-title">The session, in time.</h2></div><div class="timeline-indicator"><span class="live-dot"></span><span id="timeline-mode">Following live</span><time id="timeline-clock">0:00</time></div></div>
+      <div class="timeline-toolbar"><p>Hover to inspect. Click to pin the details.</p><div class="timeline-actions"><label for="timeline-zoom">Window</label><select id="timeline-zoom"><option value="15000">15 seconds</option><option value="30000">30 seconds</option><option value="60000" selected>1 minute</option><option value="180000">3 minutes</option><option value="300000">5 minutes</option></select><button id="timeline-back" aria-label="Earlier in the timeline">←</button><button id="timeline-forward" aria-label="Later in the timeline">→</button><button id="timeline-live" aria-pressed="true">Follow live</button></div></div>
+      <div class="gantt-layout">
+        <div class="track-labels" aria-hidden="true"><div class="axis-label">Time elapsed</div><div class="track-label operator-label"><i></i><span>Operator audio<small>Microphone activity</small></span></div><div class="track-label speech-label"><i></i><span>Live speech<small>Browser playback</small></span></div><div class="track-label transcript-label"><i></i><span>Transcript<small><b>You</b> <b>Live</b></small></span></div><div class="track-label claude-label"><i></i><span>Claude batches<small>Displayed text</small></span></div><div class="track-label requests-label"><i></i><span>Requests to Claude<small>Voice + terminal</small></span></div></div>
+        <div id="timeline-plot" class="timeline-plot" aria-label="Live session Gantt chart">
+          <div id="timeline-axis" class="timeline-axis"></div>
+          <div class="timeline-lane" data-lane="operator" role="group" aria-label="Operator audio"><span class="lane-empty">Microphone activity appears here</span></div>
+          <div class="timeline-lane" data-lane="speech" role="group" aria-label="Live speech"><span class="lane-empty">The companion’s speech appears here</span></div>
+          <div class="timeline-lane transcript-lane" data-lane="transcript" role="group" aria-label="Transcript"><span class="lane-empty">Your words and Live’s words, aligned to audio</span></div>
+          <div class="timeline-lane" data-lane="claude" role="group" aria-label="Claude displayed batches"><span class="lane-empty">Each marker is a displayed text batch</span></div>
+          <div class="timeline-lane" data-lane="requests" role="group" aria-label="Requests to Claude"><span class="lane-empty">Requests appear as they reach Claude</span></div>
+          <div id="timeline-now" class="timeline-now" aria-hidden="true"><span>now</span></div>
+        </div>
+      </div>
+      <div class="timeline-navigation"><span id="timeline-range">0:00 – 1:00</span><input id="timeline-scrub" type="range" min="0" max="0" value="0" step="100" aria-label="Browse timeline history"><span>latest</span></div>
+      <p id="timeline-empty" class="timeline-empty">Start voice or type into Claude to begin. Parallel activity will line up vertically.</p>
+      <div class="timeline-key"><span>Bars show time spans.</span><span>Thin markers show instant events.</span><span>Transcript rows: <b class="you-key">you</b> / <b class="live-key">Live</b>.</span></div>
+    </section>
+    <section class="timeline-detail" aria-labelledby="detail-title"><div class="detail-heading"><span id="detail-kind" class="eyebrow">Inspect the timeline</span><button id="detail-clear" hidden>Unpin details</button></div><h3 id="detail-title">Hover for a closer look.</h3><p id="detail-time">Click an item to pin it. Keyboard focus and tap work too.</p><pre id="detail-text">Audio, words, displayed batches, and requests share the same clock. Their overlap shows the conversation happening while Claude works.</pre><p id="detail-source"></p></section>
     <footer><span id="project"></span><span id="budget"></span></footer>
     <p class="hint">The voice is AI-generated. End voice closes the audio connection; Claude remains available in your terminal.</p>
   </main>
+  <div id="timeline-tooltip" class="timeline-tooltip" role="tooltip" hidden><strong id="tooltip-title"></strong><p id="tooltip-text"></p><small>Click to pin full details below</small></div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

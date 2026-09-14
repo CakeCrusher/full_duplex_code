@@ -8,6 +8,7 @@ import { LiveSession } from './live.js';
 import { Mediator } from './mediator.js';
 import { AgentObserver, makeClaudeConfig } from './agent.js';
 import { redact, MAX_HOOK_BYTES } from './context.js';
+import { Timeline } from './timeline.js';
 
 const equal = (a, b) => typeof a === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 async function body(req, maxBytes = 1024 * 1024) {
@@ -24,6 +25,7 @@ export class Harness {
     this.clean = text => redact(text, [apiKey, this.browserToken, this.channelToken]);
     this.log = event => fs.appendFileSync(path.join(runDir, 'events.jsonl'), this.clean(JSON.stringify({ at: Date.now(), ...event })) + '\n', { mode: 0o600 });
     this.budget = new Budget(path.join(root, '.runs', 'budget.json')); this.outbox = new Map(); this.uiEvents = [];
+    this.timeline = new Timeline();
     this.observer = new AgentObserver({ sessionId, observation, clean: this.clean, log: this.log });
     this.observer.on('input', event => { this.log({ type: 'agent.input', ...event }); this.publish({ type: 'agent_input', ...event }); });
     this.observer.on('text', event => { this.log({ type: 'agent.text', ...event }); this.publish({ type: 'agent_text', ...event }); });
@@ -31,6 +33,9 @@ export class Harness {
     this.observer.on('fault', error => this.fault(error));
   }
   publish(event) {
+    event = { at: Date.now(), ...event };
+    const items = this.timeline.add(event);
+    if (items.length && this.browser?.readyState === WebSocket.OPEN) this.browser.send(JSON.stringify({ type: 'timeline_update', items }));
     if (['caption', 'task', 'fault', 'agent_input', 'agent_text'].includes(event.type)) { this.uiEvents.push(event); if (this.uiEvents.length > 600) this.uiEvents.shift(); }
     if (this.browser?.readyState === WebSocket.OPEN) this.browser.send(JSON.stringify(event));
   }
@@ -82,7 +87,7 @@ export class Harness {
       if (!equal(req.headers.authorization, `Bearer ${this.browserToken}`)) { res.writeHead(403); return res.end(); }
       res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(this.status()));
     }
-    const files = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/audio-worklet.js': ['audio-worklet.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
+    const files = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/timeline.js': ['timeline.js', 'text/javascript'], '/icon.svg': ['icon.svg', 'image/svg+xml'], '/audio-worklet.js': ['audio-worklet.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
     if (req.method !== 'GET' || !files[req.url]) { res.writeHead(404); return res.end(); }
     const [name, type] = files[req.url]; res.setHeader('Content-Type', `${type}; charset=utf-8`);
     return res.end(fs.readFileSync(path.join(this.root, 'web', name)));
@@ -130,6 +135,7 @@ export class Harness {
   }
   attachBrowser(ws) {
     this.browser = ws; ws.send(JSON.stringify(this.status()));
+    ws.send(JSON.stringify({ type: 'timeline_history', ...this.timeline.snapshot() }));
     ws.send(JSON.stringify({ type: 'history', events: this.uiEvents }));
     ws.on('message', (raw, isBinary) => {
       if (isBinary) {
@@ -143,10 +149,17 @@ export class Harness {
         if (event.type === 'start') this.startLive().catch(error => this.fault(error));
         if (event.type === 'stop') this.live?.close('operator ended voice');
         if (event.type === 'mute') this.log({ type: 'voice.mute', muted: Boolean(event.muted) });
+        if (event.type === 'audio_level' && [event.at, event.durationMs, event.inputRms, event.outputRms].every(Number.isFinite)
+          && Math.abs(event.at - Date.now()) < 5000 && event.durationMs > 0 && event.durationMs <= 500
+          && event.inputRms >= 0 && event.inputRms <= 1 && event.outputRms >= 0 && event.outputRms <= 1) {
+          const items = this.timeline.add(event);
+          if (items.length) ws.send(JSON.stringify({ type: 'timeline_update', items }));
+        }
+        if (event.type === 'audio_stopped') this.publish({ type: 'audio_stopped' });
       } catch (error) { this.fault(error); }
     });
     ws.on('error', error => this.fault(error));
-    ws.on('close', () => { if (this.browser === ws) { this.browser = null; this.live?.close('voice client disconnected'); } });
+    ws.on('close', () => { if (this.browser === ws) { this.browser = null; this.publish({ type: 'audio_stopped' }); this.live?.close('voice client disconnected'); } });
   }
   async startLive() {
     if (this.live && this.live.state !== 'closed') return;
