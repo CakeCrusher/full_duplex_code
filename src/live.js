@@ -97,8 +97,9 @@ export class LiveSession extends EventEmitter {
     });
   }
   async greet() {
-    await this.append('instructions', 'Speak English. Greet the operator immediately before they speak: introduce yourself as the voice intermediary for their Claude Code coding agent, invite them to talk about what they want to build, then pause and listen.');
-    await this.append('commentary', 'Welcome the operator now, following the greeting instructions, then listen.');
+    // A one-time welcome, not a persistent instruction that can retrigger
+    // every time an ordinary Claude message arrives as commentary.
+    await this.append('commentary', 'Voice connection opened. Greet the user once in English, briefly introduce yourself as their Claude Code voice companion, then listen. This welcome applies only to the connection opening; do not greet again for later Claude observations.');
   }
   close(reason = 'requested') {
     if (this.state === 'active') {
