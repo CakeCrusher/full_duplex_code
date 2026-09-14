@@ -2,6 +2,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import WebSocket from 'ws';
+import { channelNotification } from './channel-message.js';
 
 // Stdout belongs exclusively to MCP JSON-RPC.
 const url = process.env.FD_BRIDGE_URL;
@@ -38,7 +39,8 @@ function connect() {
       const event = JSON.parse(raw.toString());
       if (event.type !== 'channel.deliver' || typeof event.id !== 'string' || typeof event.content !== 'string') return;
       if (!seen.has(event.id)) {
-        await mcp.notification({ method: 'notifications/claude/channel', params: { content: event.content, meta: { message_id: event.id, source_kind: 'voice_operator' } } });
+        const { jsonrpc, ...notification } = channelNotification(event);
+        await mcp.notification(notification);
         seen.add(event.id);
       }
       send({ type: 'channel.sent', id: event.id });

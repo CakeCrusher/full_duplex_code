@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { channelNotification } from '../src/channel-message.js';
 import { LineReader } from '../src/context.js';
 
 const until = async check => {
@@ -31,9 +32,10 @@ test('real MCP channel exposes no tools and delivers each notification once', as
   await until(() => events.some(e => e.type === 'channel.ready'));
   send({ id: 2, method: 'tools/call', params: { name: 'reply', arguments: { message_id: 'one', text: 'fake' } } });
   assert.equal((await until(() => messages.find(e => e.id === 2))).error.code, -32601);
-  for (let i = 0; i < 2; i++) socket.send(JSON.stringify({ type: 'channel.deliver', id: 'one', content: 'Make the button blue.' }));
+  const content = 'User request (transcribed speech):\nMake “世界” blue.\n\nEarlier voice conversation for reference only:\nintermediary: Use \"blue\".\n';
+  for (let i = 0; i < 2; i++) socket.send(JSON.stringify({ type: 'channel.deliver', id: 'one', content }));
   await until(() => events.filter(e => e.type === 'channel.sent').length === 2);
   const notifications = messages.filter(e => e.method === 'notifications/claude/channel');
   assert.equal(notifications.length, 1);
-  assert.equal(notifications[0].params.content, 'Make the button blue.');
+  assert.deepEqual(notifications[0], channelNotification({ id: 'one', content }), 'actual MCP stdout matches inspector JSON, including every newline and metadata field');
 });

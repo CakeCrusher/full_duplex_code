@@ -16,6 +16,10 @@ export class TimelineView {
     $('timeline-zoom').onchange = e => { this.windowMs = Number(e.target.value); this.render(); };
     $('timeline-scrub').oninput = e => { this.follow = false; this.viewStart = this.origin + Number(e.target.value); this.render(); };
     $('detail-clear').onclick = () => { this.selected = null; this.showDetails(null); this.render(); };
+    $('detail-copy').onclick = async () => {
+      try { await navigator.clipboard.writeText($('detail-text').textContent); $('detail-copy').textContent = 'Copied'; }
+      catch { $('detail-copy').textContent = 'Select the text to copy'; }
+    };
     this.plot.addEventListener('wheel', e => {
       if (!e.shiftKey && Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
       e.preventDefault(); this.pan((e.deltaX || e.deltaY) / this.plot.clientWidth * this.windowMs);
@@ -43,11 +47,27 @@ export class TimelineView {
     return transcripts.map(t => t.text).join('\n') || 'Audio activity. No matching transcript has arrived yet.';
   }
   showDetails(item) {
+    if ((!item || item.text) && this.detailItem === item && this.detailSelected === this.selected) return;
+    this.detailItem = item; this.detailSelected = this.selected;
     $('detail-clear').hidden = !this.selected;
     $('detail-kind').textContent = item ? tracks[item.track] : 'Inspect the timeline';
     $('detail-title').textContent = item ? this.itemLabel(item) : 'Hover for a closer look.';
     $('detail-time').textContent = item ? this.timing(item) : 'Click an item to pin it. Keyboard focus and tap work too.';
     $('detail-text').textContent = item ? this.detailText(item) : 'Audio, words, displayed batches, and requests share the same clock. Their overlap shows the conversation happening while Claude works.';
+    const request = item?.track === 'requests';
+    $('detail-copy').hidden = !request; $('detail-copy').textContent = 'Copy message';
+    $('detail-message-label').hidden = !request;
+    $('detail-message-label').textContent = item?.notification ? (['sent', 'observed'].includes(item.state) ? 'Full channel message content · sent as shown' : 'Full channel message content · delivery not confirmed') : 'Prompt captured from Claude';
+    $('detail-payload').hidden = !item?.notification;
+    $('detail-json').textContent = item?.notification ? JSON.stringify(item.notification, null, 2) : '';
+    $('detail-json-label').textContent = ['queued', 'dispatching', 'uncertain'].includes(item?.state) ? 'Channel notification JSON · delivery not confirmed' : 'Channel notification JSON';
+    $('detail-observed').hidden = !item?.observedPrompt;
+    $('detail-observed-text').textContent = item?.observedPrompt ?? '';
+    $('detail-verification').hidden = !item?.notification;
+    $('detail-verification').textContent = item?.contentMatches === true ? 'Verified: Claude’s UserPromptSubmit contains exactly this message.'
+      : item?.contentMatches === false ? 'Content differs: compare the sent message with Claude’s captured prompt below.'
+      : item?.observedPrompt ? 'Claude’s prompt was captured; its envelope could not be compared automatically.'
+      : 'Waiting for Claude’s UserPromptSubmit to verify receipt. Channel delivery alone does not prove Claude has processed it.';
     const extras = [];
     if (item?.index !== undefined) extras.push(`Batch ${item.index + 1}${item.final ? ' · final' : ''}`);
     if (item?.state) extras.push(({ queued: 'Queued', dispatching: 'Sending', sent: 'Delivered to channel', observed: 'Received by Claude', uncertain: 'Delivery uncertain' })[item.state] ?? item.state);

@@ -85,15 +85,19 @@ Hover over an item to see its text and timing. Click or tap to pin the full deta
 
 Bars represent durations; thin markers represent instant events. Request durations describe delivery, not how long Claude spends executing a task. Transcript timing may differ from playback because text and audio travel separately. Microphone activity is a level estimate, not a guarantee that every sound is speech.
 
+Click a voice request to see the **full channel message**, including any earlier conversation attached for reference. **Copy message** copies that text. Expand **Channel notification JSON** for the content and metadata sent by the channel. Once Claude's `UserPromptSubmit` hook arrives, the inspector shows the captured prompt and checks that its contents match the sent message. Until then, delivery is not presented as verified receipt. A mismatch is shown explicitly.
+
+The channel uses the latest speech group as the request, with a two-second pause separating groups. Earlier speech remains reference context. The bridge does not rewrite transcription mistakes; the inspector shows what was actually sent.
+
 The timeline remains available across page reloads while the launcher is running. It starts fresh with a new launcher. Full tool payloads still go to the companion in the background; the chart is a visual view of the five tracks, not the entire context feed.
 
 ## What the companion follows
 
-Claude's hooks are the main observation path. Each hook payload is forwarded with its fields intact, including tool inputs, completed results, edit patches, metadata, and errors. Known connection credentials and recognizable API keys are redacted. Assistant messages from `MessageDisplay` go to GPT Live as commentary; other hooks go as background thinking. The companion decides how to explain useful information without reading every log aloud.
+Claude's hooks are the main observation path. Each hook payload is forwarded with its fields intact, including tool inputs, completed results, edit patches, metadata, and errors. Known connection credentials and recognizable API keys are redacted. All raw hooks, including assistant messages from `MessageDisplay`, go to GPT Live as quiet background context. The companion answers your questions from that context. For proactive updates, the bridge keeps one replaceable cue about the latest state, waits for a quiet moment, and sends at most one cue every 15 seconds. Live is asked to mention only a meaningful new outcome, blocker, question, or important change in one short sentence. Routine steps and superseded updates should stay quiet; exact spoken behavior still depends on the model.
 
 Claude responds normally in its terminal. The channel has no acknowledgment or reply tools; its only job is to deliver spoken requests into the conversation. A request marked **Delivered to channel** has been sent; **Received by Claude** means its prompt hook was observed. Neither status means Claude completed the work. Follow Claude's observed activity and results for progress.
 
-The bridge does not trim hook fields or discard older observations to save context. It splits text into small appends for the Live API's per-append limit and keeps the observations for a voice restart. An append failure ends voice with an error so reconnecting can replay the saved observations. A single local hook request has a 32 MiB transport limit; oversized events are reported instead of silently truncated. The model's own context capacity still applies.
+The bridge does not trim hook fields or discard older observations to save context. A bounded prefix of saved history is supplied at session startup, before audio begins; remaining history and new events use quiet appends. It splits text into small appends for the Live API's per-append limit and keeps the observations for a voice restart. An append failure ends voice with an error so reconnecting can replay the saved observations. A single local hook request has a 32 MiB transport limit; oversized events are reported instead of silently truncated. The model's own context capacity still applies.
 
 The launcher registers passive lifecycle hooks, including tool batches, subagent activity, permission events, and compaction. `WorktreeCreate` is excluded because registering it replaces Claude's own worktree creation. `FileChanged` forwards events for files configured in Claude's watch list; it does not automatically watch every file. Tool hooks already describe changes made through Edit and Write, plus the commands and results of Bash. See the [Claude hooks reference](https://code.claude.com/docs/en/hooks) for watch-path configuration and event availability. Use a current Claude Code release; this flow was tested on 2.1.270.
 
@@ -213,7 +217,7 @@ Treat logs and companion links as private. When reporting a problem, share the e
 
 ## Checking an installation
 
-`npm test` runs offline checks without OpenAI spending. `npm run test:ui` checks the live timeline, hover details, navigation, reload, and real browser audio capture/playback with a virtual microphone and no paid API connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session.
+`npm test` runs offline checks without OpenAI spending. `npm run test:ui` checks the live timeline, hover details, navigation, reload, and real browser audio capture/playback with a virtual microphone and no paid API connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session. `npm run test:updates` checks a rapid seven-step Claude task, selective speech cues, and status recall with real voice.
 
 The other integration commands in `package.json` start real Claude and OpenAI voice sessions. They require macOS `say`, `ffmpeg`, and the relevant browser setup; they consume API credits. Ordinary use does not require these test tools.
 

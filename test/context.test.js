@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chunks, LineReader, VoiceHistory, redact } from '../src/context.js';
+import { chunks, LineReader, VoiceHistory, redact, startupHistory } from '../src/context.js';
 
 test('context chunks preserve Unicode and stay below the append byte bound', () => {
   const text = 'Hello 世界 👋\n'.repeat(300);
@@ -27,4 +27,29 @@ test('only a delegation consumes a request, and repeating it cannot resend the s
 test('known credentials and likely API keys are scrubbed', () => {
   assert.equal(redact('token abcdefghijk', ['abcdefghijk']), 'token [redacted]');
   assert.equal(redact('sk-proj-' + 'a'.repeat(32)), '[redacted API key]');
+});
+
+
+test('a later command keeps answered questions in context, not in its request text', () => {
+  const h = new VoiceHistory();
+  h.add({ type: 'session.input_transcript.delta', delta: 'What port?', start_ms: 0, end_ms: 800 });
+  h.add({ type: 'session.output_transcript.delta', delta: 'Port 4317.', start_ms: 1000, end_ms: 1800 });
+  h.add({ type: 'session.input_transcript.delta', delta: 'Create ', start_ms: 5000, end_ms: 5400 });
+  h.add({ type: 'session.output_transcript.delta', delta: 'Mm hmm', start_ms: 5300, end_ms: 5500 });
+  h.add({ type: 'session.input_transcript.delta', delta: 'a file.', start_ms: 5400, end_ms: 5900 });
+  const request = h.request(6000);
+  assert.equal(request.text, 'Create a file.');
+  assert.match(request.context, /What port/);
+  assert.match(request.context, /4317/);
+  h.markDelivered(request); assert.equal(h.request(6000), null);
+});
+
+
+test('startup context uses a complete chronological prefix and leaves overflow for quiet replay', () => {
+  const observations = [{ text: 'first' }, { text: '世界'.repeat(4000) }, { text: 'last' }];
+  const history = startupHistory(observations, 100);
+  assert.equal(history.count, 1); assert.match(history.text, /first/);
+  assert.doesNotMatch(history.text, /last/);
+  assert.ok(Buffer.byteLength(history.text) <= 100);
+  assert.equal(startupHistory(observations, 0).count, 0);
 });

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { AgentObserver } from '../src/agent.js';
+import { startupHistory } from '../src/context.js';
 import { Mediator } from '../src/mediator.js';
 
 function fixture(t, state = 'active', observer = new AgentObserver({ sessionId: 'test' })) {
@@ -16,7 +17,7 @@ function fixture(t, state = 'active', observer = new AgentObserver({ sessionId: 
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const content = (f, kind) => f.appends.filter(e => !kind || e.kind === kind).map(e => e.content).join('');
 
-test('hooks are primary: prompts and full tool data are thinking; assistant batches are commentary', async t => {
+test('hooks are primary: all raw hooks, including assistant batches, are quiet thinking', async t => {
   const f = fixture(t);
   f.hook({ hook_event_name: 'UserPromptSubmit', prompt: 'Remember ORCHID' });
   f.hook({ hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_use_id: 'edit-1', tool_input: { old_string: 'red', new_string: 'blue' }, tool_response: { structuredPatch: [{ lines: ['-red', '+blue'] }] }, duration_ms: 12 });
@@ -26,7 +27,8 @@ test('hooks are primary: prompts and full tool data are thinking; assistant batc
   assert.match(content(f, 'thinking'), /Remember ORCHID/);
   assert.match(content(f, 'thinking'), /structuredPatch.*-red.*\+blue/);
   assert.match(content(f, 'thinking'), /duration_ms.*12/);
-  assert.match(content(f, 'commentary'), /MessageDisplay.*Changed to blue/);
+  assert.match(content(f, 'thinking'), /MessageDisplay.*Changed to blue/);
+  assert.equal(content(f, 'commentary'), '');
   assert.doesNotMatch(content(f, 'commentary'), /Stop/);
   assert.ok(f.appends.every(e => e.delegationId === null));
   assert.equal(f.mediator.history.fragments.length, 0);
@@ -65,13 +67,13 @@ test('a delegation sends ordinary user text once, without asking Claude to use c
   assert.doesNotMatch(f.deliveries[0].content, /acknowledge|reply|message_id|GPT Live/);
 });
 
-test('duplicate display hooks do not produce duplicate commentary; subagent hooks retain their content', async t => {
+test('duplicate display hooks do not produce duplicate context; subagent hooks retain their content', async t => {
   const f = fixture(t);
   const display = { hook_event_name: 'MessageDisplay', message_id: 'same', index: 0, delta: 'One answer.' };
   f.hook(display); f.hook(display);
   f.hook({ hook_event_name: 'PostToolUseFailure', agent_id: 'child', tool_name: 'Bash', error: 'test failed', custom_field: { detail: 'kept' } });
   await flush();
-  assert.equal(content(f, 'commentary').match(/One answer/g).length, 1);
+  assert.equal(content(f, 'thinking').match(/One answer/g).length, 1);
   assert.match(content(f, 'thinking'), /child.*Bash.*test failed.*custom_field.*kept/);
   f.mediator.stop(); assert.equal(f.observer.listenerCount('observation'), 0);
 });
@@ -85,4 +87,67 @@ test('a failed append surfaces a fault and ends stale voice instead of silently 
   assert.equal(f.live.state, 'closed');
   assert.match(faults[0].message, /restart voice.*rejected/);
   assert.match(f.observer.observations[0].text, /still retained/);
+});
+
+
+test('fast display batches become one latest-state cue, never a spoken FIFO', async t => {
+  const f = fixture(t);
+  for (let i = 0; i < 40; i++) f.hook({ hook_event_name: 'MessageDisplay', message_id: 'burst', index: i, delta: `Step ${i}.` });
+  f.hook({ hook_event_name: 'Stop', last_assistant_message: 'Completed step 40.' });
+  await flush();
+  assert.equal(content(f, 'commentary'), '');
+  const now = Date.now() + 3000;
+  f.mediator.flushUpdate(now);
+  await flush();
+  const cues = () => f.appends.filter(e => e.kind === 'commentary');
+  assert.equal(cues().length, 1, 'one unsplit cue, not forty speech requests');
+  assert.match(cues()[0].content, /now idle.*Latest update: Stop/);
+  assert.doesNotMatch(cues()[0].content, /Step 0/);
+  f.mediator.flushUpdate(now + 16000);
+  assert.equal(cues().length, 1, 'no repeated reminder without new observations');
+  f.hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' });
+  await flush();
+  f.mediator.flushUpdate(now + 14000);
+  assert.equal(cues().length, 1, 'at most one update per fifteen seconds');
+  f.mediator.flushUpdate(now + 15000);
+  await flush();
+  assert.equal(cues().length, 2);
+  assert.match(cues()[1].content, /now needs_attention/);
+});
+
+test('speech cues wait for operator/playback silence and full context injection', async t => {
+  const f = fixture(t);
+  let release;
+  f.live.append = () => new Promise(resolve => { release = resolve; });
+  f.hook({ hook_event_name: 'Stop', last_assistant_message: 'Done' });
+  const now = Date.now() + 3000;
+  f.mediator.flushUpdate(now);
+  assert.ok(f.mediator.pendingUpdate, 'context is still in flight');
+  release(); await flush();
+  f.mediator.activity({ inputRms: .1, outputRms: 0 });
+  f.mediator.flushUpdate(Date.now() + 1500);
+  assert.ok(f.mediator.pendingUpdate, 'operator has not been quiet for two seconds');
+  f.mediator.activity({ inputRms: 0, outputRms: .1 });
+  f.mediator.flushUpdate(Date.now() + 1500);
+  assert.ok(f.mediator.pendingUpdate, 'rendered speech is still recent');
+  f.mediator.flushUpdate(Date.now() + 2500);
+  assert.equal(f.mediator.pendingUpdate, null);
+  release(); await flush();
+});
+
+
+test('startup observations are neither replayed twice nor dropped when some overflow', async t => {
+  const observer = new AgentObserver({ sessionId: 'test' });
+  observer.hook({ session_id: 'test', hook_event_name: 'UserPromptSubmit', prompt: 'first' });
+  observer.hook({ session_id: 'test', hook_event_name: 'PostToolUse', tool_response: { stdout: 'x'.repeat(1000) } });
+  const initial = startupHistory(observer.observations, 300);
+  assert.equal(initial.count, 1);
+  const live = new EventEmitter(); live.state = 'active';
+  const appends = []; live.append = async (kind, content) => appends.push({ kind, content });
+  const mediator = new Mediator({ live, observer, initialObservationCount: initial.count, log: () => {}, publish: () => {}, clean: String });
+  t.after(() => { mediator.stop(); observer.close(); });
+  await flush();
+  assert.equal(initial.text + appends.map(e => e.content).join(''), observer.observations.map(o => `Claude Code observation (history):\n${o.text}\n`).join(''));
+  assert.ok(appends.every(e => e.kind === 'thinking'));
+  assert.equal(mediator.pendingUpdate, null, 'history never schedules proactive narration');
 });

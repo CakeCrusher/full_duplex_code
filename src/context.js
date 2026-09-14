@@ -22,6 +22,18 @@ export function chunks(text, maxBytes = 440) {
   return output;
 }
 
+export function startupHistory(observations, maxBytes = 7000) {
+  // Live's startup input is available immediately (unlike timed appends).
+  // Leave room under its 8,192-token limit even with a conservative byte bound.
+  let text = ''; let count = 0;
+  for (const observation of observations) {
+    const next = `Claude Code observation (history):\n${observation.text}\n`;
+    if (Buffer.byteLength(text) + Buffer.byteLength(next) > maxBytes) break;
+    text += next; count++;
+  }
+  return { text, count };
+}
+
 export class ContextQueue {
   constructor(live, onError) { Object.assign(this, { live, onError }); this.queue = []; this.running = false; this.stopped = false; }
   add(kind, text, delegationId = null) {
@@ -62,8 +74,14 @@ export class VoiceHistory {
   request(offsetMs) {
     // Transcript arrival can lag the delegation event. The caller waits briefly
     // before taking this snapshot; no transcript fragment itself triggers work.
-    const newest = this.fragments.filter(f => f.role === 'operator' && f.seq > this.delegatedThrough && f.startMs <= offsetMs + 3000);
-    if (!newest.length) return null;
+    const eligible = this.fragments.filter(f => f.role === 'operator' && f.seq > this.delegatedThrough && f.startMs <= offsetMs + 3000);
+    if (!eligible.length) return null;
+    // Earlier questions may have been answered without delegation. Keep them
+    // as context, not part of a later command. A pause separates utterances;
+    // Live backchannels alone must not split the operator's full-duplex speech.
+    let start = eligible.length - 1;
+    while (start > 0 && eligible[start].startMs - eligible[start - 1].endMs <= 2000) start--;
+    const newest = eligible.slice(start);
     const before = this.fragments.filter(f => f.seq < newest[0].seq).slice(-80);
     const context = before.reduce((lines, f) => {
       if (lines.at(-1)?.role === f.role) lines.at(-1).text += f.text;

@@ -35,14 +35,26 @@ test('channel delivery ends at sent and does not depend on Claude calling a tool
   await new Promise(resolve => ws.on('open', resolve));
   const delivery = new Promise(resolve => ws.once('message', data => resolve(JSON.parse(data))));
   ws.send(JSON.stringify({ type: 'channel.ready' }));
-  h.deliver({ id: 'one', content: 'hello' });
-  assert.equal((await delivery).id, 'one');
+  const content = 'User request (transcribed speech):\nHello 世界.\n\nEarlier voice conversation for reference only:\nintermediary: Yes.\n';
+  h.deliver({ id: 'one', text: 'lossy short preview', content });
+  const delivered = await delivery;
+  assert.equal(delivered.id, 'one');
+  const shown = h.uiEvents.filter(e => e.type === 'task').at(-1);
+  assert.equal(shown.text, delivered.content);
+  assert.equal(shown.notification.params.content, delivered.content);
+  assert.equal(shown.state, 'dispatching');
   assert.equal(h.outbox.get('one').state, 'dispatching');
   ws.send(JSON.stringify({ type: 'channel.sent', id: 'one' }));
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(h.outbox.get('one').state, 'sent');
   assert.ok(h.uiEvents.some(e => e.type === 'task' && e.id === 'one' && e.state === 'sent'));
   assert.equal(h.observer.state, 'starting', 'transport delivery does not invent agent progress');
+  const prompt = `<channel source="voice" message_id="one" source_kind="voice_operator">\n${content}\n</channel>`;
+  h.observer.hook({ session_id: h.sessionId, hook_event_name: 'UserPromptSubmit', prompt });
+  const item = h.timeline.snapshot().items.find(i => i.requestId === 'one');
+  assert.equal(item.contentMatches, true);
+  assert.equal(item.observedPrompt, prompt);
+  assert.equal(item.text, content);
 });
 
 test('the actual command hook relays a typed prompt into observer history and browser activity', async t => {

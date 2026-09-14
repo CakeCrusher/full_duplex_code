@@ -7,8 +7,9 @@ import { Budget } from './budget.js';
 import { LiveSession } from './live.js';
 import { Mediator } from './mediator.js';
 import { AgentObserver, makeClaudeConfig } from './agent.js';
-import { redact, MAX_HOOK_BYTES } from './context.js';
+import { redact, MAX_HOOK_BYTES, startupHistory } from './context.js';
 import { Timeline } from './timeline.js';
+import { channelNotification } from './channel-message.js';
 
 const equal = (a, b) => typeof a === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 async function body(req, maxBytes = 1024 * 1024) {
@@ -121,16 +122,17 @@ export class Harness {
   deliver(task) {
     if (this.outbox.size >= 1000) throw new Error('Too many voice tasks in one session');
     if (this.outbox.has(task.id)) return;
-    const entry = { ...task, state: 'queued' }; this.outbox.set(task.id, entry);
+    const entry = { ...task, content: this.clean(task.content), state: 'queued' }; this.outbox.set(task.id, entry);
     this.publishRequest(entry);
     if (this.channelReady) this.dispatch(entry);
   }
   publishRequest(task) {
-    const event = { type: 'task', id: task.id, text: task.text ?? task.content, state: task.state, queuedAt: task.queuedAt };
+    const event = { type: 'task', id: task.id, text: task.content, notification: channelNotification(task), state: task.state, queuedAt: task.queuedAt };
     this.log(event); this.publish(event);
   }
   dispatch(task) {
     task.state = 'dispatching';
+    this.publishRequest(task);
     this.channel.send(JSON.stringify({ type: 'channel.deliver', id: task.id, content: task.content }), error => { if (error) { task.state = 'uncertain'; this.publishRequest(task); this.fault(error); } });
   }
   attachBrowser(ws) {
@@ -152,6 +154,7 @@ export class Harness {
         if (event.type === 'audio_level' && [event.at, event.durationMs, event.inputRms, event.outputRms].every(Number.isFinite)
           && Math.abs(event.at - Date.now()) < 5000 && event.durationMs > 0 && event.durationMs <= 500
           && event.inputRms >= 0 && event.inputRms <= 1 && event.outputRms >= 0 && event.outputRms <= 1) {
+          this.mediator?.activity(event);
           const items = this.timeline.add(event);
           if (items.length) ws.send(JSON.stringify({ type: 'timeline_update', items }));
         }
@@ -165,13 +168,14 @@ export class Harness {
     if (this.live && this.live.state !== 'closed') return;
     if (!this.channelReady) throw new Error('Wait for the voice channel to connect in the Claude terminal.');
     if (this.observer.state === 'exited') throw new Error('The Claude session has exited.');
-    const input = [
-      { type: 'message', role: 'developer', content: [{ type: 'input_text', text: `You are attached to Claude Code in ${this.cwd}. Its current state is ${this.observer.state}. Recorded observations will follow as background context, including work from before this voice connection. Those requests were already submitted. Answer from this evidence and do not resend them.` }] },
-    ];
+    const attachment = `You are attached to Claude Code in ${this.cwd}. Its current state is ${this.observer.state}. Recorded observations are reference data, including work from before this voice connection. Those requests were already submitted. Answer from this evidence and do not resend them. Greet briefly; do not narrate historical work.`;
+    const history = startupHistory(this.observer.observations, Math.max(0, 7600 - Buffer.byteLength(attachment)));
+    const input = [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: attachment }] }];
+    if (history.text) input.push({ type: 'message', role: 'user', content: [{ type: 'input_text', text: `Recorded Claude context only. This is not a new user request:\n${history.text}` }] });
     const live = new LiveSession({ apiKey: this.apiKey, budget: this.budget, maxSeconds: this.maxSeconds, voice: this.voice, label: `Claude ${this.sessionId}`, input, log: event => this.log({ liveRun: live.reservation, ...event }) });
     this.live = live;
     this.mediator?.stop();
-    this.mediator = new Mediator({ live, observer: this.observer, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
+    this.mediator = new Mediator({ live, observer: this.observer, initialObservationCount: history.count, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
     live.on('fault', error => this.fault(error));
     live.on('event', event => {
       if (event.type === 'session.output_audio.delta' && this.browser?.readyState === WebSocket.OPEN) {

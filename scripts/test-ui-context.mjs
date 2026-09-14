@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { channelNotification } from '../src/channel-message.js';
 import { Harness } from '../src/server.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -33,9 +34,11 @@ for (const [role, startMs, endMs, text] of [
   ['intermediary', 19000, 23000, 'The selected theme is now saved between visits.'],
   ['intermediary', 29500, 31500, 'The toggle is ready, and all three tests passed.'],
 ]) publish({ type: 'caption', voiceSessionId: 'fixture', voiceStartedAt: base, role, startMs, endMs, text, at: base + endMs + 400 });
-publish({ type: 'task', id: 'request-one', queuedAt: base + 7500, at: base + 7500, state: 'queued', text: 'Add a dark-mode toggle.' });
-publish({ type: 'task', id: 'request-one', queuedAt: base + 7500, at: base + 9000, state: 'sent', text: 'Add a dark-mode toggle.' });
-publish({ type: 'agent_input', at: base + 9500, text: '<channel source="voice" message_id="request-one">Add a dark-mode toggle.</channel>' });
+const requestContent = 'User request (transcribed speech):\nAdd a dark-mode toggle named “夜”.\n\nEarlier voice conversation for reference only:\nintermediary: The theme lives in settings.\n';
+const notification = channelNotification({ id: 'request-one', content: requestContent });
+for (const [at, state] of [[7500, 'queued'], [9000, 'sent']]) publish({ type: 'task', id: 'request-one', queuedAt: base + 7500, at: base + at, state, text: requestContent, notification });
+const observedPrompt = `<channel source="voice" message_id="request-one">\n${requestContent}\n</channel>`;
+publish({ type: 'agent_input', at: base + 9500, text: observedPrompt });
 for (const [at, index, text, final] of [
   [10500, 0, 'I’ll add the toggle and persist the selected theme.', false],
   [14000, 1, 'Updated the settings component.', false],
@@ -63,6 +66,17 @@ try {
   await page.locator('.timeline-item[data-track="operator"]').first().waitFor();
   for (const track of ['operator', 'speech', 'transcript', 'claude', 'requests']) assert.ok(await page.locator(`.timeline-item[data-track="${track}"]`).count() > 0, track);
   assert.equal(await page.locator('.timeline-item[data-track="requests"]').count(), 2, 'voice prompt does not duplicate delivery');
+  await page.locator('.timeline-item[data-track="requests"][data-state="observed"]').first().click();
+  assert.equal(await page.locator('#detail-text').textContent(), requestContent);
+  assert.deepEqual(JSON.parse(await page.locator('#detail-json').textContent()), notification);
+  assert.equal(await page.locator('#detail-observed-text').textContent(), observedPrompt);
+  assert.match(await page.locator('#detail-verification').textContent(), /Verified/);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: harness.baseUrl });
+  await page.locator('#detail-copy').click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), requestContent);
+  assert.equal(await page.locator('#detail-copy').textContent(), 'Copied');
+  await page.locator('#detail-payload summary').click();
+  if (artifacts) await page.screenshot({ path: path.join(artifacts, 'request-inspector.png'), fullPage: true });
   const batch = page.getByRole('button', { name: /Claude displayed batches\. Batch 4:/ });
   await batch.hover();
   await page.locator('#timeline-tooltip').waitFor();

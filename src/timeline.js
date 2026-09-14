@@ -66,14 +66,23 @@ export class Timeline {
         this.requests.set(event.id, item);
       }
       item.text = event.text ?? item.text;
+      item.notification = event.notification ?? item.notification;
+      if (item.observedContent !== undefined) item.contentMatches = item.observedContent === item.text;
       if (item.state !== 'observed') { item.state = event.state; item.end = Math.max(item.end, at); }
       if (event.state === 'sent') item.sentAt ??= at;
       changed.push(item);
     }
     if (event.type === 'agent_input') {
-      const channelId = event.text.match(/^<channel\s[^>]*source="voice"[^>]*message_id="([^"]+)"/)?.[1];
+      const attributes = event.text.match(/^<channel\s([^>]*)>/)?.[1];
+      const channelId = /\bsource="voice"/.test(attributes ?? '') && attributes.match(/\bmessage_id="([^"]+)"/)?.[1];
       const request = channelId && this.requests.get(channelId);
-      if (request) { request.state = 'observed'; request.observedAt = at; request.end = Math.max(request.end, at); changed.push(request); }
+      if (request) {
+        request.state = 'observed'; request.observedAt = at; request.end = Math.max(request.end, at);
+        request.observedPrompt = event.text;
+        request.observedContent = event.text.match(/^<channel\s[^>]*>\r?\n([\s\S]*)\r?\n<\/channel>$/)?.[1];
+        if (request.observedContent !== undefined) request.contentMatches = request.observedContent === request.text;
+        changed.push(request);
+      }
       else changed.push(this.item({ track: 'requests', start: at, end: at, label: channelId ? 'Voice request' : 'Typed request',
         text: event.text, state: 'observed', source: 'UserPromptSubmit received — already in Claude',
       }));

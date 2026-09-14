@@ -49,3 +49,18 @@ test('Claude batches are instant receipt markers, and history survives more than
   assert.equal(items[0].text, 'Batch 0');
   assert.ok(items.every(item => item.start === item.end && item.source === 'MessageDisplay hook received'));
 });
+
+
+test('request inspection preserves the full wire content and exposes observed mismatches', () => {
+  const timeline = new Timeline(0);
+  const text = 'User request:\n世界 “blue”\n\nEarlier conversation:\nYes.\n';
+  timeline.add({ type: 'task', id: 'one', text, notification: { params: { content: text } }, state: 'sent', at: 100 });
+  const prompt = `<channel message_id="one" source="voice">\n${text}\n</channel>`;
+  timeline.add({ type: 'agent_input', text: prompt, at: 200 });
+  const item = timeline.snapshot().items[0];
+  assert.equal(item.text, text); assert.equal(item.observedPrompt, prompt);
+  assert.equal(item.observedContent, text); assert.equal(item.contentMatches, true);
+  timeline.add({ type: 'agent_input', text: prompt.replace('blue', 'red'), at: 300 });
+  assert.equal(item.contentMatches, false);
+  assert.equal(item.text, text, 'the inspector must not rewrite sent content to conceal a mismatch');
+});

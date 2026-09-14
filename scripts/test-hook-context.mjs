@@ -48,6 +48,12 @@ try {
   assert.ok(events.some(e => e.type === 'agent.hook' && e.hook_event_name === 'PostToolUse' && e.tool_response));
   assert.ok(!events.some(e => /mcp__voice__/.test(e.tool_name ?? '')));
   assert.ok(!events.some(e => e.type === 'error' || e.type === 'bridge.fault'));
+  const requestItem = test.harness.timeline.snapshot().items.find(i => i.requestId);
+  assert.equal(requestItem.contentMatches, true, 'full UI message equals the prompt actually received by Claude');
+  assert.equal(requestItem.notification.params.content, requestItem.text);
+  evidence.requestVerified = true; evidence.request = requestItem;
+  evidence.speechCues = events.filter(e => e.type === 'bridge.speech_cue');
+  assert.ok(!events.some(e => e.type === 'session.commentary.append' && /Claude Code observation/.test(e.content)), 'raw hooks are never speech instructions');
   evidence.passed = true; evidence.voiceWork = true; evidence.noReplyTools = true;
   console.log('\nHOOK CONTEXT PASSED');
 } catch (error) { evidence.error = error.message; throw error; }

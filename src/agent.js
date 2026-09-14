@@ -51,7 +51,7 @@ export class AgentObserver extends EventEmitter {
   }
   conversationContext() { return JSON.stringify(this.conversation); }
   observe(data, kind = 'thinking', emit = true) {
-    const observation = { kind, text: this.clean(JSON.stringify(data)) };
+    const observation = { kind, name: data.hook_event_name, assistant: data.role === 'assistant' && data.block?.type === 'text', child: Boolean(data.agent_id), text: this.clean(JSON.stringify(data)) };
     this.observations.push(observation);
     if (emit) this.emit('observation', observation);
   }
@@ -99,7 +99,7 @@ export class AgentObserver extends EventEmitter {
       const key = createHash('sha256').update(`${event.type}:${id}:${index}:${JSON.stringify(block)}`).digest('hex');
       if (this.seen.has(key)) continue;
       this.seen.add(key);
-      this.observe({ source: 'transcript', role: event.type, message_id: id, block }, event.type === 'assistant' && block.type === 'text' ? 'commentary' : 'thinking', emit);
+      this.observe({ source: 'transcript', role: event.type, message_id: id, block }, 'thinking', emit);
       if (block.type === 'text') {
         if (event.type === 'user') this.input(block.text, { source: 'transcript' }, emit);
         else this.textDelta(block.text, { source: 'transcript' }, emit);
@@ -117,7 +117,7 @@ export class AgentObserver extends EventEmitter {
     }
     if (event.transcript_path) this.attachTranscript(event.transcript_path);
     this.log({ type: 'agent.hook', name, ...event });
-    this.observe(event, name === 'MessageDisplay' ? 'commentary' : 'thinking');
+    this.observe(event);
     // Subagent observations belong in Live context, but their lifecycle must
     // not mark the parent terminal idle or overwrite its current status.
     if (event.agent_id) return true;
