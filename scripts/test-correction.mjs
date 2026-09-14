@@ -17,8 +17,8 @@ try {
   await voice.speak(build);
   await until(() => fs.existsSync(path.join(test.cwd, 'slow-build-started.json')), { label: 'foreground slow build', timeout: 45000 });
   await voice.speak(correction);
-  await until(() => test.harness.mediator.tasks.size >= 2, { label: 'Live delegated the correction', timeout: 20000 });
-  const tasks = [...test.harness.mediator.tasks.values()];
+  await until(() => test.harness.outbox.size >= 2, { label: 'Live delegated the correction', timeout: 20000 });
+  const tasks = [...test.harness.outbox.values()];
   const bashStart = JSON.parse(fs.readFileSync(path.join(test.cwd, 'slow-build-started.json'), 'utf8')).at;
   const correctionTask = tasks[1];
   const bashEnd = fs.existsSync(path.join(test.cwd, 'slow-build-ended.json')) ? JSON.parse(fs.readFileSync(path.join(test.cwd, 'slow-build-ended.json'), 'utf8')).at : null;
@@ -30,9 +30,7 @@ try {
     return readEvents().filter(e => e.type === 'agent.text' && e.at > correctionTask.queuedAt).at(-1)?.at;
   }, { timeout: 80000, label: 'Claude coding report' });
   await voice.speak(overlap);
-  // Claude may answer grouped original+correction notifications with one reply
-  // keyed to the latest message. Verify the corrected artifact independently.
-  await until(() => test.harness.mediator.tasks.get(correctionTask.id)?.finished, { timeout: 65000, label: 'corrected request completed' });
+  // Completion is observed in the terminal; verify the actual artifact below.
   await until(() => test.harness.observer.state === 'idle', { label: 'Claude idle after corrected build' });
   const module = fs.readdirSync(test.cwd).find(f => /\.(m?js)$/.test(f) && !/test|slow-build/.test(f));
   assert.ok(module, 'calculator module exists');

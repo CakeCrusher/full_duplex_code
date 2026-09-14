@@ -4,46 +4,85 @@ import { EventEmitter } from 'node:events';
 import { AgentObserver } from '../src/agent.js';
 import { Mediator } from '../src/mediator.js';
 
-function fixture(t, state = 'active') {
-  const live = new EventEmitter(); live.state = state;
+function fixture(t, state = 'active', observer = new AgentObserver({ sessionId: 'test' })) {
+  const live = new EventEmitter(); live.state = state; live.close = () => { live.state = 'closed'; };
   const appends = []; live.append = async (kind, content, delegationId) => { appends.push({ kind, content, delegationId }); };
-  const observer = new AgentObserver({ sessionId: 'test' }); const deliveries = [];
+  const deliveries = [];
   const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String });
   t.after(() => { mediator.stop(); observer.close(); });
-  return { live, observer, mediator, appends, deliveries };
+  const hook = event => observer.hook({ session_id: 'test', ...event });
+  return { live, observer, mediator, appends, deliveries, hook };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
+const content = (f, kind) => f.appends.filter(e => !kind || e.kind === kind).map(e => e.content).join('');
 
-test('terminal input and output enter Live context without becoming voice requests', async t => {
+test('hooks are primary: prompts and full tool data are thinking; assistant batches are commentary', async t => {
   const f = fixture(t);
-  f.observer.input('Remember ORCHID'); f.observer.textDelta('ACKNOWLEDGED');
+  f.hook({ hook_event_name: 'UserPromptSubmit', prompt: 'Remember ORCHID' });
+  f.hook({ hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_use_id: 'edit-1', tool_input: { old_string: 'red', new_string: 'blue' }, tool_response: { structuredPatch: [{ lines: ['-red', '+blue'] }] }, duration_ms: 12 });
+  f.hook({ hook_event_name: 'MessageDisplay', message_id: 'a', index: 0, final: true, delta: 'Changed to blue.' });
+  f.hook({ hook_event_name: 'Stop', last_assistant_message: 'Changed to blue.' });
   await flush();
-  assert.equal(f.appends.length, 2);
-  assert.match(f.appends[0].content, /Claude Code input.*already submitted.*\nRemember ORCHID/s);
-  assert.match(f.appends[1].content, /Claude Code output:\nACKNOWLEDGED/);
-  assert.ok(f.appends.every(e => e.kind === 'thinking' && e.delegationId === null));
+  assert.match(content(f, 'thinking'), /Remember ORCHID/);
+  assert.match(content(f, 'thinking'), /structuredPatch.*-red.*\+blue/);
+  assert.match(content(f, 'thinking'), /duration_ms.*12/);
+  assert.match(content(f, 'commentary'), /MessageDisplay.*Changed to blue/);
+  assert.doesNotMatch(content(f, 'commentary'), /Stop/);
+  assert.ok(f.appends.every(e => e.delegationId === null));
   assert.equal(f.mediator.history.fragments.length, 0);
   f.mediator.delegate('unexpected-delegation', 0);
-  assert.equal(f.deliveries.length, 0, 'an observed terminal prompt cannot itself be delegated');
-  f.mediator.stop();
-  assert.equal(f.observer.listenerCount('input'), 0);
+  assert.equal(f.deliveries.length, 0, 'observed input never triggers a new channel request');
 });
 
-test('a previous channel reply does not suppress completion of a new terminal prompt', async t => {
-  const f = fixture(t);
-  f.mediator.channelEvent({ type: 'channel.reply', id: 'older', status: 'completed', text: 'Earlier voice task finished' });
-  f.observer.input('New terminal task');
-  f.observer.emit('complete', { text: 'Terminal task finished' });
-  await flush();
-  assert.ok(f.appends.some(e => e.kind === 'commentary' && e.content.includes('Terminal task finished')));
-});
-
-test('observations received during Live startup flush when the session becomes active', async t => {
-  const f = fixture(t, 'connecting');
-  f.observer.input('Typed during startup'); f.observer.textDelta('Reply during startup');
+test('voice startup and restart retain whole tool results instead of a clipped summary', async t => {
+  const observer = new AgentObserver({ sessionId: 'test' });
+  const output = 'BEGIN\n' + 'File detail 世界\n'.repeat(10000) + 'END';
+  observer.hook({ session_id: 'test', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: { stdout: output } });
+  observer.hook({ session_id: 'test', hook_event_name: 'MessageDisplay', message_id: 'old', index: 0, delta: 'Earlier answer.' });
+  const f = fixture(t, 'connecting', observer);
+  f.hook({ hook_event_name: 'UserPromptSubmit', prompt: 'Typed during startup' });
   assert.equal(f.appends.length, 0);
   f.live.state = 'active'; f.live.emit('event', { type: 'session.started' });
   await flush();
-  assert.equal(f.appends.length, 2);
-  assert.match(f.appends[0].content, /Typed during startup/); assert.match(f.appends[1].content, /Reply during startup/);
+  const expected = observer.observations.map((o, i) => `Claude Code observation${i < 2 ? ' (history)' : ''}:\n${o.text}\n`).join('');
+  assert.equal(content(f), expected);
+  assert.ok(f.appends.length > 256, 'exercise the former backlog limit');
+  assert.ok(f.appends.every(e => e.kind === 'thinking'), 'old assistant messages do not get spoken again');
+  f.mediator.stop();
+  const restarted = fixture(t, 'active', observer);
+  await flush();
+  assert.equal(content(restarted), observer.observations.map(o => `Claude Code observation (history):\n${o.text}\n`).join(''));
+});
+
+test('a delegation sends ordinary user text once, without asking Claude to use companion tools', async t => {
+  const f = fixture(t);
+  f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
+  f.mediator.delegate('work', 1100);
+  f.mediator.delegate('duplicate', 1100);
+  await flush();
+  assert.equal(f.deliveries.length, 1);
+  assert.match(f.deliveries[0].content, /Make the button blue/);
+  assert.doesNotMatch(f.deliveries[0].content, /acknowledge|reply|message_id|GPT Live/);
+});
+
+test('duplicate display hooks do not produce duplicate commentary; subagent hooks retain their content', async t => {
+  const f = fixture(t);
+  const display = { hook_event_name: 'MessageDisplay', message_id: 'same', index: 0, delta: 'One answer.' };
+  f.hook(display); f.hook(display);
+  f.hook({ hook_event_name: 'PostToolUseFailure', agent_id: 'child', tool_name: 'Bash', error: 'test failed', custom_field: { detail: 'kept' } });
+  await flush();
+  assert.equal(content(f, 'commentary').match(/One answer/g).length, 1);
+  assert.match(content(f, 'thinking'), /child.*Bash.*test failed.*custom_field.*kept/);
+  f.mediator.stop(); assert.equal(f.observer.listenerCount('observation'), 0);
+});
+
+test('a failed append surfaces a fault and ends stale voice instead of silently losing context', async t => {
+  const f = fixture(t);
+  const faults = []; f.mediator.publish = e => faults.push(e);
+  f.live.append = async () => { throw new Error('rejected'); };
+  f.hook({ hook_event_name: 'PostToolUse', tool_response: { stdout: 'still retained' } });
+  await flush();
+  assert.equal(f.live.state, 'closed');
+  assert.match(faults[0].message, /restart voice.*rejected/);
+  assert.match(f.observer.observations[0].text, /still retained/);
 });

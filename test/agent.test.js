@@ -67,9 +67,11 @@ test('resume restores both sides of the transcript without replaying events', t 
   observer.on('text', () => assert.fail('Saved replies must not replay as new output'));
   observer.attachTranscript(file);
   assert.deepEqual(JSON.parse(observer.conversationContext()), savedConversation);
+  assert.ok(observer.observations.some(o => o.text.includes('private tool internals')));
+  assert.ok(observer.observations.every(o => !o.text.includes('not visible')));
 });
 
-test('transcript adapter observes user text and assistant text once, not tool results or duplicate records', t => {
+test('transcript adapter restores tool results as context without displaying them as assistant speech', t => {
   const observer = new AgentObserver({ sessionId: 'test', observation: 'transcript' }); t.after(() => observer.close());
   const inputs = []; observer.on('input', e => inputs.push(e.text));
   observer.hook({ session_id: 'test', hook_event_name: 'UserPromptSubmit', prompt: 'My codename is ORCHID' });
@@ -79,14 +81,16 @@ test('transcript adapter observes user text and assistant text once, not tool re
   assert.equal(inputs.length, 2);
 });
 
-test('conversation retention remains bounded and preserves role labels when clipping', t => {
+test('conversation and tool context are retained without the old character or entry clipping', t => {
   const observer = new AgentObserver({ sessionId: 'test' }); t.after(() => observer.close());
-  observer.input('x'.repeat(50000)); observer.textDelta('Reply');
-  assert.equal(observer.conversationChars, 40000);
-  assert.deepEqual(JSON.parse(observer.conversationContext(8)), [{ role: 'input', text: 'xxx' }, { role: 'output', text: 'Reply' }]);
+  const prompt = 'x'.repeat(50000);
+  observer.input(prompt); observer.textDelta('Reply');
   for (let i = 0; i < 250; i++) observer.input('hello');
-  assert.equal(observer.conversation.length, 200);
-  assert.equal(observer.conversationChars, 1000);
+  assert.equal(observer.conversation.length, 252);
+  assert.equal(JSON.parse(observer.conversationContext())[0].text, prompt);
+  const tool = { session_id: 'test', hook_event_name: 'PostToolUse', tool_response: { stdout: 'y'.repeat(150000) } };
+  observer.hook(tool);
+  assert.deepEqual(JSON.parse(observer.observations[0].text), tool);
 });
 
 test('channel-delivered prompts remain part of resumed history even though Claude marks them as metadata', t => {

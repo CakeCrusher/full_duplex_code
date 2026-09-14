@@ -28,7 +28,7 @@ test('local endpoints require the correct capability and reject foreign origins 
   for (let i = 0; i < 2; i++) assert.equal((await fetch(h.baseUrl + '/hook', { method: 'POST', headers: channelHeaders, body: JSON.stringify(hook) })).status, 200);
   assert.equal(h.observer.text, 'Hello', 'duplicate display batches are not repeated');
 });
-test('channel transport confirmation differs from Claude acknowledgment', async t => {
+test('channel delivery ends at sent and does not depend on Claude calling a tool', async t => {
   const h = await fixture(t);
   const ws = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/channel', { headers: { Authorization: `Bearer ${h.channelToken}` } });
   t.after(() => ws.terminate());
@@ -41,9 +41,8 @@ test('channel transport confirmation differs from Claude acknowledgment', async 
   ws.send(JSON.stringify({ type: 'channel.sent', id: 'one' }));
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(h.outbox.get('one').state, 'sent');
-  ws.send(JSON.stringify({ type: 'channel.acknowledge', message_id: 'one' }));
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(h.outbox.get('one').state, 'acknowledged');
+  assert.ok(h.uiEvents.some(e => e.type === 'task' && e.id === 'one' && e.state === 'sent'));
+  assert.equal(h.observer.state, 'starting', 'transport delivery does not invent agent progress');
 });
 
 test('the actual command hook relays a typed prompt into observer history and browser activity', async t => {
@@ -60,4 +59,24 @@ test('the actual command hook relays a typed prompt into observer history and br
   assert.deepEqual(JSON.parse(h.observer.conversationContext()), [{ role: 'input', text: 'Remember ORCHID [redacted]' }]);
   assert.ok(h.uiEvents.some(e => e.type === 'agent_input' && e.text === 'Remember ORCHID [redacted]'));
   assert.equal(h.outbox.size, 0, 'observing an existing prompt does not send a channel request');
+});
+
+test('the command hook preserves large structured results, new fields, and UTF-8 while redacting credentials', async t => {
+  const h = await fixture(t);
+  const observed = []; h.observer.on('observation', e => observed.push(e));
+  const tool = { session_id: h.sessionId, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'one',
+    tool_input: { command: 'node check.mjs' }, duration_ms: 854,
+    tool_response: { stdout: 'HEAD\n' + '世界👋\n'.repeat(120000) + 'TAIL', stderr: h.apiKey },
+    future_field: { nested: ['retained', h.channelToken] },
+  };
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/hook.js', import.meta.url)), h.baseUrl + '/hook'], {
+    env: { ...process.env, FD_BRIDGE_TOKEN: h.channelToken }, stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  t.after(() => child.kill());
+  let stderr = ''; child.stderr.on('data', c => { stderr += c; });
+  const done = new Promise((resolve, reject) => { child.on('error', reject); child.on('close', resolve); });
+  child.stdin.end(JSON.stringify(tool));
+  assert.equal(await done, 0); assert.equal(stderr, '');
+  assert.equal(observed.length, 1);
+  assert.deepEqual(JSON.parse(observed[0].text), { ...tool, tool_response: { ...tool.tool_response, stderr: '[redacted]' }, future_field: { nested: ['retained', '[redacted]'] } });
 });

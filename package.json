@@ -13,6 +13,7 @@
     "doctor": "node src/cli.js doctor",
     "usage": "node src/cli.js usage",
     "test:integration": "node scripts/test-integration.mjs",
+    "test:hooks": "node scripts/test-hook-context.mjs",
     "test:terminal": "node scripts/test-terminal-context.mjs",
     "test:ui": "node scripts/test-ui-context.mjs",
     "test:browser": "node scripts/test-browser.mjs",

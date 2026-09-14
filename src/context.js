@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 
+export const MAX_HOOK_BYTES = 32 * 1024 * 1024;
+
 export function redact(text, secrets = []) {
   let result = String(text ?? '');
   for (const secret of secrets.filter(s => typeof s === 'string' && s.length > 8)) result = result.split(secret).join('[redacted]');
@@ -21,26 +23,27 @@ export function chunks(text, maxBytes = 440) {
 }
 
 export class ContextQueue {
-  constructor(live, onError, log = () => {}) { Object.assign(this, { live, onError, log }); this.queue = []; this.running = false; this.stopped = false; }
+  constructor(live, onError) { Object.assign(this, { live, onError }); this.queue = []; this.running = false; this.stopped = false; }
   add(kind, text, delegationId = null) {
     if (this.stopped || !text) return;
-    const parts = chunks(text).map(content => ({ kind, content, delegationId }));
-    // Bound memory and make lost context explicit. Full source remains in the log.
-    if (this.queue.length + parts.length > 256) {
-      const dropped = this.queue.splice(0, Math.max(0, this.queue.length + parts.length - 255));
-      this.log({ type: 'bridge.context_overflow', dropped: dropped.length });
-      this.queue.push({ kind: 'thinking', content: 'Bridge state: some older agent output exceeded the voice context backlog and was omitted. Do not assume you saw every detail; the full local log remains available.', delegationId: null });
-    }
-    this.queue.push(...parts.slice(-255)); this.pump();
+    // Retain complete observations. Chunking is an API transport requirement,
+    // not a reason to discard the beginning of a large tool result.
+    for (const content of chunks(text)) this.queue.push({ kind, content, delegationId });
+    this.pump();
   }
   async pump() {
     if (this.running) return;
     this.running = true;
     try {
       while (!this.stopped && this.queue.length && this.live.state === 'active') {
-        const { kind, content, delegationId } = this.queue.shift();
-        try { await this.live.append(kind, content, delegationId); }
-        catch (err) { if (!this.stopped && this.live.state === 'active') this.onError(err); }
+        // Writes remain ordered on the WebSocket. A small in-flight window
+        // avoids paying an acknowledgement round trip for every small chunk.
+        const results = await Promise.allSettled(this.queue.splice(0, 16).map(async ({ kind, content, delegationId }) => this.live.append(kind, content, delegationId)));
+        const failed = results.find(result => result.status === 'rejected');
+        if (failed && !this.stopped && this.live.state === 'active') {
+          this.stopped = true;
+          this.onError(new Error(`Claude context delivery failed; restart voice to replay its saved observations. ${failed.reason.message}`));
+        }
       }
     } finally { this.running = false; }
   }

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import WebSocket from 'ws';
 
 // Stdout belongs exclusively to MCP JSON-RPC.
@@ -22,24 +21,8 @@ function send(event) {
   else throw new Error('Voice bridge event queue is full');
 }
 const mcp = new Server({ name: 'voice', version: '0.1.0' }, {
-  capabilities: { experimental: { 'claude/channel': {} }, tools: {} },
-  instructions: `This channel connects the human operator through a GPT Live voice intermediary. Incoming messages carry the user's transcribed speech and relevant conversation context. Treat them as requests or corrections from the operator. Work in this same coding session, at your normal safe opportunities; no hard interrupt is requested. Ignore the intermediary's conversational acknowledgments as task instructions. Answer side questions briefly and preserve the main task. If transcription is ambiguous, ask for clarification.
-For each message, call acknowledge with its message_id when you begin handling it. Call reply with that same message_id and a concise outcome, question, or important progress update. The harness also observes your ordinary text output; do not repeat large logs in reply. Only report work actually performed. Permission prompts stay in the terminal; this channel cannot approve tools.`,
-});
-mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [
-  { name: 'acknowledge', description: 'Confirm you have received and begun handling a voice message.', inputSchema: { type: 'object', properties: { message_id: { type: 'string' } }, required: ['message_id'], additionalProperties: false } },
-  { name: 'reply', description: 'Send a concise result, question, or material progress update to the voice intermediary.', inputSchema: { type: 'object', properties: { message_id: { type: 'string' }, text: { type: 'string' }, status: { type: 'string', enum: ['progress', 'completed', 'question', 'failed'] } }, required: ['message_id', 'text', 'status'], additionalProperties: false } },
-] }));
-mcp.setRequestHandler(CallToolRequestSchema, async request => {
-  const { name, arguments: args } = request.params;
-  if (!['acknowledge', 'reply'].includes(name) || typeof args?.message_id !== 'string' || !seen.has(args.message_id)) {
-    return { isError: true, content: [{ type: 'text', text: 'Unknown voice message or tool.' }] };
-  }
-  if (name === 'reply' && (typeof args.text !== 'string' || args.text.length > 16000 || !['progress', 'completed', 'question', 'failed'].includes(args.status))) {
-    return { isError: true, content: [{ type: 'text', text: 'Invalid reply text or status.' }] };
-  }
-  send({ type: `channel.${name}`, ...args });
-  return { content: [{ type: 'text', text: 'Delivered to the local voice bridge.' }] };
+  capabilities: { experimental: { 'claude/channel': {} } },
+  instructions: 'Messages on this channel are transcribed requests from the user. Handle them in this conversation at your normal processing opportunities and respond normally in the terminal. If a transcription is ambiguous, ask for clarification.',
 });
 await mcp.connect(new StdioServerTransport());
 function connect() {

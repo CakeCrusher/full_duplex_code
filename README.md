@@ -2,7 +2,7 @@
 
 Talk to Claude Code while it works. A voice companion powered by GPT Live 1 listens, speaks, and follows your coding session. Keep using the normal Claude terminal, including typing directly into it.
 
-Ask for a change, ask what just happened, or change direction while Claude is working. The companion uses the context it already has and passes requests to Claude when more work is needed.
+Ask for a change, ask what just happened, or change direction while Claude is working. The companion follows Claude’s messages, file edits, commands, and tool results automatically. It answers from that context and passes requests to Claude when more work is needed.
 
 ## Quick start
 

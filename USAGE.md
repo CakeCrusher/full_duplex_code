@@ -2,7 +2,7 @@
 
 Full-Duplex Code adds a voice companion to your normal Claude Code terminal. GPT Live 1 handles the conversation with you; Claude Code remains the coding agent that reads files, runs commands, and makes changes.
 
-You can talk while Claude works, ask about its progress, and give corrections. You can also type directly into Claude. The companion receives submitted prompts and Claude's displayed replies from that same session.
+You can talk while Claude works, ask about its progress, and give corrections. You can also type directly into Claude. The companion receives hook observations from that same session: submitted prompts, assistant messages, tool arguments and results, file edits, errors, and lifecycle updates.
 
 ## Before you start
 
@@ -69,7 +69,19 @@ The companion can answer from the conversation and agent updates it already has.
 
 You do not need to wait for Claude to finish before speaking. Interrupting the companion's speech does not interrupt Claude's work. New spoken instructions do not press Escape or cancel an active Claude operation.
 
-The browser shows voice captions and agent activity. Terminal prompts appear under **Input to Claude Code**; Claude's displayed replies appear alongside them. Reply updates arrive in batches, so a short reply may appear only once it finishes.
+The browser shows voice captions and agent activity. Terminal prompts appear under **Input to Claude Code**; Claude's displayed replies appear alongside them. Assistant text arrives in batches, so a short reply may appear only once it finishes. The companion also receives full tool data in the background, even when it is collapsed in Claude’s terminal or absent from the browser activity panel.
+
+## What the companion follows
+
+Claude's hooks are the main observation path. Each hook payload is forwarded with its fields intact, including tool inputs, completed results, edit patches, metadata, and errors. Known connection credentials and recognizable API keys are redacted. Assistant messages from `MessageDisplay` go to GPT Live as commentary; other hooks go as background thinking. The companion decides how to explain useful information without reading every log aloud.
+
+Claude responds normally in its terminal. The channel has no acknowledgment or reply tools; its only job is to deliver spoken requests into the conversation. The activity panel's **sent** label means the channel delivered a request, not that Claude completed it. Follow Claude's observed activity and results for progress.
+
+The bridge does not trim hook fields or discard older observations to save context. It splits text into small appends for the Live API's per-append limit and keeps the observations for a voice restart. An append failure ends voice with an error so reconnecting can replay the saved observations. A single local hook request has a 32 MiB transport limit; oversized events are reported instead of silently truncated. The model's own context capacity still applies.
+
+The launcher registers passive lifecycle hooks, including tool batches, subagent activity, permission events, and compaction. `WorktreeCreate` is excluded because registering it replaces Claude's own worktree creation. `FileChanged` forwards events for files configured in Claude's watch list; it does not automatically watch every file. Tool hooks already describe changes made through Edit and Write, plus the commands and results of Bash. See the [Claude hooks reference](https://code.claude.com/docs/en/hooks) for watch-path configuration and event availability. Use a current Claude Code release; this flow was tested on 2.1.270.
+
+Hooks report tool operations at their boundaries. A running command's stdout normally arrives with its result, not as a continuous byte stream. Unsent terminal drafts and private thinking are not part of this feed.
 
 ## Approvals and attention
 
@@ -81,7 +93,7 @@ If Claude asks a question, you can answer by voice or in the terminal. Keep the 
 
 - **Mute microphone** stops sharing your microphone input. Voice stays connected and billable. Click **Unmute microphone** to speak again.
 - **End voice** closes the paid voice connection. Claude stays open and can continue working.
-- **Start voice** opens a new connection with recent Claude context, including prompts and replies entered while voice was off.
+- **Start voice** opens a new connection and replays the observations retained by this launcher, including tool results and work performed while voice was off. Historical assistant messages are restored quietly.
 - Exit Claude in the terminal to stop the whole application.
 
 Closing the companion tab also closes its voice connection. A disconnected voice session does not erase Claude's conversation.
@@ -96,7 +108,7 @@ npm start -- --cwd /path/to/your/project --resume CLAUDE_SESSION_ID
 
 For a session launched by Full-Duplex Code, the terminal prints a **Local run** folder at startup. Open `connection.json` in that folder and copy its `sessionId` value. Use the complete ID; do not use the short suffix of the folder name. Keep the rest of that file private because it also contains connection credentials.
 
-Accept the channel notice, open the new companion link, and click **Start voice**. The companion restores recent prompts and replies from that Claude session's transcript. It does not restore an unlimited archive of past voice conversations: recent agent context is retained, and older details can fall out of context.
+Accept the channel notice, open the new companion link, and click **Start voice**. The companion restores saved prompts, assistant text, tool calls, and tool results from that Claude session's transcript. Transcript records supply the history; newly arriving hooks supply live observations. Private thinking is not imported. Old voice conversations are not restored independently of Claude's saved history, and the voice model has a finite context capacity.
 
 ## Useful launch options
 
@@ -109,7 +121,7 @@ Add options after `npm start --`:
 | `--session-id UUID` | Choose the full UUID for a new conversation. Use either this or `--resume`. |
 | `--no-open` | Print the companion link without opening the browser. |
 | `--max-minutes 10` | Limit this voice connection to ten minutes. Default: 30. |
-| `--observe transcript` | Observe saved conversation text if display hooks are unavailable. |
+| `--observe transcript` | Add saved-text/tool fallback observation if display hooks are unavailable. |
 | `--port 8123` | Use a fixed local port. The default chooses an available port. |
 
 For example:
@@ -185,7 +197,7 @@ Treat logs and companion links as private. When reporting a problem, share the e
 
 ## Checking an installation
 
-`npm test` runs offline checks without OpenAI spending. `npm run test:ui` checks the browser activity panel in Chrome without a voice connection.
+`npm test` runs offline checks without OpenAI spending. `npm run test:ui` checks the browser activity panel in Chrome without a voice connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session.
 
 The other integration commands in `package.json` start real Claude and OpenAI voice sessions. They require macOS `say`, `ffmpeg`, and the relevant browser setup; they consume API credits. Ordinary use does not require these test tools.
 

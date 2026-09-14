@@ -9,14 +9,14 @@ const test = await startTestHarness('integration', { maxSeconds: 150 });
 let voice;
 try {
   // Verify the actual headed channel before spending on voice.
-  test.harness.deliver({ id: 'startup-check', content: 'Verify the voice bridge by calling acknowledge with message_id startup-check, then reply with status completed and text READY. Do not inspect or change files. Wait for the next voice request.' });
-  await until(() => test.harness.outbox.get('startup-check')?.state === 'completed', { label: 'Claude channel acknowledgment and reply' });
+  test.harness.deliver({ id: 'startup-check', content: 'Respond with only READY. Do not inspect or change files.' });
+  await until(() => test.harness.observer.text.includes('READY'), { label: 'ordinary Claude reply through hooks' });
   await until(() => test.harness.observer.state === 'idle', { label: 'Claude idle' });
   voice = await connectTestVoice(test.harness);
   await until(() => voice.events.filter(e => e.type === 'caption' && e.role === 'intermediary').map(e => e.text).join('').length > 60, { label: 'audible greeting transcript' });
   await delay(5000);
   await voice.speak(request);
-  await until(() => [...test.harness.outbox.values()].some(t => t.id !== 'startup-check' && t.state === 'completed'), { timeout: 65000, label: 'voice request completed by Claude' });
+  await until(() => fs.readdirSync(test.cwd).some(f => f.startsWith('hello')), { timeout: 65000, label: 'voice request created a file' });
   const files = fs.readdirSync(test.cwd).filter(f => f.startsWith('hello'));
   assert.ok(files.length, 'Claude created the spoken filename');
   assert.match(fs.readFileSync(path.join(test.cwd, files[0]), 'utf8'), /voice bridge works/i);
