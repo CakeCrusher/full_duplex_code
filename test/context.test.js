@@ -1,12 +1,51 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chunks, LineReader, VoiceHistory, redact, startupHistory } from '../src/context.js';
+import { chunks, ContextQueue, LineReader, VoiceHistory, redact, startupHistory } from '../src/context.js';
 
 test('context chunks preserve Unicode and stay below the append byte bound', () => {
   const text = 'Hello 世界 👋\n'.repeat(300);
   const parts = chunks(text);
   assert.equal(parts.join(''), text);
   assert.ok(parts.every(p => Buffer.byteLength(p) <= 440));
+});
+
+test('context delivery refills individual slots without waiting for a batch and stays bounded', async () => {
+  const pending = []; const sent = []; const faults = [];
+  const live = { state: 'active', append: (_kind, content) => {
+    sent.push(content);
+    return new Promise(resolve => pending.push(resolve));
+  } };
+  const queue = new ContextQueue(live, e => faults.push(e));
+  const source = 'x'.repeat(440 * 34);
+  queue.add('thinking', source);
+  assert.equal(sent.length, 32);
+  assert.equal(queue.queue.length, 2);
+  // A late acknowledgment from an older append must not hold up a free slot.
+  pending[7]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sent.length, 33);
+  assert.equal(queue.inFlight, 32);
+  pending[3]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sent.join(''), source);
+  for (const resolve of pending) resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(queue.running, false);
+  assert.equal(queue.inFlight, 0);
+  assert.deepEqual(faults, []);
+});
+
+test('stopping context delivery prevents late acknowledgments from sending queued content', async () => {
+  const pending = []; let sent = 0;
+  const live = { state: 'active', append: () => { sent++; return new Promise(resolve => pending.push(resolve)); } };
+  const queue = new ContextQueue(live, error => { throw error; });
+  queue.add('thinking', 'x'.repeat(440 * 40));
+  queue.stop();
+  for (const resolve of pending) resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sent, 32);
+  assert.equal(queue.queue.length, 0);
+  assert.equal(queue.running, false);
 });
 test('JSONL input survives split UTF-8 bytes and partial lines', () => {
   const found = []; const reader = new LineReader(line => found.push(line));

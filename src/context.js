@@ -35,7 +35,7 @@ export function startupHistory(observations, maxBytes = 7000) {
 }
 
 export class ContextQueue {
-  constructor(live, onError) { Object.assign(this, { live, onError }); this.queue = []; this.running = false; this.stopped = false; }
+  constructor(live, onError) { Object.assign(this, { live, onError }); this.queue = []; this.inFlight = 0; this.running = false; this.stopped = false; }
   add(kind, text, delegationId = null) {
     if (this.stopped || !text) return;
     // Retain complete observations. Chunking is an API transport requirement,
@@ -43,21 +43,19 @@ export class ContextQueue {
     for (const content of chunks(text)) this.queue.push({ kind, content, delegationId });
     this.pump();
   }
-  async pump() {
-    if (this.running) return;
-    this.running = true;
-    try {
-      while (!this.stopped && this.queue.length && this.live.state === 'active') {
-        // Writes remain ordered on the WebSocket. A small in-flight window
-        // avoids paying an acknowledgement round trip for every small chunk.
-        const results = await Promise.allSettled(this.queue.splice(0, 16).map(async ({ kind, content, delegationId }) => this.live.append(kind, content, delegationId)));
-        const failed = results.find(result => result.status === 'rejected');
-        if (failed && !this.stopped && this.live.state === 'active') {
+  pump() {
+    // Refill each slot as its acknowledgment arrives. There are no batch
+    // barriers, but bound pending writes: the API rejects an unlimited flood.
+    while (!this.stopped && this.queue.length && this.live.state === 'active' && this.inFlight < 32) {
+      const { kind, content, delegationId } = this.queue.shift();
+      this.inFlight++; this.running = true;
+      this.live.append(kind, content, delegationId).catch(error => {
+        if (!this.stopped && this.live.state === 'active') {
           this.stopped = true;
-          this.onError(new Error(`Claude context delivery failed; restart voice to replay its saved observations. ${failed.reason.message}`));
+          this.onError(new Error(`Claude context delivery failed; restart voice to replay its saved observations. ${error.message}`));
         }
-      }
-    } finally { this.running = false; }
+      }).finally(() => { this.inFlight--; this.running = this.inFlight > 0; this.pump(); });
+    }
   }
   stop() { this.stopped = true; this.queue.length = 0; }
 }
