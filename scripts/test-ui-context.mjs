@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { channelNotification } from '../src/channel-message.js';
 import { Harness } from '../src/server.js';
+import { AudioAudit } from '../src/audio-audit.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-ui-timeline-'));
@@ -44,7 +45,11 @@ for (const [at, index, text, final] of [
   [14000, 1, 'Updated the settings component.', false],
   [20800, 2, 'The theme preference now persists across visits.', false],
   [28500, 3, 'All three tests passed. The dark-mode toggle is ready.', true],
-]) publish({ type: 'agent_text', source: 'display_hook', messageId: 'fixture-message', at: base + at, index, text, final });
+]) publish({ type: 'agent_observation', name: 'MessageDisplay', at: base + at, text });
+publish({ type: 'agent_observation', name: 'PostToolUse', text: JSON.stringify({tool_name:'Bash',tool_response:'all tests pass'}), at:base+32000 });
+const contextWire={type:'session.thinking.append',event_id:'thinking-one',content:'Exact thinking data'};
+publish({type:'context_sent',at:base+32100,id:'thinking-one',kind:'thinking',text:contextWire.content,notification:contextWire});
+publish({type:'context_ack',at:base+33000,id:'thinking-one',startMs:32100,endMs:32500});
 publish({ type: 'agent_input', at: base + 35000, text: 'Also let the toggle follow the system theme.' });
 let browser;
 try {
@@ -64,7 +69,7 @@ try {
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(harness.browserUrl);
   await page.locator('.timeline-item[data-track="operator"]').first().waitFor();
-  for (const track of ['operator', 'speech', 'transcript', 'claude', 'requests']) assert.ok(await page.locator(`.timeline-item[data-track="${track}"]`).count() > 0, track);
+  for (const track of ['operator', 'speech', 'transcript', 'claude', 'context', 'requests']) assert.ok(await page.locator(`.timeline-item[data-track="${track}"]`).count() > 0, track);
   assert.equal(await page.locator('.timeline-item[data-track="requests"]').count(), 2, 'voice prompt does not duplicate delivery');
   await page.locator('.timeline-item[data-track="requests"][data-state="observed"]').first().click();
   assert.equal(await page.locator('#detail-text').textContent(), requestContent);
@@ -77,18 +82,21 @@ try {
   assert.equal(await page.locator('#detail-copy').textContent(), 'Copied');
   await page.locator('#detail-payload summary').click();
   if (artifacts) await page.screenshot({ path: path.join(artifacts, 'request-inspector.png'), fullPage: true });
-  const batch = page.getByRole('button', { name: /Claude displayed batches\. Batch 4:/ });
+  await page.locator('.timeline-item[data-track="context"]').click();
+  assert.deepEqual(JSON.parse(await page.locator('#detail-json').textContent()), contextWire);
+  await page.locator('#detail-clear').click();
+  const batch = page.locator('.timeline-item[data-track="claude"]').nth(3);
   await batch.hover();
   await page.locator('#timeline-tooltip').waitFor();
   assert.match(await page.locator('#tooltip-text').textContent(), /All three tests passed/);
   await batch.click();
   assert.equal(await page.locator('#timeline-live').getAttribute('aria-pressed'), 'false');
   assert.match(await page.locator('#detail-text').textContent(), /All three tests passed/);
-  assert.match(await page.locator('#detail-source').textContent(), /MessageDisplay/);
+  assert.match(await page.locator('#detail-source').textContent(), /Complete Claude observation/);
   if (artifacts) await page.screenshot({ path: path.join(artifacts, 'timeline-desktop.png'), fullPage: true });
-  publish({ type: 'agent_text', source: 'display_hook', messageId: 'new', index: 0, final: true, text: 'A new batch arrived while reviewing.' });
+  publish({ type: 'agent_observation', name: 'FileChanged', text: 'A new hook arrived while reviewing.' });
   await page.locator('#timeline-live').click();
-  await page.getByRole('button', { name: /A new batch arrived while reviewing/ }).waitFor();
+  await page.getByRole('button', { name: /Claude hooks\. FileChanged/ }).waitFor();
   await page.locator('#timeline-zoom').selectOption('15000');
   await page.locator('#timeline-back').click();
   assert.equal(await page.locator('#timeline-live').getAttribute('aria-pressed'), 'false');
@@ -101,6 +109,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 1150 });
   let inputBytes = 0;
   harness.startLive = async () => {
+    harness.audit = new AudioAudit({ dir: path.join(dir,'audio'), log:harness.log, onError:error=>errors.push(error.message) });
     harness.live = { id: 'offline-audio', state: 'active', usageSeconds: 0, audio: buffer => { inputBytes += buffer.length; }, close: async () => {
       harness.live.state = 'closed'; publish({ type: 'voice_closed', finalized: true }); publish(harness.status());
     } };
@@ -111,6 +120,7 @@ try {
   await waitFor(() => inputBytes > 0, 'real worklet sent microphone PCM');
   const playback = new Int16Array(12000);
   for (let i = 0; i < playback.length; i++) playback[i] = Math.sin(i / 24000 * Math.PI * 2 * 440) * 8000;
+  harness.audit.write('output',Buffer.from(playback.buffer));
   harness.browser.send(Buffer.from(playback.buffer));
   await waitFor(() => harness.timeline.snapshot().items.some(i => i.track === 'speech' && i.start > now), 'real rendered playback reached the chart');
   const measured = harness.timeline.snapshot().items.filter(i => i.start > now);
@@ -118,9 +128,15 @@ try {
   assert.ok(measured.some(i => i.track === 'speech'), 'actual rendered playback reached chart');
   await page.getByRole('button', { name: 'Mute microphone', exact: true }).click();
   await waitFor(() => harness.timeline.audio.get('operator')?.active === false, 'muted microphone activity ended');
+  await new Promise(resolve=>setTimeout(resolve,700));
   await page.getByRole('button', { name: 'End voice', exact: true }).click();
+  await new Promise(resolve=>setTimeout(resolve,100));
+  const recorded = fs.readFileSync(path.join(dir,'audio','playback.wav')).subarray(44);
+  const nonzero = bytes => [...new Int16Array(bytes.buffer,bytes.byteOffset,bytes.length/2)].filter(x=>x!==0);
+  assert.deepEqual(nonzero(recorded),nonzero(Buffer.from(playback.buffer)), 'rendered recording retains every audible sample in order');
+  assert.ok(fs.existsSync(path.join(dir,'timeline.json')), 'Gantt saved to disk');
   await page.reload();
-  await page.getByRole('button', { name: /A new batch arrived while reviewing/ }).waitFor();
+  await page.getByRole('button', { name: /Claude hooks\. FileChanged/ }).waitFor();
   assert.ok(await page.locator('.timeline-item[data-track="speech"]').count() >= 1, 'audio history survives reload');
   assert.deepEqual(errors, []);
   console.log('Timeline tracks, hover/pin, zoom/history, live updates, reload, virtual microphone, playback and mute passed. No API spending.');

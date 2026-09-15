@@ -23,6 +23,7 @@ function handle(event) {
   if (event.type === 'history') for (const item of event.events) handle(item);
   if (event.type === 'fault') { notice(event.message); if (starting && !active) { starting = false; releaseAudio(); } }
   if (event.type === 'voice_started') {
+    node?.port.postMessage({ type: 'audit_start', sessionId: event.sessionId });
     active = true; starting = false; notice('');
     $('mute').disabled = false; $('stop').disabled = false; $('audioState').textContent = 'Microphone on';
   }
@@ -63,13 +64,18 @@ async function start() {
     node = new AudioWorkletNode(context, 'duplex-audio', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
     const audioEpoch = Date.now() - context.currentTime * 1000;
     node.port.onmessage = ({ data }) => {
+      if (data.type === 'playback' && ws?.readyState === WebSocket.OPEN) {
+        if (ws.bufferedAmount > 128000) { notice('The audio audit connection fell behind. Please reconnect.'); stop(); return; }
+        ws.send(JSON.stringify({ type: 'playback_audio', voiceSessionId: data.sessionId, offsetSamples: data.offsetSamples,
+          at: audioEpoch + data.startTime * 1000, pcm: btoa(String.fromCharCode(...new Uint8Array(data.pcm))) }));
+      }
       if (data.type === 'input' && ws?.readyState === WebSocket.OPEN && (active || starting)) {
         if (ws.bufferedAmount > 128000) { notice('The audio connection is too slow. Please reconnect.'); stop(); return; }
         ws.send(data.pcm);
       }
       if (data.type === 'level') {
         $('level').value = Math.min(1, data.rms * 5);
-        if (ws?.readyState === WebSocket.OPEN && (active || starting)) ws.send(JSON.stringify({ type: 'audio_level', at: audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, outputRms: data.outputRms }));
+        if (ws?.readyState === WebSocket.OPEN && (active || starting)) ws.send(JSON.stringify({ type: 'audio_level', at: audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, outputRms: data.outputRms, backlogMs: data.backlogMs }));
         if (data.backlogMs > 2000) { notice('Audio playback fell behind. Please reconnect.'); stop(); }
       }
     };

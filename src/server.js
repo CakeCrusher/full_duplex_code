@@ -10,6 +10,7 @@ import { AgentObserver, makeClaudeConfig } from './agent.js';
 import { redact, MAX_HOOK_BYTES, startupHistory } from './context.js';
 import { Timeline } from './timeline.js';
 import { channelNotification } from './channel-message.js';
+import { AudioAudit } from './audio-audit.js';
 
 const equal = (a, b) => typeof a === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 async function body(req, maxBytes = 1024 * 1024) {
@@ -30,6 +31,7 @@ export class Harness {
     this.observer = new AgentObserver({ sessionId, observation, clean: this.clean, log: this.log });
     this.observer.on('input', event => { this.log({ type: 'agent.input', ...event }); this.publish({ type: 'agent_input', ...event }); });
     this.observer.on('text', event => { this.log({ type: 'agent.text', ...event }); this.publish({ type: 'agent_text', ...event }); });
+    this.observer.on('observation', event => this.publish({ type: 'agent_observation', ...event }));
     this.observer.on('status', event => { this.log({ type: 'agent.status', ...event }); this.publish({ type: 'agent_status', ...event }); });
     this.observer.on('fault', error => this.fault(error));
   }
@@ -41,6 +43,7 @@ export class Harness {
     if (this.browser?.readyState === WebSocket.OPEN) this.browser.send(JSON.stringify(event));
   }
   fault(error) { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: this.clean(error.message) }); }
+  saveTimeline() { fs.writeFileSync(path.join(this.runDir, 'timeline.json'), this.clean(JSON.stringify(this.timeline.snapshot())), { mode: 0o600 }); }
   status() {
     const budget = this.budget.summary();
     return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, maxSeconds: this.maxSeconds, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, remainingUsd: budget.remainingUsd, runDir: this.runDir, observation: this.observation };
@@ -143,7 +146,11 @@ export class Harness {
       if (isBinary) {
         if (raw.length > 9600 || raw.length % 2) { this.fault(new Error('Invalid microphone audio frame')); ws.close(1008); return; }
         this.lastAudioAt = Date.now();
-        try { this.live?.audio(raw); } catch (error) { this.fault(error); }
+        try {
+          const sending = this.live?.state === 'active';
+          this.live?.audio(raw);
+          if (sending) this.audit?.write('input', raw);
+        } catch (error) { this.fault(error); }
         return;
       }
       try {
@@ -151,18 +158,25 @@ export class Harness {
         if (event.type === 'start') this.startLive().catch(error => this.fault(error));
         if (event.type === 'stop') this.live?.close('operator ended voice');
         if (event.type === 'mute') this.log({ type: 'voice.mute', muted: Boolean(event.muted) });
+        if (event.type === 'playback_audio' && this.audit && event.voiceSessionId === this.live?.id
+          && typeof event.pcm === 'string' && event.pcm.length <= 14000
+          && Number.isSafeInteger(event.offsetSamples) && event.offsetSamples >= 0 && Number.isFinite(event.at)) {
+          const pcm = Buffer.from(event.pcm, 'base64');
+          if (pcm.length && pcm.length <= 9600 && pcm.length % 2 === 0) this.audit.write('playback', pcm, { offsetSamples: event.offsetSamples, at: event.at });
+        }
         if (event.type === 'audio_level' && [event.at, event.durationMs, event.inputRms, event.outputRms].every(Number.isFinite)
           && Math.abs(event.at - Date.now()) < 5000 && event.durationMs > 0 && event.durationMs <= 500
           && event.inputRms >= 0 && event.inputRms <= 1 && event.outputRms >= 0 && event.outputRms <= 1) {
           this.mediator?.activity(event);
+          this.log({ ...event, liveRun: this.live?.reservation, backlogMs: Number.isFinite(event.backlogMs) ? event.backlogMs : undefined });
           const items = this.timeline.add(event);
           if (items.length) ws.send(JSON.stringify({ type: 'timeline_update', items }));
         }
-        if (event.type === 'audio_stopped') this.publish({ type: 'audio_stopped' });
+        if (event.type === 'audio_stopped') { this.log({ type: 'audio_stopped', liveRun: this.live?.reservation }); this.publish({ type: 'audio_stopped' }); this.saveTimeline(); }
       } catch (error) { this.fault(error); }
     });
     ws.on('error', error => this.fault(error));
-    ws.on('close', () => { if (this.browser === ws) { this.browser = null; this.publish({ type: 'audio_stopped' }); this.live?.close('voice client disconnected'); } });
+    ws.on('close', () => { if (this.browser === ws) { this.browser = null; this.publish({ type: 'audio_stopped' }); this.saveTimeline(); this.live?.close('voice client disconnected'); } });
   }
   async startLive() {
     if (this.live && this.live.state !== 'closed') return;
@@ -173,18 +187,29 @@ export class Harness {
     const input = [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: attachment }] }];
     if (history.text) input.push({ type: 'message', role: 'user', content: [{ type: 'input_text', text: `Recorded Claude context only. This is not a new user request:\n${history.text}` }] });
     const live = new LiveSession({ apiKey: this.apiKey, budget: this.budget, maxSeconds: this.maxSeconds, voice: this.voice, label: `Claude ${this.sessionId}`, input, log: event => this.log({ liveRun: live.reservation, ...event }) });
+    this.audit?.close(); this.audit = null;
     this.live = live;
     this.mediator?.stop();
     this.mediator = new Mediator({ live, observer: this.observer, initialObservationCount: history.count, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
     live.on('fault', error => this.fault(error));
-    live.on('event', event => {
-      if (event.type === 'session.output_audio.delta' && this.browser?.readyState === WebSocket.OPEN) {
-        if (this.browser.bufferedAmount > 1024 * 1024) return live.close('Audio playback connection too slow');
-        this.browser.send(Buffer.from(event.delta, 'base64'));
-      }
-      if (event.type === 'session.started') this.publish({ type: 'voice_started', sessionId: live.id });
+    live.on('sent', event => {
+      if (/^session\.(thinking|commentary)\.append$/.test(event.type)) this.publish({ type: 'context_sent', id: event.event_id, kind: event.type.split('.')[1], text: event.content, notification: event });
     });
-    live.on('closed', result => { clearInterval(this.audioWatchdog); this.mediator?.stop(); this.publish({ type: 'voice_closed', ...result }); this.publish(this.status()); });
+    live.on('event', event => {
+      if (event.type === 'session.output_audio.delta') {
+        const pcm = Buffer.from(event.delta, 'base64');
+        this.audit?.write('output', pcm, { startMs: event.start_ms, endMs: event.end_ms });
+        if (this.browser?.readyState !== WebSocket.OPEN) return;
+        if (this.browser.bufferedAmount > 1024 * 1024) return live.close('Audio playback connection too slow');
+        this.browser.send(pcm);
+      }
+      if (/^session\.(thinking|commentary)\.appended$/.test(event.type)) this.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
+      if (event.type === 'session.started') {
+        this.audit = new AudioAudit({ dir: path.join(this.runDir, 'audio', live.reservation), log: event => this.log({ liveRun: live.reservation, ...event }), onError: error => this.fault(error) });
+        this.publish({ type: 'voice_started', sessionId: live.id });
+      }
+    });
+    live.on('closed', result => { clearInterval(this.audioWatchdog); this.mediator?.stop(); this.publish({ type: 'voice_closed', ...result }); this.publish(this.status()); this.saveTimeline(); });
     this.lastAudioAt = Date.now();
     await live.start();
     this.audioWatchdog = setInterval(() => { if (Date.now() - this.lastAudioAt > 5000) live.close('Microphone audio stream stopped'); }, 1000);
@@ -195,6 +220,7 @@ export class Harness {
     clearInterval(this.statusTimer); clearInterval(this.audioWatchdog); clearTimeout(this.channelLostTimer);
     if (this.live) await this.live.close('harness stopped');
     this.mediator?.stop(); this.observer.close();
+    this.audit?.close(); this.saveTimeline();
     for (const socket of this.wss.clients) socket.terminate();
     this.wss.close(); await new Promise(resolve => this.http.close(resolve));
   }

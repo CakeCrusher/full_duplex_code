@@ -1,4 +1,4 @@
-const tracks = { operator: 'Operator audio', speech: 'Live speech', transcript: 'Transcript', claude: 'Claude displayed batches', requests: 'Requests to Claude' };
+const tracks = { operator: 'Operator audio', speech: 'Live speech', transcript: 'API transcript', claude: 'Claude hooks', context: 'Context sent to Live', requests: 'Requests to Claude' };
 const $ = id => document.getElementById(id);
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 export function elapsed(ms, precise = false) {
@@ -53,31 +53,33 @@ export class TimelineView {
     $('detail-kind').textContent = item ? tracks[item.track] : 'Inspect the timeline';
     $('detail-title').textContent = item ? this.itemLabel(item) : 'Hover for a closer look.';
     $('detail-time').textContent = item ? this.timing(item) : 'Click an item to pin it. Keyboard focus and tap work too.';
-    $('detail-text').textContent = item ? this.detailText(item) : 'Audio, words, displayed batches, and requests share the same clock. Their overlap shows the conversation happening while Claude works.';
+    $('detail-text').textContent = item ? this.detailText(item) : 'Audio, transcripts, every Claude hook, context delivery, and requests share the same clock.';
     const request = item?.track === 'requests';
     $('detail-copy').hidden = !request; $('detail-copy').textContent = 'Copy message';
     $('detail-message-label').hidden = !request;
     $('detail-message-label').textContent = item?.notification ? (['sent', 'observed'].includes(item.state) ? 'Full channel message content · sent as shown' : 'Full channel message content · delivery not confirmed') : 'Prompt captured from Claude';
     $('detail-payload').hidden = !item?.notification;
     $('detail-json').textContent = item?.notification ? JSON.stringify(item.notification, null, 2) : '';
-    $('detail-json-label').textContent = ['queued', 'dispatching', 'uncertain'].includes(item?.state) ? 'Channel notification JSON · delivery not confirmed' : 'Channel notification JSON';
+    $('detail-json-label').textContent = item?.track === 'context' ? 'Exact JSON sent to Live' : ['queued', 'dispatching', 'uncertain'].includes(item?.state) ? 'Channel notification JSON · delivery not confirmed' : 'Channel notification JSON';
     $('detail-observed').hidden = !item?.observedPrompt;
     $('detail-observed-text').textContent = item?.observedPrompt ?? '';
-    $('detail-verification').hidden = !item?.notification;
+    $('detail-verification').hidden = !request || !item?.notification;
     $('detail-verification').textContent = item?.contentMatches === true ? 'Verified: Claude’s UserPromptSubmit contains exactly this message.'
       : item?.contentMatches === false ? 'Content differs: compare the sent message with Claude’s captured prompt below.'
       : item?.observedPrompt ? 'Claude’s prompt was captured; its envelope could not be compared automatically.'
       : 'Waiting for Claude’s UserPromptSubmit to verify receipt. Channel delivery alone does not prove Claude has processed it.';
     const extras = [];
     if (item?.index !== undefined) extras.push(`Batch ${item.index + 1}${item.final ? ' · final' : ''}`);
-    if (item?.state) extras.push(({ queued: 'Queued', dispatching: 'Sending', sent: 'Delivered to channel', observed: 'Received by Claude', uncertain: 'Delivery uncertain' })[item.state] ?? item.state);
+    if (item?.state && item.track === 'context') extras.push(item.state === 'sent' ? 'Sent to Live; waiting for acknowledgment' : 'Acknowledged by Live');
+    else if (item?.state) extras.push(({ queued: 'Queued', dispatching: 'Sending', sent: 'Delivered to channel', observed: 'Received by Claude', uncertain: 'Delivery uncertain' })[item.state] ?? item.state);
     if (item?.receivedAt) extras.push(`Transcript received at ${elapsed(item.receivedAt - this.origin, true)}`);
     if (item?.peak) extras.push(`Peak level ${Math.round(item.peak * 100)}%`);
+    if (item?.injectionStartMs !== undefined) extras.push(`API injection estimate: ${(item.injectionStartMs / 1000).toFixed(2)}–${(item.injectionEndMs / 1000).toFixed(2)}s into voice`);
     $('detail-source').textContent = item ? [item.source, ...extras].join(' · ') : '';
   }
   itemLabel(item) {
     if (item.track === 'transcript') return `${item.label}: ${item.text.trim()}`;
-    if (item.track === 'claude') return `Batch${item.index === undefined ? '' : ` ${item.index + 1}`}: ${item.text.trim()}`;
+    if (item.track === 'claude') return item.label;
     return item.label;
   }
   showTooltip(item, target) {
@@ -144,6 +146,7 @@ export class TimelineView {
       button.classList.toggle('operator-text', item.role === 'operator');
       button.classList.toggle('live-text', item.role === 'intermediary');
       button.classList.toggle('uncertain', item.state === 'uncertain');
+      button.classList.toggle('commentary', item.kind === 'commentary');
       button.dataset.role = item.role ?? ''; button.dataset.state = item.state ?? '';
       button.firstChild.textContent = this.itemLabel(item);
       button.setAttribute('aria-label', `${tracks[item.track]}. ${this.itemLabel(item)}. ${this.timing(item)}`);

@@ -3,7 +3,7 @@
 export class Timeline {
   constructor(origin = Date.now()) {
     this.origin = origin; this.sequence = 0; this.items = new Map();
-    this.audio = new Map(); this.transcripts = new Map(); this.requests = new Map();
+    this.audio = new Map(); this.transcripts = new Map(); this.requests = new Map(); this.context = new Map();
   }
   item(fields) {
     const item = { id: `event-${++this.sequence}`, ...fields };
@@ -21,7 +21,7 @@ export class Timeline {
           if (!item || start - item.end > 220 || !item.active) {
             item = this.item({ track, start, end: at, active: true, peak: rms,
               label: track === 'operator' ? 'Microphone' : 'Live speech',
-              source: track === 'operator' ? 'Microphone activity estimated from audio level' : 'Audio rendered by the browser',
+              source: track === 'operator' ? 'Microphone activity estimated from audio level' : 'Audio rendered by the browser; bars split after 220 ms below the level threshold, not at sentence boundaries',
             });
             this.audio.set(track, item);
           }
@@ -43,7 +43,7 @@ export class Timeline {
       let item = this.transcripts.get(key);
       if (!item || start - item.end > 1200 || start < item.start) {
         item = this.item({ track: 'transcript', role: event.role, start, end, text: '', fragments: 0,
-          label: event.role === 'operator' ? 'You' : 'Live', source: 'Transcript aligned to the voice session audio clock',
+          label: event.role === 'operator' ? 'Input transcript' : 'Live', source: 'API transcript, not verified microphone speech; approximate session timestamps',
           voiceSessionId: event.voiceSessionId,
         });
         this.transcripts.set(key, item);
@@ -51,11 +51,19 @@ export class Timeline {
       item.text += event.text; item.end = Math.max(item.end, end); item.fragments++;
       item.receivedAt = at; changed.push(item);
     }
-    if (event.type === 'agent_text') {
-      changed.push(this.item({ track: 'claude', start: at, end: at, label: 'Claude', text: event.text,
-        source: event.source === 'display_hook' ? 'MessageDisplay hook received' : 'Saved or final assistant text received',
-        messageId: event.messageId, index: event.index, final: event.final,
+    if (event.type === 'agent_observation') {
+      changed.push(this.item({ track: 'claude', start: at, end: at, label: event.name ?? 'Transcript observation', text: event.text,
+        source: 'Complete Claude observation received by bridge · thinking context',
       }));
+    }
+    if (event.type === 'context_sent') {
+      const item = this.item({ track: 'context', start: at, end: at, label: event.kind === 'thinking' ? 'Thinking' : 'Commentary', kind: event.kind,
+        text: event.text, notification: event.notification, state: 'sent', source: 'Exact context append sent to Live; bar ends at acknowledgment, not consumption' });
+      this.context.set(event.id, item); changed.push(item);
+    }
+    if (event.type === 'context_ack') {
+      const item = this.context.get(event.id);
+      if (item) { item.end = at; item.state = 'acknowledged'; item.injectionStartMs = event.startMs; item.injectionEndMs = event.endMs; changed.push(item); }
     }
     if (event.type === 'task') {
       let item = this.requests.get(event.id);

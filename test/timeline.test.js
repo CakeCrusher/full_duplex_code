@@ -41,13 +41,27 @@ test('a voice delivery and matching prompt hook update one request without inven
   assert.equal(timeline.items.size, 2);
 });
 
-test('Claude batches are instant receipt markers, and history survives more than 600 raw fragments', () => {
+test('every Claude observation is visible once; derived assistant text does not duplicate hooks', () => {
   const timeline = new Timeline(0);
-  for (let i = 0; i < 650; i++) timeline.add({ type: 'agent_text', at: i, source: 'display_hook', messageId: 'm', index: i, text: `Batch ${i}` });
+  for (let i = 0; i < 650; i++) timeline.add({ type: 'agent_observation', at: i, name: i % 2 ? 'MessageDisplay' : 'PostToolUse', text: `Hook ${i}` });
+  timeline.add({ type: 'agent_text', at: 651, text: 'Already represented by its observation' });
   const items = timeline.snapshot().items;
   assert.equal(items.length, 650);
-  assert.equal(items[0].text, 'Batch 0');
-  assert.ok(items.every(item => item.start === item.end && item.source === 'MessageDisplay hook received'));
+  assert.equal(items[0].text, 'Hook 0');
+  assert.ok(items.every(item => item.start === item.end && item.track === 'claude'));
+  assert.equal(items[0].label, 'PostToolUse'); assert.equal(items[1].label, 'MessageDisplay');
+});
+
+test('context delivery shows the exact append and independently acknowledges out-of-order writes', () => {
+  const timeline = new Timeline(0);
+  const notification = { type: 'session.thinking.append', event_id: 'one', content: 'Full raw observation' };
+  timeline.add({ type: 'context_sent', at: 100, id: 'one', kind: 'thinking', text: notification.content, notification });
+  timeline.add({ type: 'context_sent', at: 105, id: 'two', kind: 'commentary', text: 'Welcome' });
+  timeline.add({ type: 'context_ack', at: 140, id: 'two', startMs: 0, endMs: 100 });
+  timeline.add({ type: 'context_ack', at: 180, id: 'one', startMs: 100, endMs: 300 });
+  const [one,two] = timeline.snapshot().items;
+  assert.deepEqual(one.notification, notification); assert.equal(one.end,180); assert.equal(two.end,140);
+  assert.equal(one.state,'acknowledged'); assert.equal(one.injectionEndMs,300); assert.equal(two.kind,'commentary');
 });
 
 

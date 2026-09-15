@@ -71,14 +71,15 @@ You do not need to wait for Claude to finish before speaking. Interrupting the c
 
 ## Read the live timeline
 
-The browser shows five tracks on one clock:
+The browser shows six tracks on one clock:
 
 | Track | What it shows |
 | --- | --- |
 | Operator audio | Microphone activity estimated from the incoming audio level. Silence and mute leave gaps. |
 | Live speech | Audio actually rendered by the browser, including overlap with your microphone. |
-| Transcript | Your words and the companion's words on separate rows, aligned to the voice session's audio timestamps. |
-| Claude batches | A thin marker whenever a displayed text batch arrives from Claude. |
+| API transcript | Input ASR and Live’s output transcript on separate rows. Input text can be inaccurate even during silence; it is not proof you spoke. |
+| Claude hooks | Every raw observation, including tool calls/results, file changes, displayed text, and lifecycle hooks, at bridge receipt time. All go to thinking. |
+| Context to Live | Every actual thinking append and commentary append, from send to acknowledgment. Click for the exact JSON. Acknowledgment does not mean the model has finished using the content. |
 | Requests to Claude | Spoken request delivery and prompts submitted directly in the terminal. |
 
 Hover over an item to see its text and timing. Click or tap to pin the full details below the chart; keyboard focus works too. Use **Window** to zoom, the arrow buttons or history slider to look back, and **Follow live** to return to the current moment. Inspecting or reviewing the chart does not pause the microphone, the companion, or Claude.
@@ -201,7 +202,8 @@ The ledger lives in `.runs/budget.json`. Do not delete it to clear an error or b
 | The browser didn't open | Open the companion URL printed by the launcher in Chrome. |
 | The companion can't hear you | Allow microphone access in Chrome and macOS. Check the selected microphone and whether it is muted. |
 | OpenAI rejects the connection | Check the key, API account billing, and access to `gpt-live-1`. A successful doctor check alone does not verify these. |
-| Claude is waiting | Look for a tool approval or clarification in the terminal. |
+| Claude hooks | Every raw observation, including tool calls/results, file changes, displayed text, and lifecycle hooks, at bridge receipt time. All go to thinking. |
+| Context to Live | Every actual thinking append and commentary append, from send to acknowledgment. Click for the exact JSON. Acknowledgment does not mean the model has finished using the content. |
 | The companion misses terminal text | Confirm Claude was started through this launcher. If hooks are unavailable, restart the same session with `--resume SESSION_ID --observe transcript`. |
 | A second companion tab cannot connect | Close the first tab, then open the link again. Only one audio client can connect to each launcher. |
 | Voice disconnected | Keep Claude open, reopen the companion link, and click Start voice. Resolve any terminal/channel issue first. |
@@ -211,7 +213,7 @@ Voice closes automatically if microphone streaming stops or the Claude channel r
 
 ## Local records and sharing
 
-`.runs/` contains connection details, event logs, conversation text, and the budget ledger. `.env`, `.runs/`, `.cache/`, `.scratch/`, and `docs/` are ignored by Git. Normal use does not save raw microphone recordings, but the integration tests save audio evidence locally.
+`.runs/` contains connection details, event logs, conversation text, and the budget ledger. `.env`, `.runs/`, `.cache/`, `.scratch/`, and `docs/` are ignored by Git. Each voice connection saves private 24 kHz mono WAV files under `.runs/<run>/audio/<voice-id>/`: `input.wav` (microphone samples sent to Live), `output.wav` (Live audio received, in order), and `playback.wav` (browser-rendered audio, including silent playback gaps). These are local recordings, not OpenAI stored sessions. They use about 8.6 MB per minute combined. `events.jsonl` includes sample offsets, audio levels, playback backlog, hook events, exact context appends and acknowledgments. `timeline.json` preserves the Gantt when voice ends, the browser disconnects, or the launcher exits. Browser crashes may lose their last in-flight playback packets; audit gaps and failures are logged. Old runs without these files cannot recover audio retrospectively. Delete a run’s directory to delete its recordings.
 
 Treat logs and companion links as private. When reporting a problem, share the error and reproduction steps after removing keys, connection tokens, and private project content.
 

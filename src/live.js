@@ -77,6 +77,7 @@ export class LiveSession extends EventEmitter {
     if (this.ws.bufferedAmount > 1024 * 1024) { this.abort('Network backpressure'); throw new Error('Live connection too slow'); }
     if (event.type !== 'session.input_audio.append') this.log({ direction: 'sent', ...event });
     this.ws.send(JSON.stringify(event));
+    this.emit('sent', event);
   }
   audio(pcm) {
     if (this.state !== 'active') return;
