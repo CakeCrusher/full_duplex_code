@@ -27,14 +27,18 @@ export class AudioAudit {
         file = { fd: fs.openSync(path.join(this.dir, `${track}.wav`), 'wx', 0o600), samples: 0 };
         this.tracks.set(track, file); fs.writeSync(file.fd, header(0), 0, 44, 0);
       }
-      // The API can skip silent intervals between output deltas. Concatenating
-      // them squeezes the recording's clock and falsely looks like playback lag.
+      // Reflected API audio can omit frames. Missing samples are unknown, not
+      // confirmed silence. Zero-filled holes preserve their place in the audit;
+      // concatenating packets would compress time and disguise missing audio.
       const apiOffset = track === 'output' && Number.isFinite(metadata.startMs) ? Math.round(metadata.startMs * RATE / 1000) : undefined;
       const offset = metadata.offsetSamples ?? apiOffset ?? file.samples;
       // A missing browser packet is visible in the log and remains silence in
       // the recording; never silently squeeze time out of rendered playback.
       if (!Number.isSafeInteger(offset) || offset < file.samples || (apiOffset === undefined && offset > file.samples + RATE * 5)) throw new Error('Playback audit sample discontinuity');
-      if (offset !== file.samples) this.log({ type: 'audio.audit_gap', track, expected: file.samples, actual: offset });
+      if (offset !== file.samples) this.log({ type: 'audio.audit_gap', track, expected: file.samples, actual: offset,
+        reason: apiOffset !== undefined ? 'missing_api_output' : 'missing_audit_samples',
+        startMs: file.samples * 1000 / RATE, endMs: offset * 1000 / RATE,
+        durationMs: (offset - file.samples) * 1000 / RATE });
       fs.writeSync(file.fd, pcm, 0, pcm.length, 44 + offset * 2);
       file.samples = offset + pcm.length / 2;
       fs.writeSync(file.fd, header(file.samples * 2), 0, 44, 0);

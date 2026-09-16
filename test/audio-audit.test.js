@@ -26,9 +26,10 @@ test('audio audit failures report loss of evidence without throwing into the liv
   assert.equal(errors.length,1);assert.match(errors[0].message,/audit.*discontinuity/);assert.equal(audit.closed,true);
 });
 
-test('API output timestamps preserve silent intervals instead of compressing the recording clock', t => {
+test('API output timestamps preserve and identify missing frames without claiming they were silent', t => {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'fd-audio-time-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
-  const audit=new AudioAudit({dir,log:()=>{},onError:error=>{throw error;}});t.after(()=>audit.close());
+  const events=[];
+  const audit=new AudioAudit({dir,log:e=>events.push(e),onError:error=>{throw error;}});t.after(()=>audit.close());
   const pcm=Buffer.alloc(4800*2,17);
   audit.write('output',pcm,{startMs:200,endMs:400});
   audit.write('output',pcm,{startMs:600,endMs:800});
@@ -38,6 +39,9 @@ test('API output timestamps preserve silent intervals instead of compressing the
   assert.deepEqual(data.subarray(200*48,400*48),pcm);
   assert.deepEqual(data.subarray(400*48,600*48),Buffer.alloc(200*48));
   assert.deepEqual(data.subarray(600*48),pcm);
+  const gap=events.filter(e=>e.type==='audio.audit_gap').at(-1);
+  assert.equal(gap.reason,'missing_api_output');
+  assert.deepEqual([gap.startMs,gap.endMs,gap.durationMs],[400,600,200]);
   audit.write('output',pcm,{startMs:12200,endMs:12400});
   const afterPause=fs.readFileSync(path.join(dir,'output.wav')).subarray(44);
   assert.equal(afterPause.length,12400*48);
