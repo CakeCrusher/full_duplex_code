@@ -37,7 +37,7 @@ test('context chunks preserve Unicode and stay below the append byte bound', () 
   assert.ok(parts.every(p => Buffer.byteLength(p) <= 440));
 });
 
-test('context injection stays serial and preserves all fragments when more hooks arrive', async () => {
+test('context injection preserves order and all fragments with at most two pending acknowledgments', async () => {
   const pending = []; const sent = []; const faults = [];
   const live = { state: 'active', append: (_kind, content) => {
     sent.push(content);
@@ -47,13 +47,13 @@ test('context injection stays serial and preserves all fragments when more hooks
   const source = 'x'.repeat(440 * 34);
   queue.add('thinking', source);
   queue.add('thinking', 'new observation');
-  assert.equal(sent.length, 1, 'one pending injection cannot become an overlapping burst');
-  assert.equal(queue.queue.length, 34);
+  assert.equal(sent.length, 2, 'a bounded window overlaps the acknowledgment wait without flooding Live');
+  assert.equal(queue.queue.length, 33);
   for (let i = 0; i < 35; i++) {
-    assert.equal(queue.inFlight, 1);
+    assert.equal(queue.inFlight, Math.min(2, 35 - i));
     pending[i]();
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(sent.length, Math.min(i + 2, 35));
+    assert.equal(sent.length, Math.min(i + 3, 35));
   }
   assert.ok(sent.every(text => text.startsWith(BACKGROUND_REFERENCE)));
   assert.ok(sent.every(text => Buffer.byteLength(text) <= 500), 'source label fits the API bound too');
@@ -71,7 +71,7 @@ test('stopping context delivery prevents late acknowledgments from sending queue
   queue.stop();
   for (const resolve of pending) resolve();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(sent, 1);
+  assert.equal(sent, 2);
   assert.equal(queue.queue.length, 0);
   assert.equal(queue.running, false);
 });
@@ -80,16 +80,32 @@ test('queued fragments carry the current speaking mode without modifying their s
   const sent=[],pending=[];
   const live={state:'active',append:(_kind,text)=>{sent.push(text);return new Promise(resolve=>pending.push(resolve));}};
   const queue=new ContextQueue(live,error=>{throw error;});
-  queue.add('thinking','x'.repeat(440*3));
+  queue.add('thinking','x'.repeat(440*4));
   queue.setSpeakingLevel(0);
   pending.shift()();await new Promise(resolve=>setImmediate(resolve));
-  assert.match(sent[1],/^\[Quiet: no follow-ups to old answers\. Silent Claude log\.\]/);
+  assert.match(sent[2],/^\[Quiet: no follow-ups to old answers\. Silent Claude log\.\]/);
   queue.setSpeakingLevel(1);
   pending.shift()();await new Promise(resolve=>setImmediate(resolve));
-  assert.match(sent[2],/^\[Milestones:/);
+  assert.match(sent[3],/^\[Milestones:/);
+  pending.shift()();await new Promise(resolve=>setImmediate(resolve));
   pending.shift()();await new Promise(resolve=>setImmediate(resolve));
   assert.ok(sent.every(s=>Buffer.byteLength(s)<=500));
-  assert.equal(sent.map(s=>s.slice(s.indexOf('\n')+1)).join(''),'x'.repeat(440*3));
+  assert.equal(sent.map(s=>s.slice(s.indexOf('\n')+1)).join(''),'x'.repeat(440*4));
+});
+
+test('out-of-order acknowledgments retain send order and an error stops further context', async () => {
+  const sent = [], pending = [], faults = [];
+  const live = { state: 'active', append: (_kind, text) => new Promise((resolve, reject) => { sent.push(text); pending.push({ resolve, reject }); }) };
+  const queue = new ContextQueue(live, error => faults.push(error.message));
+  for (const text of ['one', 'two', 'three', 'four']) queue.add('thinking', text);
+  pending[1].resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(sent.map(s => s.slice(BACKGROUND_REFERENCE.length)), ['one', 'two', 'three']);
+  assert.equal(queue.inFlight, 2);
+  pending[0].reject(new Error('rejected first fragment')); await new Promise(resolve => setImmediate(resolve));
+  pending[2].resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sent.length, 3, 'no further context follows a rejected append');
+  assert.equal(faults.length, 1); assert.match(faults[0], /rejected first fragment/);
+  queue.stop();
 });
 test('JSONL input survives split UTF-8 bytes and partial lines', () => {
   const found = []; const reader = new LineReader(line => found.push(line));

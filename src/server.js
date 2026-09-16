@@ -175,6 +175,7 @@ export class Harness {
         const task = this.outbox.get(event.id ?? event.message_id);
         if (task && event.type === 'channel.sent') {
           task.state = 'sent'; this.publishRequest(task);
+          this.confirmDelivery(task);
         }
         this.publish(this.status());
       } catch (error) { this.fault(error); }
@@ -194,6 +195,17 @@ export class Harness {
     const entry = { ...task, content: this.clean(task.content), state: 'queued' }; this.outbox.set(task.id, entry);
     this.publishRequest(entry);
     if (this.channelReady) this.dispatch(entry);
+  }
+  confirmDelivery(task) {
+    const live = this.live;
+    if (task.confirmationSent || !task.voiceSessionId || live?.state !== 'active' || task.voiceSessionId !== live.id) return;
+    task.confirmationSent = true;
+    // Delivery is an operator-facing fact, independent of the hook backlog.
+    // The channel confirms its notification write; this does not claim that
+    // Claude has started or completed the work. Never replay it in a new voice session.
+    live.append('commentary', 'Your request has been sent to Claude Code.', task.delegationId ?? null).catch(error => {
+      if (this.live === live && live.state === 'active') this.fault(new Error(`The request was sent, but its voice confirmation failed: ${error.message}`));
+    });
   }
   publishRequest(task) {
     const event = { type: 'task', id: task.id, text: task.content, notification: channelNotification(task), state: task.state, queuedAt: task.queuedAt };

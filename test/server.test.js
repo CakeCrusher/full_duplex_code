@@ -73,7 +73,7 @@ test('hook context keeps flowing during continuous microphone and speaker activi
     const response = await fetch(h.baseUrl + '/hook', { method: 'POST', headers: { Authorization: `Bearer ${h.channelToken}` }, body: JSON.stringify(hook) });
     assert.equal(response.status, 200);
   }
-  assert.equal(sent.length, 1, 'the first hook reaches Live while audio is active; only its ACK can hold the next fragment');
+  assert.equal(sent.length, 2, 'hook fragments reach Live while audio is active; only the bounded ACK window can hold further fragments');
   assert.ok(h.mediator.context.queue.length > 1);
   let fragment = 0;
   while (pending.length) {
@@ -125,6 +125,35 @@ test('channel delivery ends at sent and does not depend on Claude calling a tool
   assert.equal(item.contentMatches, true);
   assert.equal(item.observedPrompt, prompt);
   assert.equal(item.text, content);
+});
+
+test('spoken delivery confirmation follows channel success once, independently of hook context', async t => {
+  const h = await fixture(t), appends = [];
+  h.live = { id: 'voice-one', state: 'active', append: async (kind, content, delegationId) => appends.push({ kind, content, delegationId }), close: async () => { h.live.state = 'closed'; } };
+  const ws = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/channel', { headers: { Authorization: `Bearer ${h.channelToken}` } });
+  t.after(() => ws.terminate()); await new Promise(resolve => ws.on('open', resolve));
+  async function event(data) {
+    ws.send(JSON.stringify(data));
+    await new Promise(resolve => { ws.once('pong', resolve); ws.ping(); });
+  }
+  h.deliver({ id: 'request-one', content: 'Build the game.', voiceSessionId: 'voice-one', delegationId: 'delegation-one' });
+  assert.equal(h.outbox.get('request-one').state, 'queued');
+  assert.equal(appends.length, 0, 'queuing is not confirmed delivery');
+  await event({ type: 'channel.ready' });
+  assert.equal(h.outbox.get('request-one').state, 'dispatching');
+  assert.equal(appends.length, 0, 'writing to the channel socket is not channel success');
+  await event({ type: 'channel.sent', id: 'request-one' });
+  assert.deepEqual(appends, [{ kind: 'commentary', content: 'Your request has been sent to Claude Code.', delegationId: 'delegation-one' }]);
+  await event({ type: 'channel.sent', id: 'request-one' });
+  assert.equal(appends.length, 1, 'a duplicate receipt cannot repeat the spoken confirmation');
+  h.deliver({ id: 'old-request', content: 'Earlier request.', voiceSessionId: 'old-voice', delegationId: 'old-delegation' });
+  await event({ type: 'channel.sent', id: 'old-request' });
+  assert.equal(appends.length, 1, 'a new voice connection must not receive an old delegation ID or confirmation');
+  h.live.append = async () => { throw new Error('test refusal'); };
+  h.deliver({ id: 'refused-speech', content: 'Still sent.', voiceSessionId: 'voice-one' });
+  await event({ type: 'channel.sent', id: 'refused-speech' });
+  assert.equal(h.outbox.get('refused-speech').state, 'sent', 'failure to announce is not failure to deliver');
+  assert.ok(h.uiEvents.some(e => e.type === 'fault' && /request was sent.*voice confirmation failed/i.test(e.message)));
 });
 
 test('the actual command hook relays a typed prompt into observer history and browser activity', async t => {

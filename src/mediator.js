@@ -51,9 +51,8 @@ export class Mediator {
     }
     const content = this.clean(`User request (transcribed speech):\n${request.text}${request.context ? `\n\nEarlier voice conversation for reference only:\n${request.context}` : ''}`);
     try {
-      this.deliver({ id: randomUUID(), content, delegationId, text: this.clean(request.text), queuedAt: Date.now() });
+      this.deliver({ id: randomUUID(), content, delegationId, voiceSessionId: this.live.id, text: this.clean(request.text), queuedAt: Date.now() });
       this.history.markDelivered(request);
-      this.context.add('thinking', 'The user request was queued for Claude Code. Follow the automatic Claude observations for its response and actual results. Do not resend it or treat delivery as completion.', delegationId);
     } catch (error) {
       this.fault(error);
       this.context.add('thinking', 'The voice bridge failed to queue the user’s request for Claude. The request was not delivered; the terminal connection needs attention.', delegationId);

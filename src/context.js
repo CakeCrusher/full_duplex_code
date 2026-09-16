@@ -79,10 +79,12 @@ export class ContextQueue {
     this.pump();
   }
   pump() {
-    // Keep every fragment in order and wait for its API acknowledgment.
+    // Write fragments in order with at most two awaiting acknowledgment.
+    // One at a time leaves an extra round trip between estimated injection
+    // intervals; this small window keeps delivery moving without flooding Live.
     // Audio activity never holds context: Live needs Claude's observations
     // while either party speaks, including when an open mic carries noise.
-    while (!this.stopped && this.queue.length && this.live.state === 'active' && this.inFlight < 1) {
+    while (!this.stopped && this.queue.length && this.live.state === 'active' && this.inFlight < 2) {
       const { kind, content, delegationId, source = '' } = this.queue.shift();
       this.inFlight++; this.running = true;
       // Each append can be a fragment of code or first-person assistant text.
