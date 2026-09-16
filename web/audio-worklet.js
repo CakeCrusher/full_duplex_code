@@ -4,6 +4,7 @@ class DuplexAudio extends AudioWorkletProcessor {
     this.inputPower = 0; this.outputPower = 0; this.levelSamples = 0;
     this.auditSession = null; this.auditOffset = 0;
     this.gateThreshold = .008; this.gateHoldSamples = 0; this.rawInputPower = 0;
+    this.inputGain = 4;
     this.port.onmessage = ({ data }) => {
       if (data.type === 'mute') { this.muted = data.muted; if (this.muted) this.gateHoldSamples = 0; }
       if (data.type === 'audit_start') { this.auditSession = data.sessionId; this.auditOffset = 0; }
@@ -16,15 +17,24 @@ class DuplexAudio extends AudioWorkletProcessor {
     const input = inputs[0]?.[0]; const output = outputs[1][0];
     const remote = inputs[1]?.[0];
     const microphoneOutput = outputs[0][0];
-    let rawPower = 0;
-    for (let i = 0; i < output.length; i++) rawPower += (this.muted ? 0 : (input?.[i] ?? 0)) ** 2;
+    let rawPower = 0; let peak = 0;
+    for (let i = 0; i < output.length; i++) {
+      const sample = this.muted ? 0 : (input?.[i] ?? 0);
+      rawPower += sample ** 2; peak = Math.max(peak, Math.abs(sample));
+    }
     const rawRms = Math.sqrt(rawPower / output.length);
     if (rawRms >= this.gateThreshold) this.gateHoldSamples = sampleRate * .3;
     const gateOpen = this.gateThreshold === 0 || this.gateHoldSamples > 0;
     this.gateHoldSamples = Math.max(0, this.gateHoldSamples - output.length);
     this.rawInputPower += rawPower;
+    // Boost accepted quiet speech, never the signal used to open the gate.
+    // Reduce gain immediately for loud peaks; recover over 200 ms so syllables
+    // do not repeatedly jump in volume. Leave headroom before PCM encoding.
+    const peakGain = peak > 0 ? .9 / peak : 4;
+    const recovery = 1 - Math.exp(-output.length / (sampleRate * .2));
+    this.inputGain = Math.min(peakGain, this.inputGain + (4 - this.inputGain) * recovery);
     for (let i = 0; i < output.length; i++) {
-      const sample = this.muted || !gateOpen ? 0 : (input?.[i] ?? 0);
+      const sample = this.muted || !gateOpen ? 0 : (input?.[i] ?? 0) * this.inputGain;
       const sent = Math.round(Math.max(-1, Math.min(1, sample)) * (sample < 0 ? 32768 : 32767));
       this.inputPower += (sent / 32768) ** 2;
       microphoneOutput[i] = sent / 32768;

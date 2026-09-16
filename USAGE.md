@@ -110,6 +110,8 @@ Open **GPT Live prompt** beneath the sliders to read the startup instructions. B
 
 After speech crosses the threshold, a **300 ms hold** captures quieter word endings. Those quieter samples are sent and shown on the Gantt. Changing the threshold resets the previous hold; mute remains immediate. Chrome is requested to disable automatic gain adjustment so it does not automatically boost a whisper above the gate. The meter shows captured sound before the gate, and the label beneath Mic threshold says **Passing audio to Live** or **Gate closed · sending silence**. Mute silences both recorded microphone tracks.
 
+Quiet speech that already passed the gate is boosted by up to four times before it reaches Live. Loud peaks reduce that boost immediately to avoid clipping; it then recovers gradually. This happens after the gate decision, so below-threshold noise still sends silence. The operator track measures the boosted signal, while the microphone recording preserves the original level.
+
 Chrome carries microphone and speaker audio through **WebRTC**. Its native receiver handles decoding, network jitter and continuous playback; the companion does not schedule or splice speech chunks. The noise gate runs before the outgoing microphone track. The playback timeline and recording measure the decoded speaker track, including receiver delay. This cannot reconstruct words the model never generated. End voice stops playback immediately.
 
 **Input ASR** is Live’s own transcription output. We do not run an extra recognizer or send this text back to Live. The bridge uses it to assemble a request only when Live delegates. It can contain spurious text even with silent input, so inspect the audio recordings when auditing it.

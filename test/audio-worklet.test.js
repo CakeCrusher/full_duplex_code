@@ -31,7 +31,10 @@ test('audio levels cover the whole measurement interval; audit retains actual re
   f.send({ type: 'audit_start', sessionId: 'test' });
   f.send({ type: 'play', pcm: new Int16Array(128 * 20).fill(16384).buffer });
   f.run(.5, 10); f.run(0, 30);
-  assert.ok(Math.abs(f.levels()[0].rms - Math.sqrt(.125)) < .0001, 'not only the final silent block');
+  const sent = f.input().slice(0, 128 * 20);
+  const measured = Math.sqrt(sent.reduce((sum, x) => sum + (x / 32768) ** 2, 0) / sent.length);
+  assert.ok(measured > .3, 'the measurement includes the earlier spoken blocks');
+  assert.ok(Math.abs(f.levels()[0].rms - measured) < .0001, 'not only the final silent block');
   assert.ok(Math.abs(f.levels()[0].durationMs - 2560 / 24) < .001);
   assert.ok(Math.abs(f.levels()[0].endTime * 1000 - f.levels()[0].durationMs) < .001);
   const playback = f.messages.filter(e => e.type === 'playback');
@@ -78,6 +81,23 @@ test('gate passes a 300 ms word tail, then closes; mute remains immediate', () =
   f.send({ type: 'mute', muted: true }); f.run(.1, 15);
   assert.ok(f.input().slice(-480).every(x => x === 0));
   assert.ok([...new Int16Array(f.messages.filter(e => e.type === 'playback').at(-1).microphone)].every(x => x === 0));
+});
+
+test('accepted quiet speech is boosted without changing gate decisions or clipping loud speech', () => {
+  const f = fixture(); f.send({ type: 'audit_start', sessionId: 'gain' });
+  f.run(.004, 20);
+  assert.ok(f.input().every(x => x === 0), 'boost cannot lift noise over the threshold');
+  f.run(.02, 20);
+  assert.ok(Math.abs(f.levels().at(-1).rms - .08) < .0001, 'quiet accepted speech reaches Live at a useful level');
+  assert.ok(Math.abs(f.levels().at(-1).rawRms - .02) < .0001, 'the gate meter still reports the original microphone');
+  const raw = new Int16Array(f.messages.filter(e => e.type === 'playback').at(-1).microphone);
+  assert.ok(Math.abs(raw[0] / 32768 - .02) < .0001, 'pre-gate audit remains unmodified');
+  f.run(1, 1); f.run(-1, 1);
+  assert.ok(f.input().slice(-256).every(x => Math.abs(x / 32768) <= .9001), 'both polarities retain headroom');
+  f.run(.02, 1); const immediate = Math.abs(f.input().at(-1) / 32768);
+  f.run(.02, 180); const recovered = Math.abs(f.input().at(-1) / 32768);
+  assert.ok(immediate < .025, 'gain recovers gradually after a loud transient');
+  assert.ok(recovered > .079 && recovered <= .0801);
 });
 
 test('native media gates the outgoing track and passes incoming speech unchanged, simultaneously', () => {
