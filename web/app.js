@@ -7,7 +7,7 @@ let ws, context, stream, node, mic, active = false, starting = false, muted = fa
 let generation = 0;
 const timeline = new TimelineView();
 const speakingNames = ['Quiet', 'Milestones', 'Walkthrough'];
-const speakingDescriptions = ['Talk only when you address Live. Observe Claude silently.', 'Only major changes, decisions you must make, and task completion. No running commentary.', 'Default: explain major stages and choices, finishing each thought.'];
+const speakingDescriptions = ['Talk only when you address Live. Observe Claude silently.', 'Only major changes, decisions you must make, and task completion. No running commentary.', 'Default: explain major stages and choices. Your spoken requests come first.'];
 function showSpeaking(level) {
   $('speaking-level').value = level;
   $('speaking-level').setAttribute('aria-valuetext', speakingNames[level]);

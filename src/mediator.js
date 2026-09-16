@@ -1,12 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { ContextQueue, VoiceHistory, thinkingText } from './context.js';
-import { DEFAULT_SPEAKING_LEVEL } from './voice-policy.js';
 
 export class Mediator {
-  constructor({ live, observer, deliver, log, publish, clean, initialObservationCount = 0, speakingLevel = DEFAULT_SPEAKING_LEVEL }) {
-    Object.assign(this, { live, observer, deliver, log, publish, clean, speakingLevel });
+  constructor({ live, observer, deliver, log, publish, clean, initialObservationCount = 0 }) {
+    Object.assign(this, { live, observer, deliver, log, publish, clean });
     this.history = new VoiceHistory(); this.seenDelegations = new Set(); this.timers = new Set();
-    this.lastActivityAt = Date.now(); this.lastCueAt = 0; this.pendingUpdate = null;
     this.context = new ContextQueue(live, error => {
       this.fault(error);
       live.close('Claude context delivery failed');
@@ -17,36 +15,15 @@ export class Mediator {
     this.onObservation = event => this.forward(event);
     this.onLive = event => this.liveEvent(event);
     live.on('event', this.onLive); observer.on('observation', this.onObservation);
-    this.updateTimer = setInterval(() => this.flushUpdate(), 500);
   }
   forward(event, historical = false) {
     this.context.add('thinking', `Claude Code observation${historical ? ' (history)' : ''}:\n${thinkingText(event.text)}\n`);
-    // Keep every observation, but only one pending opportunity to speak. New
-    // work replaces old progress; a display batch is never a narration command.
-    if (!historical && !event.child && (event.assistant || ['MessageDisplay', 'PostToolBatch', 'Stop', 'StopFailure', 'PermissionRequest', 'PermissionDenied', 'Notification', 'Elicitation', 'SessionEnd'].includes(event.name))) {
-      this.pendingUpdate = { name: event.name ?? 'Assistant message', at: Date.now() };
-    }
-  }
-  activity(event) {
-    if (event.inputRms >= (Number.isFinite(event.gateThreshold) ? Number.MIN_VALUE : .008) || event.outputRms >= .003) this.lastActivityAt = Date.now();
-  }
-  flushUpdate(now = Date.now()) {
-    if (this.speakingLevel === 0) { this.pendingUpdate = null; return; }
-    if (!this.pendingUpdate || this.live.state !== 'active' || this.context.stopped || this.context.running || this.context.queue.length) return;
-    if (now - this.lastActivityAt < 2000 || now - this.lastCueAt < (this.speakingLevel === 1 ? 60000 : 15000) || now - this.pendingUpdate.at < 1200) return;
-    const update = this.pendingUpdate; this.pendingUpdate = null; this.lastCueAt = now;
-    // One short append, made only after the raw facts are injected. State is
-    // sampled now, not frozen when a much older display batch arrived.
-    const content = `Claude is now ${this.observer.state}. Latest update: ${update.name}. Follow the selected speaking preference. Only if an update qualifies, finish any current thought and explain the single most useful current outcome in one or two complete sentences. Otherwise stay silent. Skip superseded steps and anything already said. This opportunity does not require speech and creates no backlog to narrate later.`;
-    this.log({ type: 'bridge.speech_cue', state: this.observer.state, latestHook: update.name, content });
-    this.context.add('commentary', content);
   }
   fault(error) { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: error.message }); }
   liveEvent(event) {
     if (event.type === 'session.started') this.context.pump();
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
       const fragment = this.history.add(event);
-      this.lastActivityAt = Date.now();
       this.publish({ type: 'caption', ...fragment, voiceSessionId: this.live.id, voiceStartedAt: this.live.startedAt });
     }
     if (event.type === 'session.delegation.created' && event.delegation?.target === 'client') {
@@ -78,11 +55,10 @@ export class Mediator {
       this.context.add('thinking', 'The user request was queued for Claude Code. Follow the automatic Claude observations for its response and actual results. Do not resend it or treat delivery as completion.', delegationId);
     } catch (error) {
       this.fault(error);
-      this.context.add('commentary', 'The voice bridge could not queue your request for Claude. Please check the terminal connection.', delegationId);
+      this.context.add('thinking', 'The voice bridge failed to queue the user’s request for Claude. The request was not delivered; the terminal connection needs attention.', delegationId);
     }
   }
   stop() {
-    clearInterval(this.updateTimer); this.pendingUpdate = null;
     this.context.stop(); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();
     this.live.off('event', this.onLive); this.observer.off('observation', this.onObservation);
   }

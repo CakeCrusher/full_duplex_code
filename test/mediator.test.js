@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { AgentObserver } from '../src/agent.js';
-import { startupHistory } from '../src/context.js';
+import { BACKGROUND_REFERENCE, startupHistory } from '../src/context.js';
 import { Mediator } from '../src/mediator.js';
 
 function fixture(t, state = 'active', observer = new AgentObserver({ sessionId: 'test' })) {
@@ -15,7 +15,7 @@ function fixture(t, state = 'active', observer = new AgentObserver({ sessionId: 
   return { live, observer, mediator, appends, deliveries, hook };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
-const content = (f, kind) => f.appends.filter(e => !kind || e.kind === kind).map(e => e.content).join('');
+const content = (f, kind) => f.appends.filter(e => !kind || e.kind === kind).map(e => e.kind === 'thinking' ? e.content.slice(BACKGROUND_REFERENCE.length) : e.content).join('');
 
 test('hooks are primary: all raw hooks, including assistant batches, are quiet thinking', async t => {
   const f = fixture(t);
@@ -90,52 +90,6 @@ test('a failed append surfaces a fault and ends stale voice instead of silently 
 });
 
 
-test('fast display batches become one latest-state cue, never a spoken FIFO', async t => {
-  const f = fixture(t);
-  for (let i = 0; i < 40; i++) f.hook({ hook_event_name: 'MessageDisplay', message_id: 'burst', index: i, delta: `Step ${i}.` });
-  f.hook({ hook_event_name: 'Stop', last_assistant_message: 'Completed step 40.' });
-  await flush();
-  assert.equal(content(f, 'commentary'), '');
-  const now = Date.now() + 3000;
-  f.mediator.flushUpdate(now);
-  await flush();
-  const cues = () => f.appends.filter(e => e.kind === 'commentary');
-  assert.equal(cues().length, 1, 'one unsplit cue, not forty speech requests');
-  assert.match(cues()[0].content, /now idle.*Latest update: Stop/);
-  assert.doesNotMatch(cues()[0].content, /Step 0/);
-  f.mediator.flushUpdate(now + 16000);
-  assert.equal(cues().length, 1, 'no repeated reminder without new observations');
-  f.hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' });
-  await flush();
-  f.mediator.flushUpdate(now + 14000);
-  assert.equal(cues().length, 1, 'at most one update per fifteen seconds');
-  f.mediator.flushUpdate(now + 15000);
-  await flush();
-  assert.equal(cues().length, 2);
-  assert.match(cues()[1].content, /now needs_attention/);
-});
-
-test('speech cues wait for operator/playback silence and full context injection', async t => {
-  const f = fixture(t);
-  let release;
-  f.live.append = () => new Promise(resolve => { release = resolve; });
-  f.hook({ hook_event_name: 'Stop', last_assistant_message: 'Done' });
-  const now = Date.now() + 3000;
-  f.mediator.flushUpdate(now);
-  assert.ok(f.mediator.pendingUpdate, 'context is still in flight');
-  release(); await flush();
-  f.mediator.activity({ inputRms: .1, outputRms: 0 });
-  f.mediator.flushUpdate(Date.now() + 1500);
-  assert.ok(f.mediator.pendingUpdate, 'operator has not been quiet for two seconds');
-  f.mediator.activity({ inputRms: 0, outputRms: .1 });
-  f.mediator.flushUpdate(Date.now() + 1500);
-  assert.ok(f.mediator.pendingUpdate, 'rendered speech is still recent');
-  f.mediator.flushUpdate(Date.now() + 2500);
-  assert.equal(f.mediator.pendingUpdate, null);
-  release(); await flush();
-});
-
-
 test('startup observations are neither replayed twice nor dropped when some overflow', async t => {
   const observer = new AgentObserver({ sessionId: 'test' });
   observer.hook({ session_id: 'test', hook_event_name: 'UserPromptSubmit', prompt: 'first' });
@@ -147,39 +101,33 @@ test('startup observations are neither replayed twice nor dropped when some over
   const mediator = new Mediator({ live, observer, initialObservationCount: initial.count, log: () => {}, publish: () => {}, clean: String });
   t.after(() => { mediator.stop(); observer.close(); });
   await flush();
-  assert.equal(initial.text + appends.map(e => e.content).join(''), observer.observations.map(o => `Claude Code observation (history):\n${o.text}\n`).join(''));
+  assert.equal(initial.text + appends.map(e => e.content.slice(BACKGROUND_REFERENCE.length)).join(''), observer.observations.map(o => `Claude Code observation (history):\n${o.text}\n`).join(''));
   assert.ok(appends.every(e => e.kind === 'thinking'));
-  assert.equal(mediator.pendingUpdate, null, 'history never schedules proactive narration');
 });
 
-test('Quiet forwards all observations without proactive speech cues, including completion and blockers', async t => {
-  const f = fixture(t); f.mediator.speakingLevel = 0;
-  f.hook({ hook_event_name: 'MessageDisplay', message_id: 'quiet', index: 0, delta: 'Changed the page.' });
+
+test('a full burst of observations remains thinking after idle time; no progress is promoted to speech', async t => {
+  t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'] });
+  const f = fixture(t);
+  f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Stop describing the bug. Is movement confined to one plane?', start_ms: 0, end_ms: 2000 });
+  for (let i = 0; i < 40; i++) {
+    f.hook({ hook_event_name: 'MessageDisplay', message_id: 'burst', index: i, delta: `Detail ${i}.` });
+    f.hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: { stdout: `Result ${i}.` } });
+  }
   f.hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' });
-  f.hook({ hook_event_name: 'Stop', last_assistant_message: 'All done.' });
-  await flush(); f.mediator.flushUpdate(Date.now() + 70000); await flush();
-  assert.match(content(f, 'thinking'), /Changed the page/);
-  assert.match(content(f, 'thinking'), /PermissionRequest/);
-  assert.match(content(f, 'thinking'), /All done/);
-  assert.equal(content(f, 'commentary'), '');
-  assert.equal(f.mediator.pendingUpdate, null, 'no spoken backlog is saved while quiet');
+  f.hook({ hook_event_name: 'Stop', last_assistant_message: 'All work complete.' });
+  await flush();
+  t.mock.timers.tick(300000); await flush();
+  assert.equal(content(f), f.observer.observations.map(o => `Claude Code observation:\n${o.text}\n`).join(''), 'every observation survives unchanged and in order');
+  assert.ok(f.appends.every(e => e.kind === 'thinking'), 'idle time does not turn an observation into a command to speak');
+  assert.equal(f.deliveries.length, 0, 'a conversation steering request is not automatically sent to Claude');
 });
 
-test('Milestones limits proactive opportunities to once a minute and waits for accepted whispers', async t => {
-  const f = fixture(t); f.mediator.speakingLevel = 1;
-  f.hook({ hook_event_name: 'Stop', last_assistant_message: 'Done.' });
-  await flush();
-  f.mediator.lastActivityAt = 0;
-  f.mediator.activity({ inputRms: .001, gateThreshold: .0005, outputRms: 0 });
-  assert.ok(f.mediator.lastActivityAt > 0, 'accepted soft speech counts as user activity');
-  f.mediator.flushUpdate(Date.now() + 1000); await flush();
+test('a failed delegation is factual context for the conversation, without a competing speech command', async t => {
+  const f = fixture(t);
+  f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the page blue.', start_ms: 0, end_ms: 1000 });
+  f.mediator.deliver = () => { throw new Error('channel unavailable'); };
+  f.mediator.delegate('failed-request', 1100); await flush();
+  assert.match(content(f, 'thinking'), /request was not delivered/);
   assert.equal(content(f, 'commentary'), '');
-  const now = Date.now() + 3000;
-  f.mediator.flushUpdate(now); await flush();
-  assert.equal(f.appends.filter(e => e.kind === 'commentary').length, 1);
-  f.hook({ hook_event_name: 'Stop', last_assistant_message: 'More results.' });
-  await flush(); f.mediator.flushUpdate(now + 59000); await flush();
-  assert.equal(f.appends.filter(e => e.kind === 'commentary').length, 1);
-  f.mediator.flushUpdate(now + 60000); await flush();
-  assert.equal(f.appends.filter(e => e.kind === 'commentary').length, 2);
 });

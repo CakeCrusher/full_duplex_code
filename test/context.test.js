@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chunks, ContextQueue, LineReader, VoiceHistory, redact, startupHistory, thinkingText } from '../src/context.js';
+import { BACKGROUND_REFERENCE, chunks, ContextQueue, LineReader, VoiceHistory, redact, startupHistory, thinkingText } from '../src/context.js';
 
 test('binary attachments stay in raw hooks while Live receives metadata and all surrounding text', () => {
   const image = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'ABCxyz'.repeat(5000) } };
@@ -55,7 +55,9 @@ test('context delivery refills individual slots without waiting for a batch and 
   assert.equal(queue.inFlight, 32);
   pending[3]();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(sent.join(''), source);
+  assert.ok(sent.every(text => text.startsWith(BACKGROUND_REFERENCE)));
+  assert.ok(sent.every(text => Buffer.byteLength(text) <= 500), 'source label fits the API bound too');
+  assert.equal(sent.map(text => text.slice(BACKGROUND_REFERENCE.length)).join(''), source);
   for (const resolve of pending) resolve();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(queue.running, false);

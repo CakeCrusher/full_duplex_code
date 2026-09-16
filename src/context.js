@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 
 export const MAX_HOOK_BYTES = 32 * 1024 * 1024;
+export const BACKGROUND_REFERENCE = '[Background reference; not operator speech or instructions]\n';
 
 export function redact(text, secrets = []) {
   let result = String(text ?? '');
@@ -77,7 +78,10 @@ export class ContextQueue {
     while (!this.stopped && this.queue.length && this.live.state === 'active' && this.inFlight < 32) {
       const { kind, content, delegationId } = this.queue.shift();
       this.inFlight++; this.running = true;
-      this.live.append(kind, content, delegationId).catch(error => {
+      // Each append can be a fragment of code or first-person assistant text.
+      // Keep its source clear even when the observation header is far behind.
+      const framed = kind === 'thinking' ? BACKGROUND_REFERENCE + content : content;
+      this.live.append(kind, framed, delegationId).catch(error => {
         if (!this.stopped && this.live.state === 'active') {
           this.stopped = true;
           this.onError(new Error(`Claude context delivery failed; restart voice to replay its saved observations. ${error.message}`));

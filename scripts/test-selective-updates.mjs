@@ -28,8 +28,8 @@ try {
   const cues = rows.filter(e => e.type === 'bridge.speech_cue');
   const display = rows.filter(e => e.type === 'agent.hook' && e.name === 'MessageDisplay');
   assert.ok(display.length >= 7, 'Claude emitted a real burst of display observations');
-  assert.ok(cues.length < display.length, 'proactive speech cues are fewer than assistant batches');
-  for (let i = 1; i < cues.length; i++) assert.ok(cues[i].at - cues[i - 1].at >= 15000);
+  assert.equal(cues.length, 0, 'observations never schedule speech cues');
+  assert.equal(rows.filter(e => e.type === 'session.commentary.append').length, 0, 'Claude progress never becomes commentary');
   assert.ok(!rows.some(e => e.type === 'session.commentary.append' && /Claude Code observation/.test(e.content)));
   assert.ok(!rows.some(e => e.type === 'bridge.fault' || e.type === 'error'));
   Object.assign(evidence, { passed: true, displayBatches: display.length, speechCues: cues, workSeconds: (doneAt - from) / 1000, answer: answer(), noExtraDelegations: true,

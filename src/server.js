@@ -61,7 +61,6 @@ export class Harness {
   async setSpeakingLevel(level) {
     const policy = speakingPolicy(level);
     this.speakingLevel = level;
-    if (this.mediator) this.mediator.speakingLevel = level;
     const live = this.live;
     const update = this.speakingUpdate = {
       state: live?.state === 'active' ? 'pending' : ['new', 'connecting'].includes(live?.state) ? 'starting' : 'next_session',
@@ -208,7 +207,6 @@ export class Harness {
         if (event.type === 'audio_level' && [event.at, event.durationMs, event.inputRms, event.outputRms].every(Number.isFinite)
           && Math.abs(event.at - Date.now()) < 5000 && event.durationMs > 0 && event.durationMs <= 500
           && event.inputRms >= 0 && event.inputRms <= 1 && event.outputRms >= 0 && event.outputRms <= 1) {
-          this.mediator?.activity(event);
           this.log({ ...event, liveRun: this.live?.reservation, backlogMs: Number.isFinite(event.backlogMs) ? event.backlogMs : undefined });
           const items = this.timeline.add(event);
           if (items.length) ws.send(JSON.stringify({ type: 'timeline_update', items }));
@@ -234,7 +232,7 @@ export class Harness {
     this.audit?.close(); this.audit = null;
     this.live = live;
     this.mediator?.stop();
-    this.mediator = new Mediator({ live, observer: this.observer, speakingLevel: this.speakingLevel, initialObservationCount: history.count, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
+    this.mediator = new Mediator({ live, observer: this.observer, initialObservationCount: history.count, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
     this.publish(this.status());
     live.on('fault', error => this.fault(error));
     live.on('sent', event => {
