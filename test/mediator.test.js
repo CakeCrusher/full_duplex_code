@@ -39,7 +39,7 @@ test('hooks are primary: all raw hooks, including assistant batches, are quiet t
 
 test('voice startup and restart retain whole tool results instead of a clipped summary', async t => {
   const observer = new AgentObserver({ sessionId: 'test' });
-  const output = 'BEGIN\n' + 'File detail 世界\n'.repeat(10000) + 'END';
+  const output = 'BEGIN\n' + 'File detail 世界\n'.repeat(25000) + 'END';
   observer.hook({ session_id: 'test', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: { stdout: output } });
   observer.hook({ session_id: 'test', hook_event_name: 'MessageDisplay', message_id: 'old', index: 0, delta: 'Earlier answer.' });
   const f = fixture(t, 'connecting', observer);

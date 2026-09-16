@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "tiktoken": "^1.0.22",
     "ws": "^8.21.3"
   },
   "devDependencies": {

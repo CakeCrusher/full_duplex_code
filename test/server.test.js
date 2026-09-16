@@ -73,8 +73,8 @@ test('hook context keeps flowing during continuous microphone and speaker activi
     const response = await fetch(h.baseUrl + '/hook', { method: 'POST', headers: { Authorization: `Bearer ${h.channelToken}` }, body: JSON.stringify(hook) });
     assert.equal(response.status, 200);
   }
-  assert.equal(sent.length, 2, 'hook fragments reach Live while audio is active; only the bounded ACK window can hold further fragments');
-  assert.ok(h.mediator.context.queue.length > 1);
+  assert.ok(sent.length > 5, 'all hook fragments reach Live while audio is active and ACKs are pending');
+  assert.equal(h.mediator.context.queue.length, 0);
   let fragment = 0;
   while (pending.length) {
     await audio(fragment++ % 2 ? 0 : .0016, .12);

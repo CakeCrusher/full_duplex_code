@@ -97,7 +97,8 @@ export class LiveSession extends EventEmitter {
     }
     const ackId = event.client_event_id ?? event.error?.client_event_id;
     if (ackId && this.pending.has(ackId)) {
-      const p = this.pending.get(ackId); clearTimeout(p.timer); this.pending.delete(ackId);
+      const p = this.pending.get(ackId); this.pending.delete(ackId);
+      this.watchAcknowledgments();
       if (event.type === 'error') p.reject(new Error(event.error?.message ?? 'Command rejected')); else p.resolve(event);
     }
     this.emit('event', event);
@@ -129,11 +130,23 @@ export class LiveSession extends EventEmitter {
   append(kind, content, delegationId = null) {
     const eventId = randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(eventId); reject(new Error(`Context append timed out: ${kind}`)); }, 20000);
-      this.pending.set(eventId, { resolve, reject, timer });
+      this.pending.set(eventId, { resolve, reject });
+      if (!this.ackTimer) this.watchAcknowledgments();
       try { this.send({ type: `session.${kind}.append`, event_id: eventId, delegation_id: delegationId, content }); }
-      catch (err) { clearTimeout(timer); this.pending.delete(eventId); reject(err); }
+      catch (err) { this.pending.delete(eventId); this.watchAcknowledgments(); reject(err); }
     });
+  }
+  watchAcknowledgments() {
+    clearTimeout(this.ackTimer); this.ackTimer = null;
+    if (!this.pending.size) return;
+    // Appends enter the model over time. A large burst can legitimately take
+    // longer than 20 seconds; detect stalled progress instead of aging each
+    // individual append while earlier context is still being acknowledged.
+    this.ackTimer = setTimeout(() => {
+      this.ackTimer = null;
+      const pending = [...this.pending.values()]; this.pending.clear();
+      for (const p of pending) p.reject(new Error('Context acknowledgments stalled for 20 seconds'));
+    }, 20000);
   }
   async greet() {
     // A one-time welcome, not a persistent instruction that can retrigger
@@ -158,9 +171,9 @@ export class LiveSession extends EventEmitter {
   finish(finalized) {
     if (this.state === 'closed') return;
     this.state = 'closed';
-    for (const timer of [this.startTimer, this.closeTimer]) clearTimeout(timer);
+    for (const timer of [this.startTimer, this.closeTimer, this.ackTimer]) clearTimeout(timer);
     this.rejectReady?.(new Error('Connection closed before startup'));
-    for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Session closed')); }
+    for (const p of this.pending.values()) p.reject(new Error('Session closed'));
     this.pending.clear();
     const result = { finalized: Boolean(finalized || this.finalEvent), reserved: Boolean(this.reservation), usageSeconds: this.usageSeconds, sessionId: this.id };
     this.log({ type: 'bridge.closed', ...result }); this.resolveClosed(result); this.emit('closed', result);

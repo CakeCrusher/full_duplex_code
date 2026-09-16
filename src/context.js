@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
+import { textFragments } from './text-fragments.js';
 
 export const MAX_HOOK_BYTES = 32 * 1024 * 1024;
 export const BACKGROUND_REFERENCE = '[Background reference; not operator speech or instructions]\n';
@@ -10,19 +11,6 @@ export function redact(text, secrets = []) {
   let result = String(text ?? '');
   for (const secret of secrets.filter(s => typeof s === 'string' && s.length > 8)) result = result.split(secret).join('[redacted]');
   return result.replace(/\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}\b/g, '[redacted API key]');
-}
-
-// A byte bound stays below the API's 500-token append limit even for code,
-// unusual Unicode, and text whose tokenizer differs from the local estimate.
-export function chunks(text, maxBytes = 440) {
-  const output = []; let chunk = ''; let size = 0;
-  for (const char of text) {
-    const bytes = Buffer.byteLength(char);
-    if (size + bytes > maxBytes) { output.push(chunk); chunk = ''; size = 0; }
-    chunk += char; size += bytes;
-  }
-  if (chunk) output.push(chunk);
-  return output;
 }
 
 // Live accepts text context, not image/audio attachments. Keep complete hook
@@ -74,17 +62,23 @@ export class ContextQueue {
     if (this.stopped || !text) return;
     // Retain complete observations. Chunking is an API transport requirement,
     // not a reason to discard the beginning of a large tool result.
-    const parts = chunks(text);
+    // Budget the label too; six-digit fragment counts leave room for any hook
+    // permitted by the local transport limit. Never split a Unicode character.
+    const prefix = (kind === 'thinking' ? this.reference : '') + (source ? `[${source}; part 999999/999999]\n` : '');
+    const parts = textFragments(text, prefix);
     for (const [index, content] of parts.entries()) this.queue.push({ kind, content, delegationId, source: source ? `[${source}; part ${index + 1}/${parts.length}]\n` : '' });
     this.pump();
   }
   pump() {
-    // Write fragments in order with at most two awaiting acknowledgment.
-    // One at a time leaves an extra round trip between estimated injection
-    // intervals; this small window keeps delivery moving without flooding Live.
-    // Audio activity never holds context: Live needs Claude's observations
-    // while either party speaks, including when an open mic carries noise.
-    while (!this.stopped && this.queue.length && this.live.state === 'active' && this.inFlight < 2) {
+    clearTimeout(this.writeTimer); this.writeTimer = null;
+    // WebSocket writes preserve order. Track API acknowledgments independently:
+    // waiting for estimated model injection before another write adds latency.
+    // Only actual socket backpressure holds delivery, never speech or an ACK.
+    while (!this.stopped && this.queue.length && this.live.state === 'active') {
+      if ((this.live.ws?.bufferedAmount ?? 0) > 64 * 1024) {
+        this.writeTimer = setTimeout(() => this.pump(), 10);
+        return;
+      }
       const { kind, content, delegationId, source = '' } = this.queue.shift();
       this.inFlight++; this.running = true;
       // Each append can be a fragment of code or first-person assistant text.
@@ -92,13 +86,13 @@ export class ContextQueue {
       const framed = kind === 'thinking' ? this.reference + source + content : content;
       this.live.append(kind, framed, delegationId).catch(error => {
         if (!this.stopped && this.live.state === 'active') {
-          this.stopped = true;
+          this.stop();
           this.onError(new Error(`Claude context delivery failed; restart voice to replay its saved observations. ${error.message}`));
         }
-      }).finally(() => { this.inFlight--; this.running = this.inFlight > 0; this.pump(); });
+      }).finally(() => { this.inFlight--; this.running = this.inFlight > 0; });
     }
   }
-  stop() { this.stopped = true; this.queue.length = 0; }
+  stop() { this.stopped = true; this.queue.length = 0; clearTimeout(this.writeTimer); this.writeTimer = null; }
 }
 
 export class VoiceHistory {

@@ -1,6 +1,7 @@
 import test from 'node:test';
+import { textFragments, estimatedTokens } from '../src/text-fragments.js';
 import assert from 'node:assert/strict';
-import { BACKGROUND_REFERENCE, chunks, ContextQueue, LineReader, VoiceHistory, redact, startupHistory, thinkingText } from '../src/context.js';
+import { BACKGROUND_REFERENCE, ContextQueue, LineReader, VoiceHistory, redact, startupHistory, thinkingText } from '../src/context.js';
 
 test('binary attachments stay in raw hooks while Live receives metadata and all surrounding text', () => {
   const image = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'ABCxyz'.repeat(5000) } };
@@ -30,82 +31,76 @@ test('Read image results keep dimensions and file metadata without sending file.
   assert.equal(thinkingText(ordinary), ordinary, 'untyped data is not assumed to be an attachment');
 });
 
-test('context chunks preserve Unicode and stay below the append byte bound', () => {
+test('context fragments preserve Unicode and fit the token estimate including source labels', () => {
   const text = 'Hello 世界 👋\n'.repeat(300);
-  const parts = chunks(text);
+  const prefix='[Claude PostToolUse; part 999999/999999]\n';
+  const parts = textFragments(text,prefix);
   assert.equal(parts.join(''), text);
-  assert.ok(parts.every(p => Buffer.byteLength(p) <= 440));
+  assert.ok(parts.every(p => estimatedTokens(prefix+p) <= 460));
 });
 
-test('context injection preserves order and all fragments with at most two pending acknowledgments', async () => {
-  const pending = []; const sent = []; const faults = [];
-  const live = { state: 'active', append: (_kind, content) => {
-    sent.push(content);
-    return new Promise(resolve => pending.push(resolve));
-  } };
-  const queue = new ContextQueue(live, e => faults.push(e));
-  const source = 'x'.repeat(440 * 34);
-  queue.add('thinking', source);
-  queue.add('thinking', 'new observation');
-  assert.equal(sent.length, 2, 'a bounded window overlaps the acknowledgment wait without flooding Live');
-  assert.equal(queue.queue.length, 33);
-  for (let i = 0; i < 35; i++) {
-    assert.equal(queue.inFlight, Math.min(2, 35 - i));
-    pending[i]();
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(sent.length, Math.min(i + 3, 35));
-  }
-  assert.ok(sent.every(text => text.startsWith(BACKGROUND_REFERENCE)));
-  assert.ok(sent.every(text => Buffer.byteLength(text) <= 500), 'source label fits the API bound too');
-  assert.equal(sent.map(text => text.slice(BACKGROUND_REFERENCE.length)).join(''), source + 'new observation');
-  assert.equal(queue.running, false);
-  assert.equal(queue.inFlight, 0);
-  assert.deepEqual(faults, []);
+test('context sends every fragment in order before any API acknowledgment', async () => {
+  const pending=[],sent=[],faults=[];
+  const live={state:'active',append:(_kind,content)=>{sent.push(content);return new Promise(resolve=>pending.push(resolve));}};
+  const queue=new ContextQueue(live,error=>faults.push(error));
+  const source='{"file":"hello.js","delta":"const count = 123;"}\n'.repeat(600);
+  queue.add('thinking',source);queue.add('thinking','new observation');
+  assert.ok(sent.length>8);assert.equal(queue.queue.length,0);assert.equal(queue.inFlight,sent.length);
+  for(const resolve of pending.reverse())resolve();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(sent.every(text=>text.startsWith(BACKGROUND_REFERENCE)));
+  assert.equal(sent.map(text=>text.slice(BACKGROUND_REFERENCE.length)).join(''),source+'new observation');
+  assert.equal(queue.running,false);assert.equal(queue.inFlight,0);assert.deepEqual(faults,[]);
 });
 
-test('stopping context delivery prevents late acknowledgments from sending queued content', async () => {
-  const pending = []; let sent = 0;
-  const live = { state: 'active', append: () => { sent++; return new Promise(resolve => pending.push(resolve)); } };
-  const queue = new ContextQueue(live, error => { throw error; });
-  queue.add('thinking', 'x'.repeat(440 * 40));
-  queue.stop();
-  for (const resolve of pending) resolve();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(sent, 2);
-  assert.equal(queue.queue.length, 0);
-  assert.equal(queue.running, false);
-});
-
-test('queued fragments carry the current speaking mode without modifying their source text', async () => {
-  const sent=[],pending=[];
-  const live={state:'active',append:(_kind,text)=>{sent.push(text);return new Promise(resolve=>pending.push(resolve));}};
+test('socket backpressure pauses writes without waiting for model acknowledgments', async () => {
+  const sent=[],pending=[],ws={bufferedAmount:0};
+  const live={state:'active',ws,append:(_kind,text)=>{sent.push(text);if(sent.length===2)ws.bufferedAmount=70000;return new Promise(resolve=>pending.push(resolve));}};
   const queue=new ContextQueue(live,error=>{throw error;});
-  queue.add('thinking','x'.repeat(440*4));
-  queue.setSpeakingLevel(0);
-  pending.shift()();await new Promise(resolve=>setImmediate(resolve));
-  assert.match(sent[2],/^\[Quiet: no follow-ups to old answers\. Silent Claude log\.\]/);
-  queue.setSpeakingLevel(1);
-  pending.shift()();await new Promise(resolve=>setImmediate(resolve));
-  assert.match(sent[3],/^\[Milestones:/);
-  pending.shift()();await new Promise(resolve=>setImmediate(resolve));
-  pending.shift()();await new Promise(resolve=>setImmediate(resolve));
-  assert.ok(sent.every(s=>Buffer.byteLength(s)<=500));
-  assert.equal(sent.map(s=>s.slice(s.indexOf('\n')+1)).join(''),'x'.repeat(440*4));
+  queue.add('thinking','const item = { score: 123, state: "ready" };\n'.repeat(300));
+  assert.equal(sent.length,2);assert.ok(queue.queue.length>2);
+  ws.bufferedAmount=0;
+  await new Promise(resolve=>setTimeout(resolve,30));
+  assert.ok(sent.length>4,'socket drain releases writes while all earlier ACKs remain pending');
+  assert.equal(queue.queue.length,0);assert.equal(queue.inFlight,sent.length);
+  pending.forEach(resolve=>resolve());queue.stop();
 });
 
-test('out-of-order acknowledgments retain send order and an error stops further context', async () => {
-  const sent = [], pending = [], faults = [];
-  const live = { state: 'active', append: (_kind, text) => new Promise((resolve, reject) => { sent.push(text); pending.push({ resolve, reject }); }) };
-  const queue = new ContextQueue(live, error => faults.push(error.message));
-  for (const text of ['one', 'two', 'three', 'four']) queue.add('thinking', text);
-  pending[1].resolve(); await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(sent.map(s => s.slice(BACKGROUND_REFERENCE.length)), ['one', 'two', 'three']);
-  assert.equal(queue.inFlight, 2);
-  pending[0].reject(new Error('rejected first fragment')); await new Promise(resolve => setImmediate(resolve));
-  pending[2].resolve(); await new Promise(resolve => setImmediate(resolve));
-  assert.equal(sent.length, 3, 'no further context follows a rejected append');
-  assert.equal(faults.length, 1); assert.match(faults[0], /rejected first fragment/);
-  queue.stop();
+test('stopping delivery cancels backpressure retries and ignores late acknowledgments', async () => {
+  const pending=[];let sent=0;const ws={bufferedAmount:0};
+  const live={state:'active',ws,append:()=>{sent++;ws.bufferedAmount=70000;return new Promise(resolve=>pending.push(resolve));}};
+  const queue=new ContextQueue(live,error=>{throw error;});
+  queue.add('thinking','x'.repeat(440*40));queue.stop();ws.bufferedAmount=0;
+  pending.forEach(resolve=>resolve());
+  await new Promise(resolve=>setTimeout(resolve,30));
+  assert.equal(sent,1);assert.equal(queue.queue.length,0);assert.equal(queue.running,false);
+});
+
+test('fragments blocked by the network use the current speaking mode without changing their source', async () => {
+  const sent=[],ws={bufferedAmount:70000};
+  const live={state:'active',ws,append:async(_kind,text)=>{sent.push(text);ws.bufferedAmount=70000;}};
+  const queue=new ContextQueue(live,error=>{throw error;});
+  const original='let score = 10; // keep every character\n'.repeat(300);
+  queue.add('thinking',original);queue.setSpeakingLevel(0);ws.bufferedAmount=0;queue.pump();
+  assert.match(sent[0],/^\[Quiet:/);
+  queue.setSpeakingLevel(1);ws.bufferedAmount=0;queue.pump();
+  assert.match(sent[1],/^\[Milestones:/);
+  while(queue.queue.length){ws.bufferedAmount=0;queue.pump();}
+  assert.equal(sent.map(s=>s.slice(s.indexOf('\n')+1)).join(''),original);queue.stop();
+});
+
+test('out-of-order acknowledgments retain send order and a rejection stops subsequent observations', async () => {
+  const sent=[],pending=[],faults=[];
+  const live={state:'active',append:(_kind,text)=>new Promise((resolve,reject)=>{sent.push(text);pending.push({resolve,reject});})};
+  const queue=new ContextQueue(live,error=>faults.push(error.message));
+  for(const text of ['one','two','three','four'])queue.add('thinking',text);
+  pending[1].resolve();await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(sent.map(s=>s.slice(BACKGROUND_REFERENCE.length)),['one','two','three','four']);
+  assert.equal(queue.inFlight,3);
+  pending[0].reject(new Error('rejected first fragment'));await new Promise(resolve=>setImmediate(resolve));
+  queue.add('thinking','five');pending[2].resolve();pending[3].resolve();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(sent.length,4);assert.equal(faults.length,1);assert.match(faults[0],/rejected first fragment/);
+  assert.equal(queue.inFlight,0);queue.stop();
 });
 test('JSONL input survives split UTF-8 bytes and partial lines', () => {
   const found = []; const reader = new LineReader(line => found.push(line));

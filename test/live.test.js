@@ -46,6 +46,22 @@ test('a transport loss preserves the full reservation without inventing final us
   const result = await live.closed;
   assert.equal(result.finalized, false); assert.equal(budget.summary().committedUsd, reserved);
 });
+test('a progressing context burst may outlive 20 seconds, but stalled acknowledgments fail', async t => {
+  const { live } = await fixture(t, () => {});
+  await live.start();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const first=live.append('thinking','first'),second=live.append('thinking','second');
+  const [a,b]=live.pending.keys();
+  t.mock.timers.tick(19000);
+  live.receive({type:'session.thinking.appended',client_event_id:a});
+  await first;
+  t.mock.timers.tick(19000);
+  assert.equal(live.pending.has(b),true,'later fragments stay pending while acceptance makes progress');
+  live.receive({type:'session.thinking.appended',client_event_id:b});await second;
+  const stalled=assert.rejects(live.append('thinking','stalled'),/acknowledgments stalled/);
+  t.mock.timers.tick(20001);await stalled;
+  assert.equal(live.pending.size,0);t.mock.timers.reset();
+});
 test('microphone audio must stay paced in real time', async t => {
   const { live } = await fixture(t, (ws, event) => {
     if (event.type === 'session.close') ws.send(JSON.stringify({ type: 'session.closed', usage: { seconds: 0 }, reason: 'close_requested', session: { id: 'test-live' } }));
