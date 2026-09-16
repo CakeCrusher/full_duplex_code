@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { Budget, RATE_PER_SECOND } from '../src/budget.js';
 import { LiveSession } from '../src/live.js';
@@ -88,4 +89,60 @@ test('missing credentials and closing an unstarted session both settle shutdown'
   assert.equal((await unstarted.close()).reserved, false);
   assert.equal(unstarted.state, 'closed');
   assert.equal(budget.summary().runs.length, 0);
+});
+
+test('WebRTC negotiates media by HTTP and uses the sideband only for control and audit', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-live-native-'));
+  let request, attachPath; const commands = [], received = [];
+  const server = http.createServer(async (req,res) => {
+    const chunks=[]; for await (const chunk of req) chunks.push(chunk);
+    request=JSON.parse(Buffer.concat(chunks));
+    assert.equal(req.headers.authorization,'Bearer fake-test-key');
+    res.setHeader('Content-Type','application/json');
+    res.end(JSON.stringify({session:{id:'native-id'},transport:{type:'webrtc',sdp:'answer-sdp'}}));
+  });
+  const sockets = new WebSocketServer({server});
+  sockets.on('connection',(ws,req)=>{
+    attachPath=req.url;
+    ws.send(JSON.stringify({type:'session.started',session:{id:'native-id'}}));
+    ws.send(JSON.stringify({type:'session.input_audio.append',audio:Buffer.alloc(960).toString('base64')}));
+    ws.on('message',raw=>{
+      const e=JSON.parse(raw); commands.push(e);
+      if(e.type==='session.thinking.append')ws.send(JSON.stringify({type:'session.thinking.appended',client_event_id:e.event_id}));
+      if(e.type==='session.close')ws.send(JSON.stringify({type:'session.closed',usage:{seconds:15},reason:'close_requested'}));
+    });
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const budget=new Budget(path.join(dir,'budget.json'));
+  const live=new LiveSession({apiKey:'fake-test-key',budget,maxSeconds:20,url:`ws://127.0.0.1:${server.address().port}/v1/live/sessions`});
+  t.after(async()=>{live.abort('cleanup');for(const ws of sockets.clients)ws.terminate();sockets.close();await new Promise(resolve=>server.close(resolve));fs.rmSync(dir,{recursive:true,force:true});});
+  let answer; live.on('answer',sdp=>answer=sdp); live.on('event',e=>received.push(e));
+  await live.start('offer-sdp');
+  assert.deepEqual(request.transport,{type:'webrtc',sdp:'offer-sdp'});
+  assert.equal(request.session.audio.format,undefined,'WebRTC negotiates its own codec');
+  assert.equal(request.session.store,false);
+  assert.equal(answer,'answer-sdp');
+  assert.equal(attachPath,'/v1/live/sessions/native-id/attach');
+  assert.throws(()=>live.audio(Buffer.alloc(960)),/media track/);
+  await live.append('thinking','An observation');
+  assert.ok(received.some(e=>e.type==='session.input_audio.append'),'server can audit media reflected by the API');
+  assert.deepEqual(commands.map(e=>e.type),['session.thinking.append'],'no second session.start or audio stream');
+  assert.equal((await live.close()).finalized,true);
+  assert.equal(budget.summary().committedUsd,15*RATE_PER_SECOND);
+});
+
+test('canceling WebRTC startup aborts the HTTP request and permits clean shutdown', async t => {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'fd-live-cancel-'));
+  let arrived; const requested=new Promise(resolve=>arrived=resolve);
+  const server=http.createServer(()=>arrived());
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const live=new LiveSession({apiKey:'fake',budget:new Budget(path.join(dir,'budget.json')),url:`ws://127.0.0.1:${server.address().port}`});
+  t.after(()=>{live.abort('cleanup');server.closeAllConnections();server.close();fs.rmSync(dir,{recursive:true,force:true});});
+  const starting=live.start('offer');
+  const rejected=assert.rejects(starting,/abort/i);
+  await requested;
+  assert.equal((await live.close('operator canceled')).finalized,false);
+  await rejected;
+  assert.equal(live.state,'closed');
+  assert.equal(live.ws,undefined);
 });

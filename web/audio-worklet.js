@@ -1,6 +1,7 @@
 class DuplexAudio extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super(); this.packet = new Int16Array(480); this.offset = 0; this.muted = false;
+    this.nativeMedia = options?.processorOptions?.transport === 'webrtc';
     this.queue = []; this.queueOffset = 0; this.queuedSamples = 0; this.ticks = 0;
     this.playbackWaitSamples = 0;
     this.inputPower = 0; this.outputPower = 0; this.levelSamples = 0;
@@ -22,7 +23,9 @@ class DuplexAudio extends AudioWorkletProcessor {
     };
   }
   process(inputs, outputs) {
-    const input = inputs[0]?.[0]; const output = outputs[0][0];
+    const input = inputs[0]?.[0]; const output = outputs[this.nativeMedia ? 1 : 0][0];
+    const remote = inputs[1]?.[0];
+    const microphoneOutput = this.nativeMedia ? outputs[0][0] : null;
     let rawPower = 0;
     for (let i = 0; i < output.length; i++) rawPower += (this.muted ? 0 : (input?.[i] ?? 0)) ** 2;
     const rawRms = Math.sqrt(rawPower / output.length);
@@ -36,12 +39,16 @@ class DuplexAudio extends AudioWorkletProcessor {
       const sample = this.muted || !gateOpen ? 0 : (input?.[i] ?? 0);
       const sent = Math.round(Math.max(-1, Math.min(1, sample)) * (sample < 0 ? 32768 : 32767));
       this.inputPower += (sent / 32768) ** 2;
-      this.packet[this.offset++] = sent;
-      if (this.offset === this.packet.length) {
-        const pcm = this.packet.buffer;
-        this.port.postMessage({ type: 'input', pcm }, [pcm]); this.packet = new Int16Array(480); this.offset = 0;
+      if (microphoneOutput) microphoneOutput[i] = sent / 32768;
+      else {
+        this.packet[this.offset++] = sent;
+        if (this.offset === this.packet.length) {
+          const pcm = this.packet.buffer;
+          this.port.postMessage({ type: 'input', pcm }, [pcm]); this.packet = new Int16Array(480); this.offset = 0;
+        }
       }
-      if (this.queue.length && !buffering) {
+      if (this.nativeMedia) output[i] = remote?.[i] ?? 0;
+      else if (this.queue.length && !buffering) {
         output[i] = this.queue[0][this.queueOffset++] / 32768; this.queuedSamples--;
         if (this.queueOffset === this.queue[0].length) { this.queue.shift(); this.queueOffset = 0; }
       } else output[i] = 0;

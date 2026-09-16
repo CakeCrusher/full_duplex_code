@@ -4,6 +4,7 @@ const $ = id => document.getElementById(id);
 const token = location.hash.slice(1) || sessionStorage.getItem('fd-voice-token');
 if (location.hash) { sessionStorage.setItem('fd-voice-token', token); history.replaceState(null, '', location.pathname); }
 let ws, context, stream, node, mic, active = false, starting = false, muted = false, currentStatus;
+let peer, remote, remoteAudio, microphoneDestination;
 let generation = 0;
 const timeline = new TimelineView();
 const speakingNames = ['Quiet', 'Milestones', 'Walkthrough'];
@@ -56,6 +57,9 @@ function handle(event) {
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
   if (event.type === 'history') for (const item of event.events) handle(item);
   if (event.type === 'fault') { notice(event.message); if (starting && !active) { starting = false; releaseAudio(); } }
+  if (event.type === 'voice_answer' && peer) {
+    peer.setRemoteDescription({ type: 'answer', sdp: event.sdp }).catch(error => { notice(error.message); stop(); });
+  }
   if (event.type === 'voice_started') {
     node?.port.postMessage({ type: 'audit_start', sessionId: event.sessionId });
     active = true; starting = false; notice('');
@@ -95,7 +99,8 @@ async function start() {
     } finally { clearTimeout(permissionTimer); }
     if (attempt !== generation) { stream.getTracks().forEach(track => track.stop()); return; }
     await context.audioWorklet.addModule('/audio-worklet.js');
-    node = new AudioWorkletNode(context, 'duplex-audio', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+    if (attempt !== generation) return;
+    node = new AudioWorkletNode(context, 'duplex-audio', { numberOfInputs: 2, numberOfOutputs: 2, outputChannelCount: [1, 1], processorOptions: { transport: 'webrtc' } });
     node.port.postMessage({ type: 'gate', threshold: Number($('microphone-gate').value) });
     ws.send(JSON.stringify({ type: 'microphone_gate', threshold: Number($('microphone-gate').value) }));
     const audioEpoch = Date.now() - context.currentTime * 1000;
@@ -117,9 +122,40 @@ async function start() {
         if (data.backlogMs > 2000) { notice('Audio playback fell behind. Please reconnect.'); stop(); }
       }
     };
-    mic = context.createMediaStreamSource(stream); mic.connect(node); node.connect(context.destination);
+    // WebRTC owns decoding, jitter buffering and continuous playback. The
+    // worklet gates the outgoing microphone and measures the decoded speaker
+    // track without scheduling, splicing or cutting generated speech.
+    mic = context.createMediaStreamSource(stream); mic.connect(node, 0, 0);
+    microphoneDestination = context.createMediaStreamDestination();
+    node.connect(microphoneDestination, 0, 0); node.connect(context.destination, 1, 0);
+    const connection = peer = new RTCPeerConnection();
+    connection.ontrack = event => {
+      if (peer !== connection || !context || !node) return;
+      const received = new MediaStream([event.track]);
+      // Chrome starts the WebRTC receiver's playout clock through a media
+      // element. Keep that element silent: the measured worklet is the only
+      // audible output, so the same track cannot play twice.
+      remoteAudio = new Audio(); remoteAudio.srcObject = received; remoteAudio.muted = true;
+      remoteAudio.play().catch(error => { notice(error.message); stop(); });
+      remote = context.createMediaStreamSource(received); remote.connect(node, 0, 1);
+    };
+    connection.onconnectionstatechange = () => {
+      if (peer === connection && connection.connectionState === 'failed') { notice('The voice media connection failed. Start voice again to reconnect.'); stop(); }
+    };
+    for (const track of microphoneDestination.stream.getAudioTracks()) connection.addTrack(track, microphoneDestination.stream);
+    connection.createDataChannel('oai-events');
+    await connection.setLocalDescription(await connection.createOffer());
+    if (connection.iceGatheringState !== 'complete') await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { connection.removeEventListener('icegatheringstatechange', changed); reject(new Error('Voice network setup timed out. Try again.')); }, 10000);
+      function changed() {
+        if (connection.iceGatheringState !== 'complete') return;
+        clearTimeout(timer); connection.removeEventListener('icegatheringstatechange', changed); resolve();
+      }
+      connection.addEventListener('icegatheringstatechange', changed); changed();
+    });
+    if (attempt !== generation) return;
     muted = false; $('mute').textContent = 'Mute microphone'; $('mute').setAttribute('aria-pressed', 'false');
-    ws.send(JSON.stringify({ type: 'start' }));
+    ws.send(JSON.stringify({ type: 'start', sdp: connection.localDescription.sdp }));
     $('stop').disabled = false; $('audioState').textContent = 'Connecting voice…';
   } catch (error) { if (attempt !== generation) return; releaseAudio(); notice(error.name === 'NotAllowedError' ? 'Allow microphone access in Chrome, then click Start voice.' : error.message); if (currentStatus) handle(currentStatus); }
 }
@@ -127,6 +163,9 @@ function releaseAudio() {
   if (node && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'audio_stopped' }));
   generation++;
   active = false; starting = false; stream?.getTracks().forEach(track => track.stop()); stream = null;
+  peer?.close(); peer = null; remote?.disconnect(); remote = null;
+  remoteAudio?.pause(); if (remoteAudio) remoteAudio.srcObject = null; remoteAudio = null;
+  microphoneDestination?.stream.getTracks().forEach(track => track.stop()); microphoneDestination = null;
   mic?.disconnect(); mic = null; node?.disconnect(); node = null; context?.close().catch(() => {}); context = null;
   $('mute').disabled = true; $('stop').disabled = true; $('audioState').textContent = 'Microphone off'; $('level').value = 0;
   $('gate-state').textContent = 'Microphone off';

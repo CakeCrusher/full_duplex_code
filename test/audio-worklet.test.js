@@ -93,3 +93,28 @@ test('80 ms playback lead-in joins jittered short chunks without losing, mixing 
   const secondStart = f.rendered.length; f.run(0, 20);
   assert.deepEqual(f.rendered.slice(secondStart).filter(x => x !== 0).map(x => Math.round(x * 32768)), [901, -902, 903], 'a lone tiny clip never waits for a following chunk');
 });
+
+test('native media gates the outgoing track and passes incoming speech unchanged, simultaneously', () => {
+  let Processor; const messages = [];
+  const context = vm.createContext({ AudioWorkletProcessor: class { constructor() { this.port = { postMessage: e => messages.push(e) }; } },
+    registerProcessor: (_name, type) => { Processor = type; }, sampleRate: 24000, currentTime: 0 });
+  vm.runInContext(fs.readFileSync(new URL('../web/audio-worklet.js', import.meta.url), 'utf8'), context);
+  const processor = new Processor({processorOptions:{transport:'webrtc'}});
+  processor.port.onmessage({data:{type:'audit_start',sessionId:'native-test'}});
+  const incoming = Float32Array.from({length:128}, (_,i)=>Math.sin(i*.2)*.25);
+  const outgoing = new Float32Array(128), speaker = new Float32Array(128);
+  const step = amplitude => processor.process([[new Float32Array(128).fill(amplitude)],[incoming]], [[outgoing],[speaker]]);
+  step(.004);
+  assert.ok(outgoing.every(x=>x===0), 'subthreshold whisper never reaches the media track');
+  assert.deepEqual(speaker,incoming, 'incoming speech is neither queued nor spliced');
+  processor.port.onmessage({data:{type:'gate',threshold:.002}});
+  step(.004);
+  assert.ok(outgoing.every(x=>x>0), 'lowering the gate passes the same whisper');
+  assert.deepEqual(speaker,incoming, 'speaking and listening happen simultaneously');
+  processor.port.onmessage({data:{type:'mute',muted:true}});
+  step(.5);
+  assert.ok(outgoing.every(x=>x===0));
+  assert.deepEqual(speaker,incoming, 'mute only affects the microphone');
+  assert.equal(messages.filter(e=>e.type==='input').length,0, 'no second microphone stream over the control socket');
+  assert.deepEqual([...new Int16Array(messages.at(-1).pcm)], [...incoming].map(x=>Math.round(x*32768)), 'audit measures the speaker track');
+});

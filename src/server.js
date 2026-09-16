@@ -189,7 +189,7 @@ export class Harness {
       }
       try {
         const event = JSON.parse(raw.toString());
-        if (event.type === 'start') this.startLive().catch(error => this.fault(error));
+        if (event.type === 'start') this.startLive(event.sdp).catch(error => this.fault(error));
         if (event.type === 'stop') this.live?.close('operator ended voice');
         if (event.type === 'mute') this.log({ type: 'voice.mute', muted: Boolean(event.muted) });
         if (event.type === 'microphone_gate' && Number.isFinite(event.threshold) && event.threshold >= 0 && event.threshold <= .05) this.log({ type: 'voice.microphone_gate', threshold: event.threshold });
@@ -217,7 +217,8 @@ export class Harness {
     ws.on('error', error => this.fault(error));
     ws.on('close', () => { if (this.browser === ws) { this.browser = null; if (this.stopping) return; this.publish({ type: 'audio_stopped' }); this.saveTimeline(); this.live?.close('voice client disconnected'); } });
   }
-  async startLive() {
+  async startLive(sdp) {
+    if (sdp !== undefined && (typeof sdp !== 'string' || !sdp.trim() || Buffer.byteLength(sdp) > 65536)) throw new Error('Invalid voice connection offer.');
     if (this.live && this.live.state !== 'closed') return;
     if (!this.channelReady) throw new Error('Wait for the voice channel to connect in the Claude terminal.');
     if (this.observer.state === 'exited') throw new Error('The Claude session has exited.');
@@ -235,6 +236,7 @@ export class Harness {
     this.mediator = new Mediator({ live, observer: this.observer, initialObservationCount: history.count, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
     this.publish(this.status());
     live.on('fault', error => this.fault(error));
+    live.on('answer', sdp => this.publish({ type: 'voice_answer', sdp }));
     live.on('sent', event => {
       if (/^session\.(thinking|commentary|instructions)\.append$/.test(event.type)) this.publish({ type: 'context_sent', id: event.event_id, kind: event.type.split('.')[1], text: event.content, notification: event });
     });
@@ -242,9 +244,14 @@ export class Harness {
       if (event.type === 'session.output_audio.delta') {
         const pcm = Buffer.from(event.delta, 'base64');
         this.audit?.write('output', pcm, { startMs: event.start_ms, endMs: event.end_ms });
+        if (live.transport === 'webrtc') return; // The browser plays the negotiated media track.
         if (this.browser?.readyState !== WebSocket.OPEN) return;
         if (this.browser.bufferedAmount > 1024 * 1024) return live.close('Audio playback connection too slow');
         this.browser.send(pcm);
+      }
+      if (event.type === 'session.input_audio.append' && live.transport === 'webrtc') {
+        this.lastAudioAt = Date.now();
+        this.audit?.write('input', Buffer.from(event.audio, 'base64'));
       }
       if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
       if (event.type === 'session.started') {
@@ -257,7 +264,7 @@ export class Harness {
     });
     live.on('closed', result => { clearInterval(this.audioWatchdog); this.mediator?.stop(); this.publish({ type: 'voice_closed', ...result }); this.publish(this.status()); this.saveTimeline(); });
     this.lastAudioAt = Date.now();
-    await live.start();
+    await live.start(sdp);
     this.audioWatchdog = setInterval(() => { if (Date.now() - this.lastAudioAt > 5000) live.close('Microphone audio stream stopped'); }, 1000);
     await preferenceReady;
     if (this.speakingLevel !== 0 && live.state === 'active') await live.greet();

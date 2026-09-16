@@ -31,7 +31,7 @@ export class LiveSession extends EventEmitter {
     this.state = 'new'; this.pending = new Map(); this.usageSeconds = 0;
     this.closed = new Promise(resolve => { this.resolveClosed = resolve; });
   }
-  async start() {
+  async start(sdp) {
     if (this.state !== 'new') throw new Error('Session already started');
     try {
       if (!this.apiKey) throw new Error('OPENAI_API_KEY is missing');
@@ -44,11 +44,32 @@ export class LiveSession extends EventEmitter {
       throw error;
     }
     this.state = 'connecting';
-    this.ws = new WebSocket(this.url, { headers: { Authorization: `Bearer ${this.apiKey}` }, handshakeTimeout: 15000, maxPayload: 4 * 1024 * 1024 });
+    this.transport = sdp ? 'webrtc' : 'websocket';
+    let answer;
+    let socketUrl = this.url;
+    if (sdp) {
+      this.creation = new AbortController();
+      try {
+        const response = await fetch(this.url.replace(/^ws/, 'http'), {
+          method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session: { model: 'gpt-live-1', instructions: this.instructions, input: this.input,
+            audio: { output: { voice: this.voice } }, delegation: { type: 'client' }, store: false },
+          transport: { type: 'webrtc', sdp } }),
+          signal: AbortSignal.any([this.creation.signal, AbortSignal.timeout(15000)]),
+        });
+        if (!response.ok) throw new Error(`OpenAI voice connection failed (HTTP ${response.status}).`);
+        answer = await response.json();
+        if (!answer.session?.id || !answer.transport?.sdp) throw new Error('OpenAI returned an incomplete voice connection.');
+        this.id = answer.session.id;
+        socketUrl = `${this.url}/${encodeURIComponent(this.id)}/attach`;
+      } catch (error) { this.finish(false); throw error; }
+      if (this.state === 'closed') throw new Error('Voice startup canceled');
+    }
+    this.ws = new WebSocket(socketUrl, { headers: { Authorization: `Bearer ${this.apiKey}` }, handshakeTimeout: 15000, maxPayload: 4 * 1024 * 1024 });
     this.hardTimer = setTimeout(() => this.abort('maximum lifetime'), (this.maxSeconds + 30) * 1000);
     const ready = new Promise((resolve, reject) => { this.resolveReady = resolve; this.rejectReady = reject; });
     this.startTimer = setTimeout(() => this.abort('session startup timed out'), 20000);
-    this.ws.on('open', () => this.ws.send(JSON.stringify({ type: 'session.start', event_id: randomUUID(), session: {
+    this.ws.on('open', () => answer ? this.emit('answer', answer.transport.sdp) : this.ws.send(JSON.stringify({ type: 'session.start', event_id: randomUUID(), session: {
       model: 'gpt-live-1', instructions: this.instructions, input: this.input,
       audio: { format: { type: 'audio/pcm', rate: SAMPLE_RATE }, output: { voice: this.voice } },
       delegation: { type: 'client' }, store: false,
@@ -62,7 +83,7 @@ export class LiveSession extends EventEmitter {
     return ready;
   }
   receive(event) {
-    if (event.type !== 'session.output_audio.delta') this.log({ direction: 'received', ...event });
+    if (!['session.output_audio.delta', 'session.input_audio.append'].includes(event.type)) this.log({ direction: 'received', ...event });
     if (event.type === 'session.started') {
       clearTimeout(this.startTimer); this.state = 'active'; this.id = event.session.id; this.startedAt = Date.now();
       this.budget.update(this.reservation, 0, { sessionId: this.id });
@@ -93,6 +114,7 @@ export class LiveSession extends EventEmitter {
     this.emit('sent', event);
   }
   audio(pcm) {
+    if (this.transport === 'webrtc') throw new Error('WebRTC microphone audio must use the media track.');
     if (this.state !== 'active') return;
     if (pcm.length % 2) throw new Error('PCM must contain complete 16-bit samples');
     const audioSeconds = ((this.audioBytes ?? 0) + pcm.length) / (SAMPLE_RATE * 2);
@@ -128,6 +150,7 @@ export class LiveSession extends EventEmitter {
   abort(reason) {
     if (this.state === 'closed') return;
     this.log({ type: 'bridge.aborted', reason });
+    this.creation?.abort();
     this.rejectReady?.(new Error(reason));
     this.ws?.terminate(); this.finish(false);
   }

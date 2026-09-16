@@ -58,7 +58,7 @@ try {
   browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1150 }, reducedMotion: 'reduce' });
   // Exercise the real audio worklet with a virtual microphone, without Claude
-  // or OpenAI: synthesized tone in, actual PCM playback out.
+  // or OpenAI: two actual WebRTC peers, with synthesized audio in both directions.
   await page.addInitScript(() => {
     navigator.mediaDevices.getUserMedia = async constraints => {
       window.__microphoneConstraints = constraints;
@@ -132,13 +132,42 @@ try {
   }
   fs.unlinkSync(`${harness.budget.file}.lock`);
   assert.match(await page.locator('#budget').textContent(), /Estimated total \$30\.00/);
-  let inputBytes = 0; const inputFrames = [];
-  harness.startLive = async () => {
+  const inputFrames = [];
+  const other = await browser.newPage();
+  await other.goto(harness.baseUrl + '/');
+  await other.exposeFunction('measureInput', rms => inputFrames.push(rms));
+  harness.startLive = async sdp => {
     harness.audit = new AudioAudit({ dir: path.join(dir,'audio'), log:harness.log, onError:error=>errors.push(error.message) });
-    harness.live = { instructions:liveInstructions(harness.speakingLevel), append:(kind,text)=>{harness.__preference={kind,text};return new Promise(resolve=>{harness.__ackPreference=resolve;});}, id: 'offline-audio', state: 'active', usageSeconds: 0, audio: buffer => { inputBytes += buffer.length; inputFrames.push(Buffer.from(buffer)); }, close: async () => {
+    harness.live = { instructions:liveInstructions(harness.speakingLevel), append:(kind,text)=>{harness.__preference={kind,text};return new Promise(resolve=>{harness.__ackPreference=resolve;});}, id: 'offline-audio', state: 'active', usageSeconds: 0, audio: () => { throw new Error('Browser sent microphone through the control socket'); }, close: async () => {
       harness.live.state = 'closed'; publish({ type: 'voice_closed', finalized: true }); publish(harness.status());
     } };
-    harness.speakingUpdate = { state: 'acknowledged', level: harness.speakingLevel, confirmedLevel: harness.speakingLevel, source: 'startup' };
+    const answer = await other.evaluate(async sdp => {
+      const audio = new AudioContext({sampleRate:24000}); await audio.resume();
+      const peer = new RTCPeerConnection();
+      const destination = audio.createMediaStreamDestination();
+      const source = audio.createOscillator(); source.frequency.value = 440;
+      const gain = audio.createGain(); gain.gain.value = 0;
+      source.connect(gain); gain.connect(destination); source.start();
+      destination.stream.getTracks().forEach(track => peer.addTrack(track,destination.stream));
+      peer.ontrack = event => {
+        const stream = new MediaStream([event.track]);
+        const player=window.__receiverPlayer=new Audio();player.srcObject=stream;player.muted=true;player.play();
+        const remote = audio.createMediaStreamSource(stream);
+        const meter = audio.createScriptProcessor(2048,1,1);
+        meter.onaudioprocess = e => {
+          const data=e.inputBuffer.getChannelData(0);
+          window.measureInput(Math.sqrt(data.reduce((sum,v)=>sum+v*v,0)/data.length));
+        };
+        remote.connect(meter); meter.connect(audio.destination);
+      };
+      await peer.setRemoteDescription({type:'offer',sdp});
+      await peer.setLocalDescription(await peer.createAnswer());
+      if(peer.iceGatheringState!=='complete')await new Promise(resolve=>peer.onicegatheringstatechange=()=>{if(peer.iceGatheringState==='complete')resolve()});
+      window.__remote={audio,peer,gain};
+      return peer.localDescription.sdp;
+    },sdp);
+    publish({type:'voice_answer',sdp:answer});
+    harness.speakingUpdate = { state: 'acknowledged' , level: harness.speakingLevel, confirmedLevel: harness.speakingLevel, source: 'startup' };
     publish({ type: 'voice_started', sessionId: 'offline-audio' }); publish(harness.status());
   };
   await page.locator('#speaking-level').fill('0');
@@ -147,9 +176,9 @@ try {
   await waitFor(()=>harness.speakingLevel===0,'Quiet preference received');
   await page.getByRole('button', { name: 'Start voice', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#audioState').textContent === 'Microphone on');
-  await waitFor(() => inputBytes > 0, 'real worklet sent microphone PCM');
+  await waitFor(() => inputFrames.length > 3, 'remote peer received real gated microphone audio');
   await new Promise(resolve => setTimeout(resolve, 350));
-  assert.ok(inputFrames.every(frame => frame.every(byte => byte === 0)), 'quiet virtual whisper is zeroed before the server sees it');
+  assert.ok(inputFrames.every(rms => rms < 0.00001), 'quiet virtual whisper is zeroed before the server sees it');
   assert.ok(!harness.timeline.snapshot().items.some(i => i.track === 'operator' && i.start > now), 'blocked whisper makes no operator bar');
   assert.match(await page.locator('#gate-state').textContent(), /Gate closed/);
   assert.equal(await page.evaluate(() => window.__microphoneConstraints.audio.autoGainControl), false);
@@ -171,7 +200,7 @@ try {
   await page.locator('#microphone-gate').fill('0.001');
   await page.locator('#microphone-gate').dispatchEvent('input');
   await page.locator('#microphone-gate').dispatchEvent('change');
-  await waitFor(() => inputFrames.at(-1).some(byte => byte !== 0), 'lower gate passes the same virtual whisper');
+  await waitFor(() => inputFrames.at(-1) > .0005, 'lower gate passes the same virtual whisper').catch(async error => { console.log({inputFrames:inputFrames.slice(-10),gate:await page.locator('#gate-state').textContent(),rtc:await other.evaluate(async()=>Array.from((await window.__remote.peer.getStats()).values()).filter(s=>s.type==='inbound-rtp'))}); throw error; });
   await waitFor(() => harness.timeline.snapshot().items.some(i => i.track === 'operator' && i.start > now), 'accepted whisper appears on Gantt');
   await page.waitForFunction(() => document.querySelector('#gate-state').textContent.includes('Passing audio'));
   if (artifacts) await page.screenshot({ path: path.join(artifacts, 'whisper-passing.png'), fullPage: true });
@@ -179,21 +208,18 @@ try {
   await page.locator('#microphone-gate').dispatchEvent('input');
   await page.locator('#microphone-gate').dispatchEvent('change');
   await waitFor(()=>fs.existsSync(path.join(dir,'audio','microphone.wav')),'pre-gate microphone recording exists');
-  await waitFor(() => inputFrames.at(-1).every(byte => byte === 0), 'raising the gate blocks the whisper again');
+  await waitFor(() => inputFrames.at(-1) < .00001, 'raising the gate blocks the whisper again');
   await waitFor(() => harness.timeline.audio.get('operator')?.active === false, 'operator bar ends after the gate closes');
   await page.waitForFunction(() => document.querySelector('#gate-state').textContent.includes('Gate closed'));
   if (artifacts) await page.screenshot({ path: path.join(artifacts, 'whisper-blocked.png'), fullPage: true });
   await page.evaluate(() => { window.__virtualAudio.gain.gain.value = .15; });
-  await waitFor(() => inputFrames.at(-1).some(byte => byte !== 0), 'normal voice crosses the higher gate');
-  const playback = new Int16Array(12000);
-  for (let i = 0; i < playback.length; i++) playback[i] = Math.sin(i / 24000 * Math.PI * 2 * 440) * 8000;
-  harness.audit.write('output',Buffer.from(playback.buffer));
-  harness.browser.send(Buffer.from(playback.buffer, 0, 960));
-  await new Promise(resolve => setTimeout(resolve, 30));
-  harness.browser.send(Buffer.from(playback.buffer, 960, 1920));
-  await new Promise(resolve => setTimeout(resolve, 25));
-  harness.browser.send(Buffer.from(playback.buffer, 2880));
-  await waitFor(() => harness.timeline.snapshot().items.some(i => i.track === 'speech' && i.start > now), 'jittered playback reached the chart');
+  await waitFor(() => inputFrames.at(-1) > .0005, 'normal voice crosses the higher gate');
+  await other.evaluate(() => {
+    const {gain,audio}=window.__remote;
+    gain.gain.setValueAtTime(.244,audio.currentTime);
+    gain.gain.setValueAtTime(0,audio.currentTime+.5);
+  });
+  await waitFor(() => harness.timeline.snapshot().items.some(i => i.track === 'speech' && i.start > now), 'native playback reached the chart');
   const measured = harness.timeline.snapshot().items.filter(i => i.start > now);
   assert.ok(measured.some(i => i.track === 'operator'), 'actual microphone measurement reached chart');
   assert.ok(measured.some(i => i.track === 'speech'), 'actual rendered playback reached chart');
@@ -203,8 +229,9 @@ try {
   await page.getByRole('button', { name: 'End voice', exact: true }).click();
   await new Promise(resolve=>setTimeout(resolve,100));
   const recorded = fs.readFileSync(path.join(dir,'audio','playback.wav')).subarray(44);
-  const nonzero = bytes => [...new Int16Array(bytes.buffer,bytes.byteOffset,bytes.length/2)].filter(x=>x!==0);
-  assert.deepEqual(nonzero(recorded),nonzero(Buffer.from(playback.buffer)), 'rendered recording retains every audible sample in order');
+  const samples = new Int16Array(recorded.buffer,recorded.byteOffset,recorded.length/2);
+  const audible = [...samples].filter(x=>Math.abs(x)>300).length/24000;
+  assert.ok(audible > .45 && audible < .6, `native playback preserved the half-second tone (${audible}s)`);
   assert.ok(fs.existsSync(path.join(dir,'timeline.json')), 'Gantt saved to disk');
   await page.reload();
   await page.getByRole('button', { name: /Claude hooks\. FileChanged/ }).waitFor();
@@ -212,5 +239,5 @@ try {
   assert.match(await page.locator('#prompt-state').textContent(), /Last voice session/);
   assert.ok(await page.locator('.timeline-item[data-track="speech"]').count() >= 1, 'audio history survives reload');
   assert.deepEqual(errors, []);
-  console.log('Timeline, preference acknowledgment, virtual whisper gate, exact jittered playback, mute and reload passed. No API spending.');
+  console.log('Timeline, preference acknowledgment, virtual whisper gate, native WebRTC playback, mute and reload passed. No API spending.');
 } finally { await browser?.close(); await harness.close(); fs.rmSync(dir, { recursive: true, force: true }); }
