@@ -5,7 +5,7 @@ import { startTestHarness, synthesize, connectTestVoice, until, delay } from './
 
 // Real terminal Claude and real Live audio. All work stays in a throwaway repo.
 const question = synthesize('selective-current', 'What is the current result? Are all seven steps finished?');
-const test = await startTestHarness('selective-updates', { maxSeconds: 120 });
+const test = await startTestHarness('selective-updates');
 let voice;
 const evidence = { passed: false };
 try {

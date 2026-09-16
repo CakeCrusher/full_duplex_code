@@ -20,7 +20,7 @@ async function fixture(t, onCommand) {
     } else onCommand(ws, event);
   }));
   const budget = new Budget(path.join(dir, 'budget.json'));
-  const live = new LiveSession({ apiKey: 'fake-test-key', budget, maxSeconds: 15, url: `ws://127.0.0.1:${server.address().port}` });
+  const live = new LiveSession({ apiKey: 'fake-test-key', budget, url: `ws://127.0.0.1:${server.address().port}` });
   t.after(async () => { live.abort('test cleanup'); for (const ws of server.clients) ws.terminate(); await new Promise(resolve => server.close(resolve)); fs.rmSync(dir, { recursive: true, force: true }); });
   return { live, budget };
 }
@@ -46,7 +46,7 @@ test('a transport loss preserves the full reservation without inventing final us
   const result = await live.closed;
   assert.equal(result.finalized, false); assert.equal(budget.summary().committedUsd, reserved);
 });
-test('accelerated audio cannot outrun the reserved duration', async t => {
+test('microphone audio must stay paced in real time', async t => {
   const { live } = await fixture(t, (ws, event) => {
     if (event.type === 'session.close') ws.send(JSON.stringify({ type: 'session.closed', usage: { seconds: 0 }, reason: 'close_requested', session: { id: 'test-live' } }));
   });
@@ -114,7 +114,7 @@ test('WebRTC negotiates media by HTTP and uses the sideband only for control and
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const budget=new Budget(path.join(dir,'budget.json'));
-  const live=new LiveSession({apiKey:'fake-test-key',budget,maxSeconds:20,url:`ws://127.0.0.1:${server.address().port}/v1/live/sessions`});
+  const live=new LiveSession({apiKey:'fake-test-key',budget,url:`ws://127.0.0.1:${server.address().port}/v1/live/sessions`});
   t.after(async()=>{live.abort('cleanup');for(const ws of sockets.clients)ws.terminate();sockets.close();await new Promise(resolve=>server.close(resolve));fs.rmSync(dir,{recursive:true,force:true});});
   let answer; live.on('answer',sdp=>answer=sdp); live.on('event',e=>received.push(e));
   await live.start('offer-sdp');
@@ -149,8 +149,8 @@ test('canceling WebRTC startup aborts the HTTP request and permits clean shutdow
 
 test('an active voice connection has no automatic duration cutoff', async t => {
   const { live } = await fixture(t, () => {});
-  await live.start();
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  await live.start();
   t.mock.timers.tick(4 * 60 * 60 * 1000);
   assert.equal(live.state, 'active');
   assert.equal(live.durationTimer, undefined);

@@ -5,7 +5,7 @@ import { startTestHarness, synthesize, connectTestVoice, until, delay } from './
 
 const request = synthesize('create-file', 'Please ask Claude to create a file named hello dot text containing the words voice bridge works. Then read it back and tell me when it is done.');
 const status = synthesize('cached-status', 'What did Claude just finish?');
-const test = await startTestHarness('integration', { maxSeconds: 150 });
+const test = await startTestHarness('integration');
 let voice;
 try {
   // Verify the actual headed channel before spending on voice.

@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 import { startTestHarness, synthesize, until, delay } from './test-support.mjs';
 
 const fixture = synthesize('browser-greeting', 'Hello, are you ready to help me with my coding agent?');
-const test = await startTestHarness('browser', { maxSeconds: 60 });
+const test = await startTestHarness('browser');
 let browser, page;
 try {
   browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });

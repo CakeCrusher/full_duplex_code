@@ -21,7 +21,7 @@ export async function startTestHarness(label, options = {}) {
   const sessionId = options.sessionId ?? randomUUID(); const runDir = path.join(root, '.runs', `${label}-${Date.now()}`);
   const cwd = options.cwd ?? path.join(runDir, 'workspace'); fs.mkdirSync(cwd, { recursive: true });
   spawnSync('git', ['init', '--quiet'], { cwd });
-  const harness = await new Harness({ root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY, maxSeconds: options.maxSeconds ?? 240, ...options }).start();
+  const harness = await new Harness({ root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY, ...options }).start();
   const env = { ...process.env, FD_BRIDGE_TOKEN: harness.channelToken, TERM: 'xterm-256color' }; delete env.OPENAI_API_KEY;
   // The test agent only needs local file work and Node test commands. The headed
   // production launcher retains the operator's ordinary Claude permissions.

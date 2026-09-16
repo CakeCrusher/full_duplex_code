@@ -6,7 +6,7 @@ import { startTestHarness, synthesize, connectTestVoice, until, delay } from './
 const portQuestion = synthesize('hook-port', 'What support port did Claude read from the settings file?');
 const resultQuestion = synthesize('hook-result', 'What release name did Claude change the settings to, and how many records did the check command report?');
 const newWork = synthesize('hook-new-work', 'Ask Claude to create a file named ready dot text containing the word ready.');
-const test = await startTestHarness('hook-context', { maxSeconds: 180 });
+const test = await startTestHarness('hook-context');
 fs.writeFileSync(path.join(test.cwd, 'settings.json'), JSON.stringify({ release: 'COPPER', supportPort: 4317 }, null, 2));
 fs.writeFileSync(path.join(test.cwd, 'check.mjs'), 'console.log("Records checked: 731");\n');
 let voice;

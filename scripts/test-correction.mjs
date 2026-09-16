@@ -7,7 +7,7 @@ import { startTestHarness, synthesize, connectTestVoice, until, delay } from './
 const build = synthesize('build-calculator', 'Ask Claude to run node slow build dot m j s, with a command timeout of forty five seconds so it stays in the foreground. Then create a JavaScript calculator module exporting an add function for two numbers. Write and run its tests. After testing, explain the design in twelve short numbered lines.');
 const correction = synthesize('correct-calculator', 'Change the calculator requirement. The add function must accept numeric strings as well as numbers, and reject invalid input with a Type Error. Make sure those cases are tested.');
 const overlap = synthesize('overlap-calculator', 'I am still here and thinking about the next step. Keep the calculator small and focused. You can finish explaining what Claude has done while I take a moment to think.');
-const test = await startTestHarness('correction', { maxSeconds: 240 });
+const test = await startTestHarness('correction');
 fs.writeFileSync(path.join(test.cwd, 'slow-build.mjs'), 'import fs from "node:fs"; fs.writeFileSync("slow-build-started.json", JSON.stringify({at:Date.now()})); console.log("slow build started"); await new Promise(resolve => setTimeout(resolve, 25000)); fs.writeFileSync("slow-build-ended.json", JSON.stringify({at:Date.now()})); console.log("slow build finished");\n');
 let voice;
 const readEvents = () => fs.readFileSync(path.join(test.runDir, 'events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));

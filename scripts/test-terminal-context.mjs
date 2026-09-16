@@ -42,7 +42,7 @@ async function endVoice(label) {
 }
 
 try {
-  test = await startTestHarness('terminal-context', { maxSeconds: 180 }); evidence.runDirs.push(test.runDir);
+  test = await startTestHarness('terminal-context'); evidence.runDirs.push(test.runDir);
   // The answer to this question appears only in the terminal input, not Claude's reply.
   await typed('Remember that our project codename is ORCHID. Respond to this message with the single word ACKNOWLEDGED.', /^ACKNOWLEDGED\s*$/);
   await openVoice();
@@ -59,7 +59,7 @@ try {
   const sessionId = test.harness.sessionId; const cwd = test.cwd;
   await test.close(); test = null;
 
-  test = await startTestHarness('terminal-context-resume', { sessionId, cwd, resume: true, maxSeconds: 90 }); evidence.runDirs.push(test.runDir);
+  test = await startTestHarness('terminal-context-resume', { sessionId, cwd, resume: true }); evidence.runDirs.push(test.runDir);
   assert.match(test.harness.observer.conversationContext(), /November/);
   assert.match(test.harness.observer.conversationContext(), /TULIP/);
   await openVoice();
