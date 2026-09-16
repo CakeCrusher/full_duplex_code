@@ -27,7 +27,10 @@ export class AudioAudit {
         file = { fd: fs.openSync(path.join(this.dir, `${track}.wav`), 'wx', 0o600), samples: 0 };
         this.tracks.set(track, file); fs.writeSync(file.fd, header(0), 0, 44, 0);
       }
-      const offset = metadata.offsetSamples ?? file.samples;
+      // The API can skip silent intervals between output deltas. Concatenating
+      // them squeezes the recording's clock and falsely looks like playback lag.
+      const apiOffset = track === 'output' && Number.isFinite(metadata.startMs) ? Math.round(metadata.startMs * RATE / 1000) : undefined;
+      const offset = metadata.offsetSamples ?? apiOffset ?? file.samples;
       // A missing browser packet is visible in the log and remains silence in
       // the recording; never silently squeeze time out of rendered playback.
       if (offset < file.samples || offset > file.samples + RATE * 5) throw new Error('Playback audit sample discontinuity');
