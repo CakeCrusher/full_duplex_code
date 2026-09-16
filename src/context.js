@@ -22,12 +22,35 @@ export function chunks(text, maxBytes = 440) {
   return output;
 }
 
+// Live accepts text context, not image/audio attachments. Keep complete hook
+// records in the observer and audit log, but never inject their base64 bytes as
+// prose. All ordinary text, code, tool results and attachment metadata remain.
+export function thinkingText(text) {
+  let data;
+  try { data = JSON.parse(text); } catch { return text; }
+  function visit(value) {
+    if (Array.isArray(value)) return value.map(visit);
+    if (!value || typeof value !== 'object') return value;
+    const result = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, visit(child)]));
+    if (['image', 'audio', 'document'].includes(value.type)) {
+      if (value.source?.type === 'base64' && typeof value.source.data === 'string') {
+        result.source = { ...value.source, data: `[${value.source.data.length} encoded characters retained in the local hook log; binary attachment is not visible to the voice model]` };
+      }
+      if (typeof value.data === 'string' && typeof value.mimeType === 'string') {
+        result.data = `[${value.data.length} encoded characters retained in the local hook log; binary attachment is not visible to the voice model]`;
+      }
+    }
+    return result;
+  }
+  return JSON.stringify(visit(data));
+}
+
 export function startupHistory(observations, maxBytes = 7000) {
   // Live's startup input is available immediately (unlike timed appends).
   // Leave room under its 8,192-token limit even with a conservative byte bound.
   let text = ''; let count = 0;
   for (const observation of observations) {
-    const next = `Claude Code observation (history):\n${observation.text}\n`;
+    const next = `Claude Code observation (history):\n${thinkingText(observation.text)}\n`;
     if (Buffer.byteLength(text) + Buffer.byteLength(next) > maxBytes) break;
     text += next; count++;
   }

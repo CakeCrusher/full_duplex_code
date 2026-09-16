@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chunks, ContextQueue, LineReader, VoiceHistory, redact, startupHistory } from '../src/context.js';
+import { chunks, ContextQueue, LineReader, VoiceHistory, redact, startupHistory, thinkingText } from '../src/context.js';
+
+test('binary attachments stay in raw hooks while Live receives metadata and all surrounding text', () => {
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'ABCxyz'.repeat(5000) } };
+  const hook = { hook_event_name: 'PostToolBatch', tool_calls: [{ tool_response: [{ type: 'text', text: 'Score 20; no console errors' }, image] }], code: 'const data = "ABCxyz";', future_field: 'preserved' };
+  const raw=JSON.stringify(hook), result=JSON.parse(thinkingText(raw));
+  assert.equal(hook.tool_calls[0].tool_response[1].source.data.length,30000);
+  assert.match(result.tool_calls[0].tool_response[1].source.data,/30000 encoded characters retained/);
+  assert.equal(result.tool_calls[0].tool_response[0].text,'Score 20; no console errors');
+  assert.equal(result.code,hook.code); assert.equal(result.future_field,'preserved');
+  assert.ok(thinkingText(raw).length<1000);
+  assert.equal(startupHistory([{text:raw}]).count,1,'restart history uses the same text representation');
+  assert.equal(thinkingText('ordinary plain text'),'ordinary plain text');
+  assert.equal(thinkingText(JSON.stringify({data:'x'.repeat(20000)})),JSON.stringify({data:'x'.repeat(20000)}),'ordinary data fields are not stripped');
+  assert.match(thinkingText(JSON.stringify({type:'image',mimeType:'image/png',data:'ABCxyz'.repeat(5000)})),/30000 encoded characters retained/);
+});
 
 test('context chunks preserve Unicode and stay below the append byte bound', () => {
   const text = 'Hello 世界 👋\n'.repeat(300);

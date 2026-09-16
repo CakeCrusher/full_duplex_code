@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ContextQueue, VoiceHistory } from './context.js';
+import { ContextQueue, VoiceHistory, thinkingText } from './context.js';
 
 export class Mediator {
   constructor({ live, observer, deliver, log, publish, clean, initialObservationCount = 0 }) {
@@ -19,7 +19,7 @@ export class Mediator {
     this.updateTimer = setInterval(() => this.flushUpdate(), 500);
   }
   forward(event, historical = false) {
-    this.context.add('thinking', `Claude Code observation${historical ? ' (history)' : ''}:\n${event.text}\n`);
+    this.context.add('thinking', `Claude Code observation${historical ? ' (history)' : ''}:\n${thinkingText(event.text)}\n`);
     // Keep every observation, but only one pending opportunity to speak. New
     // work replaces old progress; a display batch is never a narration command.
     if (!historical && !event.child && (event.assistant || ['MessageDisplay', 'PostToolBatch', 'Stop', 'StopFailure', 'PermissionRequest', 'PermissionDenied', 'Notification', 'Elicitation', 'SessionEnd'].includes(event.name))) {
