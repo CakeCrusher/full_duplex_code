@@ -15,7 +15,8 @@ function fixture(t, state = 'active', observer = new AgentObserver({ sessionId: 
   return { live, observer, mediator, appends, deliveries, hook };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
-const content = (f, kind) => f.appends.filter(e => !kind || e.kind === kind).map(e => e.kind === 'thinking' ? e.content.slice(BACKGROUND_REFERENCE.length) : e.content).join('');
+const unframe = text => text.slice(BACKGROUND_REFERENCE.length).replace(/^\[Claude [^\n]+\]\n/, '');
+const content = (f, kind) => f.appends.filter(e => !kind || e.kind === kind).map(e => e.kind === 'thinking' ? unframe(e.content) : e.content).join('');
 
 test('hooks are primary: all raw hooks, including assistant batches, are quiet thinking', async t => {
   const f = fixture(t);
@@ -101,7 +102,7 @@ test('startup observations are neither replayed twice nor dropped when some over
   const mediator = new Mediator({ live, observer, initialObservationCount: initial.count, log: () => {}, publish: () => {}, clean: String });
   t.after(() => { mediator.stop(); observer.close(); });
   await flush();
-  assert.equal(initial.text + appends.map(e => e.content.slice(BACKGROUND_REFERENCE.length)).join(''), observer.observations.map(o => `Claude Code observation (history):\n${o.text}\n`).join(''));
+  assert.equal(initial.text + appends.map(e => unframe(e.content)).join(''), observer.observations.map(o => `Claude Code observation (history):\n${o.text}\n`).join(''));
   assert.ok(appends.every(e => e.kind === 'thinking'));
 });
 

@@ -180,3 +180,29 @@ test('a preference changed during startup reaches the new conversation; Quiet ha
   assert.equal(h.status().speakingUpdate.source, 'startup');
   assert.equal(greetings, 0);
 });
+
+test('additional instructions preserve the base, show exact text, and wait for an ACK', async t => {
+  const h = await fixture(t);
+  await h.appendInstruction('Explain unfamiliar terms.');
+  assert.equal(h.status().prompt.additional[0].state, 'next_session');
+  assert.match(h.status().prompt.instructions, /Conversation priority:/);
+  assert.match(h.status().prompt.instructions, /Explain unfamiliar terms\./);
+  let resolve, reject; const sent=[];
+  const live=h.live={id:'one',state:'active',instructions:h.instructions(),append:(kind,text)=>{
+    sent.push({kind,text});return new Promise((yes,no)=>{resolve=yes;reject=no;});
+  },close:async()=>{live.state='closed';}};
+  const startup=live.instructions;
+  const pending=h.appendInstruction('Use an example about paper airplanes.');
+  assert.deepEqual(sent,[{kind:'instructions',text:'Use an example about paper airplanes.'}]);
+  assert.equal(h.status().prompt.additional.at(-1).state,'pending');
+  resolve();await pending;
+  assert.equal(h.status().prompt.additional.at(-1).state,'acknowledged');
+  assert.equal(h.status().prompt.instructions,startup,'startup prompt remains an exact record');
+  const failed=h.appendInstruction('Use metric units.');reject(new Error('test rejection'));await failed;
+  assert.equal(h.status().prompt.additional.at(-1).state,'failed');
+  const late=h.appendInstruction('Finish the explanation.');await live.close();resolve();await late;
+  assert.equal(h.status().prompt.additional.at(-1).state,'next_session','late ACK cannot confirm a closed session');
+  assert.match(h.instructions(),/Finish the explanation\./,'retained for the next connection');
+  await assert.rejects(h.appendInstruction(' '),/Enter/);
+  await assert.rejects(h.appendInstruction('x'.repeat(441)),/shorten/);
+});

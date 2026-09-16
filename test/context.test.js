@@ -157,3 +157,15 @@ test('startup context uses a complete chronological prefix and leaves overflow f
   assert.ok(Buffer.byteLength(history.text) <= 100);
   assert.equal(startupHistory(observations, 0).count, 0);
 });
+
+test('every fragment names its originating hook and reconstructs the full UTF-8 payload', async () => {
+  const sent=[];const live={state:'active',append:async(kind,text)=>sent.push({kind,text})};
+  const queue=new ContextQueue(live,error=>{throw error;});
+  const raw=JSON.stringify({hook_event_name:'PostToolUse',tool_response:'世界👋'.repeat(1000)});
+  queue.add('thinking',raw,null,'Claude PostToolUse');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(sent.length>1);
+  assert.ok(sent.every(e=>e.kind==='thinking'&&e.text.startsWith(BACKGROUND_REFERENCE+'[Claude PostToolUse; part ')));
+  assert.equal(sent.map(e=>e.text.slice(BACKGROUND_REFERENCE.length).replace(/^\[Claude PostToolUse; part \d+\/\d+\]\n/,'')).join(''),raw);
+  queue.stop();
+});

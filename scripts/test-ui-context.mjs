@@ -197,6 +197,17 @@ try {
   assert.equal(harness.live.instructions, liveInstructions(0), 'this connection started with Quiet');
   assert.equal(await page.locator('#prompt-preference').textContent(), harness.__preference.text, 'selected preference matches the actual instruction append');
   assert.match(await page.locator('#prompt-state').textContent(), /Current voice session/);
+  await page.locator('#live-prompt').evaluate(element => { element.open = true; });
+  const extraInstruction = 'Explain technical terms with a simple example.';
+  await page.locator('#instruction-text').fill(extraInstruction);
+  await page.locator('#instruction-append').click();
+  await waitFor(() => harness.__preference?.text === extraInstruction, 'additional instruction sent');
+  assert.equal(harness.__preference.kind, 'instructions');
+  await page.waitForFunction(() => document.querySelector('#instruction-history').textContent.includes('Applying'));
+  assert.equal(await page.locator('#instruction-history pre').textContent(), extraInstruction);
+  harness.__ackPreference();
+  await page.waitForFunction(() => document.querySelector('#instruction-history').textContent.includes('Live acknowledged'));
+  assert.equal(await page.locator('#prompt-instructions').textContent(), harness.live.instructions, 'additional instruction does not rewrite the startup audit');
   await page.locator('#microphone-gate').fill('0.001');
   await page.locator('#microphone-gate').dispatchEvent('input');
   await page.locator('#microphone-gate').dispatchEvent('change');

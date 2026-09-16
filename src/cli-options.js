@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util';
 
 const options = {
   cwd: { type: 'string' }, resume: { type: 'string' }, 'session-id': { type: 'string' },
-  'no-open': { type: 'boolean', default: false }, 'max-minutes': { type: 'string', default: '30' },
+  'no-open': { type: 'boolean', default: false },
   voice: { type: 'string', default: 'marin' }, observe: { type: 'string', default: 'hooks' },
   port: { type: 'string', default: '0' }, help: { type: 'boolean', short: 'h' },
 };

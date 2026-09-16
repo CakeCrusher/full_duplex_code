@@ -4,8 +4,8 @@ import { randomUUID } from 'node:crypto';
 
 export const RATE_PER_SECOND = 0.05 / 60;
 
-// Track usage without a spending cap. Unfinished runs retain their maximum
-// estimate until final usage is confirmed, including after a crash.
+// Track usage without a spending or duration cap. Unfinished runs retain
+// their latest reported cost (or a caller's larger estimate) until finalized.
 export class Budget {
   constructor(file) { this.file = file; }
   read() {
@@ -36,7 +36,7 @@ export class Budget {
     return { committedUsd, runs: data.runs };
   }
   reserve(maxSeconds, label) {
-    if (!Number.isFinite(maxSeconds) || maxSeconds <= 0) throw new Error('Invalid duration');
+    if (maxSeconds !== null && (!Number.isFinite(maxSeconds) || maxSeconds <= 0)) throw new Error('Invalid duration');
     return this.mutate(data => {
       const reservedUsd = maxSeconds * RATE_PER_SECOND;
       const run = { id: randomUUID(), label, createdAt: new Date().toISOString(), maxSeconds, reservedUsd, observedSeconds: 0, finalized: false };
@@ -51,6 +51,7 @@ export class Budget {
       if (!run) throw new Error('Unknown budget reservation');
       run.observedSeconds = Math.max(run.observedSeconds, seconds);
       run.costUsd = run.observedSeconds * RATE_PER_SECOND;
+      run.reservedUsd = Math.max(run.reservedUsd, run.costUsd);
       if (sessionId) run.sessionId = sessionId;
       if (reason) run.reason = reason;
       if (finalized) { run.finalized = true; run.closedAt = new Date().toISOString(); }

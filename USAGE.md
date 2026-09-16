@@ -155,6 +155,12 @@ For a session launched by Full-Duplex Code, the terminal prints a **Local run** 
 
 Accept the channel notice, open the new companion link, and click **Start voice**. The companion restores saved prompts, assistant text, tool calls, and tool results from that Claude session's transcript. Transcript records supply the history; newly arriving hooks supply live observations. Private thinking is not imported. Old voice conversations are not restored independently of Claude's saved history, and the voice model has a finite context capacity.
 
+## Add instructions to Live
+
+Open **GPT Live prompt** in the companion, enter a short instruction under **Append a system instruction**, and click **Append instruction**. This adds guidance without replacing the base prompt or sending a request to Claude. The exact text appears below with **Applying…**, **Live acknowledged**, or **Not confirmed**. An acknowledgment confirms that the API accepted it; it does not prove the model followed it.
+
+Instructions added before voice starts are marked **Saved for next voice session**. They also carry into later voice connections in the same running companion. A new launcher starts fresh. The Updates slider continues to control unsolicited Claude updates; spoken operator requests take priority at every level.
+
 ## Useful launch options
 
 Add options after `npm start --`:
@@ -165,14 +171,13 @@ Add options after `npm start --`:
 | `--resume SESSION_ID` | Continue a specific Claude conversation. |
 | `--session-id UUID` | Choose the full UUID for a new conversation. Use either this or `--resume`. |
 | `--no-open` | Print the companion link without opening the browser. |
-| `--max-minutes 10` | Limit this voice connection to ten minutes. Default: 30. |
 | `--observe transcript` | Add saved-text/tool fallback observation if display hooks are unavailable. |
 | `--port 8123` | Use a fixed local port. The default chooses an available port. |
 
 For example:
 
 ```sh
-npm start -- --cwd /path/to/project --no-open --max-minutes 10
+npm start -- --cwd /path/to/project --no-open
 ```
 
 Run `npm start -- --help` to see all options. Transcript observation depends on when Claude saves messages, so updates can arrive later than in the default mode.
@@ -211,11 +216,11 @@ OpenAI bills the connected voice session, including time spent listening or mute
 npm run usage
 ```
 
-The application estimates voice cost at $0.05 per minute and tracks cumulative usage without a local spending cap. Each connection defaults to a 30-minute limit. Check [OpenAI's model page](https://developers.openai.com/api/docs/models/gpt-live-1) for current service pricing and availability.
+The application estimates voice cost at $0.05 per minute and tracks cumulative usage without a local spending cap. Voice stays connected until you end it, close the companion, or the connection ends; there is no local duration limit. Check [OpenAI's model page](https://developers.openai.com/api/docs/models/gpt-live-1) for current service pricing and availability.
 
-Before connecting, the application records a maximum cost estimate for the session duration plus a shutdown margin. Final usage replaces that estimate when the session ends. Sessions with unconfirmed final usage retain their maximum estimates, so the displayed total can be higher than completed usage alone.
+While connected, the application saves usage reported by the API. Final usage confirms the cost when the session ends. If the connection is lost before final usage arrives, the last reported amount is retained and may be incomplete. Older unfinished sessions may retain their original cost estimates.
 
-Usage history stays in `.runs/budget.json`. Existing history is preserved; old spending limits no longer block new sessions. Use `--max-minutes` to change the duration of each voice connection.
+Usage history stays in `.runs/budget.json`. Existing history is preserved; old spending limits no longer block new sessions. Use **End voice** to stop the voice connection and its billing; Claude stays open.
 
 ## Troubleshooting
 

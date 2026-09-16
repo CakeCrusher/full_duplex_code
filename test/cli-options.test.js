@@ -20,8 +20,8 @@ test('Claude options, repeated overrides, short flags and quoted values keep the
   const extraArgs = ['--model=sonnet', '--model', 'opus', '--permission-mode', 'plan',
     '--settings', '{"permissions":{"defaultMode":"plan"}}', '-d', 'api,hooks',
     '--allowedTools', 'Read', 'Bash(git *)', '--append-system-prompt', 'Keep $(this) and `that` literal'];
-  const parsed = parseLaunchArgs(['--voice=marin', ...extraArgs, '--max-minutes', '10']);
-  assert.equal(parsed.values['max-minutes'], '10'); assert.deepEqual(parsed.extraArgs, extraArgs);
+  const parsed = parseLaunchArgs(['--voice=marin', ...extraArgs, '--port', '1234']);
+  assert.equal(parsed.values.port, '1234'); assert.deepEqual(parsed.extraArgs, extraArgs);
   assert.deepEqual(claudeArgs({ config, sessionId, extraArgs: parsed.extraArgs }).slice(-extraArgs.length), extraArgs);
 });
 

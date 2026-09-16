@@ -146,3 +146,13 @@ test('canceling WebRTC startup aborts the HTTP request and permits clean shutdow
   assert.equal(live.state,'closed');
   assert.equal(live.ws,undefined);
 });
+
+test('an active voice connection has no automatic duration cutoff', async t => {
+  const { live } = await fixture(t, () => {});
+  await live.start();
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  t.mock.timers.tick(4 * 60 * 60 * 1000);
+  assert.equal(live.state, 'active');
+  assert.equal(live.durationTimer, undefined);
+  assert.equal(live.hardTimer, undefined);
+});

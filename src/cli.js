@@ -18,7 +18,6 @@ if (values.help) {
   --resume SESSION_ID   Resume a Claude conversation by its full UUID
   --session-id UUID     Choose the UUID for a new Claude conversation
   --no-open             Print the companion link without opening the browser
-  --max-minutes 30       Maximum voice connection duration; Claude stays open
   --voice marin         GPT Live voice
   --observe hooks       Live display hooks (default), or transcript file tail
   --port 0              Local port (0 chooses a free port)
@@ -48,14 +47,13 @@ if (command === 'doctor') {
 if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Launch npm start in a terminal. The final interface is the normal interactive Claude Code chat.');
 if (!process.env.OPENAI_API_KEY) throw new Error('Add OPENAI_API_KEY to .env or your environment.');
 if (!['hooks', 'transcript'].includes(values.observe)) throw new Error('--observe must be hooks or transcript');
-const maxSeconds = Number(values['max-minutes']) * 60; const port = Number(values.port);
-if (!Number.isFinite(maxSeconds) || maxSeconds < 15 || maxSeconds > 14400) throw new Error('--max-minutes must be between 0.25 and 240');
+const port = Number(values.port);
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port');
 const cwd = fs.realpathSync(values.cwd);
 const sessionId = values.resume ?? values['session-id'] ?? randomUUID();
 if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(sessionId)) throw new Error('--resume and --session-id require a Claude session UUID');
 const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId.slice(0, 8)}`);
-const harness = await new Harness({ root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY, maxSeconds, port, voice: values.voice, observation: values.observe }).start();
+const harness = await new Harness({ root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY, port, voice: values.voice, observation: values.observe }).start();
 console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nClaude will open here. Click Start voice in the browser when the channel is ready.\nLocal run: ${runDir}\n`);
 if (!values['no-open']) {
   const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? null : 'xdg-open';

@@ -77,11 +77,12 @@ export class ContextQueue {
     if (active) this.audioQuietAfter = Date.now() + 300;
     this.pump();
   }
-  add(kind, text, delegationId = null) {
+  add(kind, text, delegationId = null, source = '') {
     if (this.stopped || !text) return;
     // Retain complete observations. Chunking is an API transport requirement,
     // not a reason to discard the beginning of a large tool result.
-    for (const content of chunks(text)) this.queue.push({ kind, content, delegationId });
+    const parts = chunks(text);
+    for (const [index, content] of parts.entries()) this.queue.push({ kind, content, delegationId, source: source ? `[${source}; part ${index + 1}/${parts.length}]\n` : '' });
     this.pump();
   }
   pump() {
@@ -89,11 +90,11 @@ export class ContextQueue {
     // with overlapping appends degraded recognition of simultaneous speech
     // in recorded conversation replays. Keep every fragment, in order.
     while (!this.stopped && Date.now() >= this.audioQuietAfter && this.queue.length && this.live.state === 'active' && this.inFlight < 1) {
-      const { kind, content, delegationId } = this.queue.shift();
+      const { kind, content, delegationId, source = '' } = this.queue.shift();
       this.inFlight++; this.running = true;
       // Each append can be a fragment of code or first-person assistant text.
       // Keep its source clear even when the observation header is far behind.
-      const framed = kind === 'thinking' ? this.reference + content : content;
+      const framed = kind === 'thinking' ? this.reference + source + content : content;
       this.live.append(kind, framed, delegationId).catch(error => {
         if (!this.stopped && this.live.state === 'active') {
           this.stopped = true;

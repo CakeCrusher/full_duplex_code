@@ -6,6 +6,7 @@ if (location.hash) { sessionStorage.setItem('fd-voice-token', token); history.re
 let ws, context, stream, node, mic, active = false, starting = false, muted = false, currentStatus;
 let peer, remote, remoteAudio, microphoneDestination;
 let generation = 0;
+let instructionHistory = '';
 const timeline = new TimelineView();
 const speakingNames = ['Quiet', 'Milestones', 'Walkthrough'];
 const speakingDescriptions = ['Talk only when you address Live. Observe Claude silently.', 'Only major changes, decisions you must make, and task completion. No running commentary.', 'Default: explain major stages and choices. Your spoken requests come first.'];
@@ -44,6 +45,21 @@ function handle(event) {
       };
       // Preserve text selection while the regular status updates arrive.
       for (const [id, text] of Object.entries(texts)) if ($(id).textContent !== text) $(id).textContent = text;
+      const additional = event.prompt.additional ?? [];
+      const serialized = JSON.stringify(additional);
+      if (serialized !== instructionHistory) {
+        instructionHistory = serialized;
+        $('instruction-history').replaceChildren(...additional.map(item => {
+          const article = document.createElement('article');
+          const state = document.createElement('strong');
+          state.textContent = ({ pending: 'Applying…', acknowledged: 'Live acknowledged', failed: 'Not confirmed', next_session: 'Saved for next voice session' })[item.state];
+          const text = document.createElement('pre'); text.textContent = item.text;
+          article.append(state, text);
+          if (item.error) { const error = document.createElement('p'); error.textContent = item.error; article.append(error); }
+          return article;
+        }));
+      }
+      $('instruction-append').disabled = ['new', 'connecting', 'closing'].includes(event.live) || additional.some(item => item.state === 'pending');
     }
     if (document.activeElement !== $('speaking-level')) showSpeaking(event.speakingLevel ?? 2);
     showSpeakingUpdate(event.speakingUpdate ?? { state: 'next_session', level: event.speakingLevel ?? 2 });
@@ -55,7 +71,7 @@ function handle(event) {
     $('agentState').textContent = ({ starting: 'Starting in your terminal', idle: 'Ready for your next request', working: 'Working', needs_attention: 'Needs your attention in the terminal', failed: 'Reported an error', exited: 'Session ended' })[event.agent] ?? event.agent;
     $('start').disabled = starting || active || !event.channel || ['connecting', 'active', 'closing'].includes(event.live) || event.agent === 'exited';
     $('project').textContent = event.cwd;
-    $('usage').textContent = active ? `${Math.floor(event.usageSeconds / 60)}m ${event.usageSeconds % 60}s · $${(event.usageSeconds * 0.05 / 60).toFixed(3)} · ${event.maxSeconds / 60} min limit` : 'Not connected · $0.05/min';
+    $('usage').textContent = active ? `${Math.floor(event.usageSeconds / 60)}m ${event.usageSeconds % 60}s · $${(event.usageSeconds * 0.05 / 60).toFixed(3)}` : 'Not connected · $0.05/min';
     $('budget').textContent = `Estimated total $${event.committedUsd.toFixed(2)} · includes unfinished sessions`;
   }
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
@@ -72,9 +88,19 @@ function handle(event) {
   }
   if (event.type === 'voice_closed') {
     releaseAudio();
-    notice(event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? 'Voice session ended. Claude is still available in your terminal.' : 'Voice connection ended. Final usage was not confirmed; the maximum cost estimate is retained.');
+    notice(event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? 'Voice session ended. Claude is still available in your terminal.' : 'Voice connection ended. Final usage was not confirmed; the last reported usage is saved and may be incomplete.');
   }
 }
+$('instruction-form').onsubmit = event => {
+  event.preventDefault();
+  if (ws?.readyState !== WebSocket.OPEN) { $('instruction-status').textContent = 'Reconnect to the companion first.'; return; }
+  const text = $('instruction-text').value.trim();
+  if (!text) return;
+  if (new TextEncoder().encode(text).length > 440) { $('instruction-status').textContent = 'Please shorten this instruction before appending it.'; return; }
+  ws.send(JSON.stringify({ type: 'append_instruction', text }));
+  $('instruction-status').textContent = 'Submitted. Check the instruction status below for confirmation.';
+  $('instruction-text').value = '';
+};
 function connect() {
   if (!token) { notice('Open the companion link printed by the launcher in your terminal.'); return; }
   ws = new WebSocket(`${location.origin.replace('http:', 'ws:')}/voice`, ['fd-voice', token]); ws.binaryType = 'arraybuffer';

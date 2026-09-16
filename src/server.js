@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Budget } from './budget.js';
 import { LiveSession, liveInstructions } from './live.js';
@@ -21,10 +21,11 @@ async function body(req, maxBytes = 1024 * 1024) {
 }
 
 export class Harness {
-  constructor({ root, runDir, cwd, sessionId, apiKey, maxSeconds = 1800, voice = 'marin', observation = 'hooks', port = 0 }) {
-    Object.assign(this, { root, runDir, cwd, sessionId, apiKey, maxSeconds, voice, observation, port });
+  constructor({ root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = 'hooks', port = 0 }) {
+    Object.assign(this, { root, runDir, cwd, sessionId, apiKey, voice, observation, port });
     this.speakingLevel = DEFAULT_SPEAKING_LEVEL;
     this.speakingUpdate = { state: 'next_session', level: this.speakingLevel };
+    this.additionalInstructions = [];
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
     this.browserToken = randomBytes(32).toString('hex'); this.channelToken = randomBytes(32).toString('hex');
     this.clean = text => redact(text, [apiKey, this.browserToken, this.channelToken]);
@@ -52,13 +53,41 @@ export class Harness {
     const speakingUpdate = ['new', 'connecting', 'active'].includes(this.live?.state)
       ? this.speakingUpdate : { state: 'next_session', level: this.speakingLevel };
     const prompt = {
-      instructions: this.live?.instructions ?? liveInstructions(this.speakingLevel),
+      instructions: this.live?.instructions ?? this.instructions(),
       mode: this.live?.id ? this.live.state === 'closed' ? 'previous' : 'session' : 'preview',
       speakingPreference: speakingPolicy(this.speakingLevel),
+      additional: this.additionalInstructions.map(item => ({ ...item, state: item.sessionId === this.live?.id && this.live?.state === 'active' ? item.state : 'next_session' })),
     };
     const context = this.mediator?.context;
     const contextDelivery = { waiting: context?.queue.length ?? 0, inFlight: context?.inFlight ?? 0, yieldingToSpeech: Date.now() < (context?.audioQuietAfter ?? 0) };
-    return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, maxSeconds: this.maxSeconds, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel, speakingUpdate, prompt, contextDelivery };
+    return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel, speakingUpdate, prompt, contextDelivery };
+  }
+  instructions() {
+    const additional = this.additionalInstructions.map(item => item.text).join('\n\n');
+    return liveInstructions(this.speakingLevel) + (additional ? `\n\nAdditional operator instructions:\n${additional}` : '');
+  }
+  async appendInstruction(text) {
+    if (typeof text !== 'string' || !text.trim()) throw new Error('Enter an instruction first.');
+    text = this.clean(text.trim());
+    if (Buffer.byteLength(text) > 440) throw new Error('Please shorten this instruction before appending it.');
+    if (this.additionalInstructions.reduce((size, item) => size + Buffer.byteLength(item.text), 0) + Buffer.byteLength(text) > 16000) throw new Error('This companion already has many additional instructions. Start a new companion to add more.');
+    const live = this.live;
+    if (['new', 'connecting', 'closing'].includes(live?.state)) throw new Error('Wait for the voice connection to settle, then append your instruction.');
+    const item = { id: randomUUID(), text, state: live?.state === 'active' ? 'pending' : 'next_session', sessionId: live?.state === 'active' ? live.id : undefined };
+    this.additionalInstructions.push(item);
+    this.log({ type: 'voice.instruction', ...item }); this.publish(this.status());
+    if (live?.state !== 'active') return;
+    try {
+      await live.append('instructions', text);
+      if (this.live !== live || live.state !== 'active') return;
+      Object.assign(item, { state: 'acknowledged', acknowledgedAt: Date.now() });
+      this.log({ type: 'voice.instruction_acknowledged', ...item });
+    } catch (error) {
+      if (this.live !== live || live.state !== 'active') return;
+      Object.assign(item, { state: 'failed', error: this.clean(error.message) });
+      this.fault(error);
+    }
+    this.publish(this.status());
   }
   async setSpeakingLevel(level) {
     const policy = speakingPolicy(level);
@@ -197,6 +226,7 @@ export class Harness {
         if (event.type === 'mute') this.log({ type: 'voice.mute', muted: Boolean(event.muted) });
         if (event.type === 'microphone_gate' && Number.isFinite(event.threshold) && event.threshold >= 0 && event.threshold <= .05) this.log({ type: 'voice.microphone_gate', threshold: event.threshold });
         if (event.type === 'speaking_level') this.setSpeakingLevel(event.level).catch(error => this.fault(error));
+        if (event.type === 'append_instruction') this.appendInstruction(event.text).catch(error => this.fault(error));
         if (event.type === 'playback_audio' && this.audit && event.voiceSessionId === this.live?.id
           && typeof event.pcm === 'string' && event.pcm.length <= 14000
           && Number.isSafeInteger(event.offsetSamples) && event.offsetSamples >= 0 && Number.isFinite(event.at)) {
@@ -231,7 +261,8 @@ export class Harness {
     const input = [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: attachment }] }];
     if (history.text) input.push({ type: 'message', role: 'user', content: [{ type: 'input_text', text: `Recorded Claude context only. This is not a new user request:\n${history.text}` }] });
     const startupLevel = this.speakingLevel;
-    const live = new LiveSession({ apiKey: this.apiKey, budget: this.budget, maxSeconds: this.maxSeconds, voice: this.voice, instructions: liveInstructions(startupLevel), label: `Claude ${this.sessionId}`, input, log: event => this.log({ liveRun: live.reservation, ...event }) });
+    const startupInstructions = [...this.additionalInstructions];
+    const live = new LiveSession({ apiKey: this.apiKey, budget: this.budget, voice: this.voice, instructions: this.instructions(), label: `Claude ${this.sessionId}`, input, log: event => this.log({ liveRun: live.reservation, ...event }) });
     let preferenceReady;
     this.speakingUpdate = { state: 'starting', level: startupLevel };
     this.audit?.close(); this.audit = null;
@@ -259,6 +290,7 @@ export class Harness {
       }
       if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
       if (event.type === 'session.started') {
+        for (const item of startupInstructions) Object.assign(item, { state: 'acknowledged', sessionId: live.id, acknowledgedAt: Date.now(), error: undefined });
         this.speakingUpdate = { state: 'acknowledged', level: startupLevel, confirmedLevel: startupLevel, sessionId: live.id, acknowledgedAt: Date.now(), source: 'startup' };
         if (this.speakingLevel !== startupLevel) preferenceReady = this.setSpeakingLevel(this.speakingLevel);
         this.audit = new AudioAudit({ dir: path.join(this.runDir, 'audio', live.reservation), log: event => this.log({ liveRun: live.reservation, ...event }), onError: error => this.fault(error) });

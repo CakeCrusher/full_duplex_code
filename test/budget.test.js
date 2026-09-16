@@ -36,3 +36,14 @@ test('old spending limits are ignored while previous usage is preserved', t => {
   assert.equal(resumed.summary().committedUsd, 30 + 1835 * RATE_PER_SECOND);
   assert.equal(JSON.parse(fs.readFileSync(b.file, 'utf8')).limitUsd, undefined);
 });
+
+test('open-ended sessions record cumulative reported usage without a maximum estimate', t => {
+  const b = ledger(t); const id = b.reserve(null, 'open-ended');
+  assert.equal(b.summary().committedUsd, 0);
+  b.update(id, 2000);
+  assert.equal(b.summary().committedUsd, 2000 * RATE_PER_SECOND);
+  b.update(id, 1900);
+  assert.equal(new Budget(b.file).summary().committedUsd, 2000 * RATE_PER_SECOND);
+  b.update(id, 2400, { finalized: true });
+  assert.equal(b.summary().committedUsd, 2400 * RATE_PER_SECOND);
+});

@@ -18,7 +18,7 @@ export class Mediator {
     live.on('event', this.onLive); observer.on('observation', this.onObservation);
   }
   forward(event, historical = false) {
-    this.context.add('thinking', `Claude Code observation${historical ? ' (history)' : ''}:\n${thinkingText(event.text)}\n`);
+    this.context.add('thinking', `Claude Code observation${historical ? ' (history)' : ''}:\n${thinkingText(event.text)}\n`, null, `Claude ${event.name ?? 'transcript'}${historical ? '; history' : ''}`);
   }
   fault(error) { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: error.message }); }
   liveEvent(event) {
