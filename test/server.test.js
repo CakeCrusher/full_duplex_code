@@ -28,6 +28,17 @@ test('local endpoints require the correct capability and reject foreign origins 
   for (let i = 0; i < 2; i++) assert.equal((await fetch(h.baseUrl + '/hook', { method: 'POST', headers: channelHeaders, body: JSON.stringify(hook) })).status, 200);
   assert.equal(h.observer.text, 'Hello', 'duplicate display batches are not repeated');
 });
+
+test('speaking preference updates the active model through instructions and validates values', async t => {
+  const h=await fixture(t), appends=[];
+  const ws=new WebSocket(h.baseUrl.replace('http:','ws:')+'/voice',{headers:{Authorization:`Bearer ${h.browserToken}`}});
+  t.after(()=>ws.terminate());await new Promise(resolve=>ws.on('open',resolve));
+  h.live={state:'active',append:async(kind,text)=>appends.push({kind,text}),close:async()=>{h.live.state='closed';}};
+  ws.send(JSON.stringify({type:'speaking_level',level:0}));await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(h.speakingLevel,0);assert.equal(appends[0].kind,'instructions');assert.match(appends[0].text,/Quiet:/);
+  ws.send(JSON.stringify({type:'speaking_level',level:20}));await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(h.speakingLevel,0);assert.equal(appends.length,1);
+});
 test('channel delivery ends at sent and does not depend on Claude calling a tool', async t => {
   const h = await fixture(t);
   const ws = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/channel', { headers: { Authorization: `Bearer ${h.channelToken}` } });

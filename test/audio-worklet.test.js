@@ -29,3 +29,22 @@ test('audio level reports measure capture and rendered playback over the complet
   assert.equal(muted.rms, 0); assert.equal(muted.outputRms, 0);
   assert.ok([...new Int16Array(messages.filter(e => e.type === 'playback').at(-1).pcm)].every(sample => sample === 0));
 });
+
+test('noise gate silences quiet input, preserves word tails, can be disabled, and audits pre-gate audio', () => {
+  let Processor;const messages=[];
+  const context=vm.createContext({AudioWorkletProcessor:class{constructor(){this.port={postMessage:e=>messages.push(e)};}},registerProcessor:(_,type)=>{Processor=type;},sampleRate:24000,currentTime:0});
+  vm.runInContext(fs.readFileSync(new URL('../web/audio-worklet.js',import.meta.url),'utf8'),context);
+  const p=new Processor();p.port.onmessage({data:{type:'audit_start',sessionId:'test'}});
+  const run=(value,blocks=30)=>{for(let i=0;i<blocks;i++){p.process([[new Float32Array(128).fill(value)]],[[new Float32Array(128)]]);context.currentTime+=128/24000;}};
+  run(.001);
+  assert.ok(messages.filter(e=>e.type==='input').every(e=>[...new Int16Array(e.pcm)].every(x=>x===0)),'quiet noise is not sent to Live');
+  assert.ok([...new Int16Array(messages.find(e=>e.type==='playback').microphone)].every(x=>x!==0),'audit retains quiet pre-gate audio');
+  run(.1,5);run(.001,5);
+  assert.ok([...new Int16Array(messages.filter(e=>e.type==='input').at(-1).pcm)].some(x=>x!==0),'quiet word endings survive the hold');
+  run(.001,40);
+  assert.ok([...new Int16Array(messages.filter(e=>e.type==='input').at(-1).pcm)].every(x=>x===0),'gate closes after hold');
+  p.port.onmessage({data:{type:'gate',threshold:0}});run(.001);
+  assert.ok([...new Int16Array(messages.filter(e=>e.type==='input').at(-1).pcm)].every(x=>x!==0),'zero disables the gate');
+  p.port.onmessage({data:{type:'mute',muted:true}});run(.1);
+  assert.ok([...new Int16Array(messages.filter(e=>e.type==='playback').at(-1).microphone)].every(x=>x===0),'mute also silences the pre-gate audit');
+});

@@ -6,12 +6,21 @@ if (location.hash) { sessionStorage.setItem('fd-voice-token', token); history.re
 let ws, context, stream, node, mic, active = false, starting = false, muted = false, currentStatus;
 let generation = 0;
 const timeline = new TimelineView();
+const speakingNames = ['Quiet', 'Milestones', 'Walkthrough'];
+const speakingDescriptions = ['Answer questions, flag blockers, and briefly confirm completion.', 'Important outcomes and discoveries, explained in complete thoughts.', 'Explain major stages and choices while finishing each thought.'];
+function showSpeaking(level) {
+  $('speaking-level').value = level;
+  $('speaking-level').setAttribute('aria-valuetext', speakingNames[level]);
+  $('speaking-label').textContent = speakingNames[level];
+  $('speaking-description').textContent = speakingDescriptions[level];
+}
 
 function notice(text) { $('notice').textContent = text; }
 function handle(event) {
   timeline.handle(event);
   if (event.type === 'status') {
     currentStatus = event;
+    if (document.activeElement !== $('speaking-level')) showSpeaking(event.speakingLevel ?? 1);
     $('connection').textContent = active ? muted ? 'Microphone muted' : 'Listening' : event.channel ? 'Agent connected' : 'Waiting for Claude';
     $('agentState').textContent = ({ starting: 'Starting in your terminal', idle: 'Ready for your next request', working: 'Working', needs_attention: 'Needs your attention in the terminal', failed: 'Reported an error', exited: 'Session ended' })[event.agent] ?? event.agent;
     $('start').disabled = starting || active || !event.channel || ['connecting', 'active', 'closing'].includes(event.live) || event.agent === 'exited';
@@ -62,20 +71,23 @@ async function start() {
     if (attempt !== generation) { stream.getTracks().forEach(track => track.stop()); return; }
     await context.audioWorklet.addModule('/audio-worklet.js');
     node = new AudioWorkletNode(context, 'duplex-audio', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+    node.port.postMessage({ type: 'gate', threshold: Number($('microphone-gate').value) });
+    ws.send(JSON.stringify({ type: 'microphone_gate', threshold: Number($('microphone-gate').value) }));
     const audioEpoch = Date.now() - context.currentTime * 1000;
     node.port.onmessage = ({ data }) => {
       if (data.type === 'playback' && ws?.readyState === WebSocket.OPEN) {
         if (ws.bufferedAmount > 128000) { notice('The audio audit connection fell behind. Please reconnect.'); stop(); return; }
         ws.send(JSON.stringify({ type: 'playback_audio', voiceSessionId: data.sessionId, offsetSamples: data.offsetSamples,
-          at: audioEpoch + data.startTime * 1000, pcm: btoa(String.fromCharCode(...new Uint8Array(data.pcm))) }));
+          at: audioEpoch + data.startTime * 1000, pcm: btoa(String.fromCharCode(...new Uint8Array(data.pcm))),
+          microphone: data.microphone ? btoa(String.fromCharCode(...new Uint8Array(data.microphone))) : undefined }));
       }
       if (data.type === 'input' && ws?.readyState === WebSocket.OPEN && (active || starting)) {
         if (ws.bufferedAmount > 128000) { notice('The audio connection is too slow. Please reconnect.'); stop(); return; }
         ws.send(data.pcm);
       }
       if (data.type === 'level') {
-        $('level').value = Math.min(1, data.rms * 5);
-        if (ws?.readyState === WebSocket.OPEN && (active || starting)) ws.send(JSON.stringify({ type: 'audio_level', at: audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, outputRms: data.outputRms, backlogMs: data.backlogMs }));
+        $('level').value = Math.min(1, (data.rawRms ?? data.rms) * 5);
+        if (ws?.readyState === WebSocket.OPEN && (active || starting)) ws.send(JSON.stringify({ type: 'audio_level', at: audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, outputRms: data.outputRms, backlogMs: data.backlogMs }));
         if (data.backlogMs > 2000) { notice('Audio playback fell behind. Please reconnect.'); stop(); }
       }
     };
@@ -94,6 +106,14 @@ function releaseAudio() {
 }
 function stop() { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'stop' })); releaseAudio(); }
 $('start').onclick = start; $('stop').onclick = stop;
+$('speaking-level').oninput = e => showSpeaking(Number(e.target.value));
+$('speaking-level').onchange = e => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'speaking_level', level: Number(e.target.value) })); };
+$('microphone-gate').oninput = e => {
+  const threshold = Number(e.target.value);
+  $('gate-label').textContent = threshold === 0 ? 'Off' : `${(threshold * 100).toFixed(1)}%`;
+  node?.port.postMessage({ type: 'gate', threshold });
+};
+$('microphone-gate').onchange = e => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'microphone_gate', threshold: Number(e.target.value) })); };
 $('mute').onclick = () => {
   muted = !muted; node?.port.postMessage({ type: 'mute', muted }); ws.send(JSON.stringify({ type: 'mute', muted }));
   $('mute').textContent = muted ? 'Unmute microphone' : 'Mute microphone'; $('mute').setAttribute('aria-pressed', String(muted)); $('audioState').textContent = muted ? 'Microphone muted' : 'Microphone on';

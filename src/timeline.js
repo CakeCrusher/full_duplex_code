@@ -14,14 +14,17 @@ export class Timeline {
   add(event) {
     const at = event.at ?? Date.now(); const changed = [];
     if (event.type === 'audio_level') {
-      for (const [track, rms, threshold] of [['operator', event.inputRms, .008], ['speech', event.outputRms, .003]]) {
+      // Gated audio is already filtered. Show quiet word tails too; applying
+      // the opening threshold again would hide audio that we actually send.
+      const inputThreshold = Number.isFinite(event.gateThreshold) ? .00001 : .008;
+      for (const [track, rms, threshold] of [['operator', event.inputRms, inputThreshold], ['speech', event.outputRms, .003]]) {
         let item = this.audio.get(track);
         if (rms >= threshold) {
           const start = at - event.durationMs;
           if (!item || start - item.end > 220 || !item.active) {
             item = this.item({ track, start, end: at, active: true, peak: rms,
               label: track === 'operator' ? 'Microphone' : 'Live speech',
-              source: track === 'operator' ? 'Microphone activity estimated from audio level' : 'Audio rendered by the browser; bars split after 220 ms below the level threshold, not at sentence boundaries',
+              source: track === 'operator' ? 'Microphone activity from the signal sent to Live, after mute and the noise gate' : 'Audio rendered by the browser; bars split after 220 ms below the level threshold, not at sentence boundaries',
             });
             this.audio.set(track, item);
           }
@@ -53,11 +56,11 @@ export class Timeline {
     }
     if (event.type === 'agent_observation') {
       changed.push(this.item({ track: 'claude', start: at, end: at, label: event.name ?? 'Transcript observation', text: event.text,
-        source: 'Complete Claude observation received by bridge · thinking context',
+        source: 'Complete observation received by bridge; binary attachment bytes stay local. Inspect Context to Live for exactly what was sent.',
       }));
     }
     if (event.type === 'context_sent') {
-      const item = this.item({ track: 'context', start: at, end: at, label: event.kind === 'thinking' ? 'Thinking' : 'Commentary', kind: event.kind,
+      const item = this.item({ track: 'context', start: at, end: at, label: ({ thinking: 'Thinking', commentary: 'Commentary', instructions: 'Speaking preference' })[event.kind], kind: event.kind,
         text: event.text, notification: event.notification, state: 'sent', source: 'Exact context append sent to Live; bar ends at acknowledgment, not consumption' });
       this.context.set(event.id, item); changed.push(item);
     }

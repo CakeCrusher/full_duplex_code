@@ -21,7 +21,7 @@ export class AudioAudit {
   write(track, pcm, metadata = {}) {
     if (this.closed || !pcm.length) return;
     try {
-      if (!['input', 'output', 'playback'].includes(track) || pcm.length % 2) throw new Error('Invalid audit audio');
+      if (!['input', 'microphone', 'output', 'playback'].includes(track) || pcm.length % 2) throw new Error('Invalid audit audio');
       let file = this.tracks.get(track);
       if (!file) {
         file = { fd: fs.openSync(path.join(this.dir, `${track}.wav`), 'wx', 0o600), samples: 0 };

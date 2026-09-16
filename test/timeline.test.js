@@ -16,6 +16,15 @@ test('microphone and playback activity can overlap; silence and mute do not beco
   assert.equal(operator[0].active, false); assert.equal(speech[0].active, false);
 });
 
+test('gated microphone bars include quiet word tails and exclude silenced background noise', () => {
+  const timeline = new Timeline(0);
+  timeline.add({ type: 'audio_level', at: 100, durationMs: 100, inputRms: .001, rawInputRms: .001, gateThreshold: .008, outputRms: 0 });
+  timeline.add({ type: 'audio_level', at: 400, durationMs: 100, inputRms: 0, rawInputRms: .001, gateThreshold: .008, outputRms: 0 });
+  const items = timeline.snapshot().items;
+  assert.equal(items.length, 1);
+  assert.deepEqual([items[0].start, items[0].end, items[0].active], [0, 100, false]);
+});
+
 test('transcripts use audio timestamps rather than network receipt time and stay separate across restarts', () => {
   const timeline = new Timeline(1000);
   const event = { type: 'caption', voiceSessionId: 'one', voiceStartedAt: 1000, startMs: 100, endMs: 300, at: 2000, role: 'operator', text: 'Hello' };

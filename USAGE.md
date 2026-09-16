@@ -75,7 +75,7 @@ The browser shows six tracks on one clock:
 
 | Track | What it shows |
 | --- | --- |
-| Operator audio | Microphone activity estimated from the incoming audio level. Silence and mute leave gaps. |
+| Operator audio | Microphone activity after the noise gate and mute, including quiet word endings. Filtered background noise leaves gaps. |
 | Live speech | Audio actually rendered by the browser, including overlap with your microphone. |
 | API transcript | Input ASR and Live’s output transcript on separate rows. Input text can be inaccurate even during silence; it is not proof you spoke. |
 | Claude hooks | Every raw observation, including tool calls/results, file changes, displayed text, and lifecycle hooks, at bridge receipt time. All go to thinking. |
@@ -90,15 +90,29 @@ Click a voice request to see the **full channel message**, including any earlier
 
 The channel uses the latest speech group as the request, with a two-second pause separating groups. Earlier speech remains reference context. The bridge does not rewrite transcription mistakes; the inspector shows what was actually sent.
 
-The timeline remains available across page reloads while the launcher is running. It starts fresh with a new launcher. Full tool payloads still go to the companion in the background; the chart is a visual view of the five tracks, not the entire context feed.
+The timeline remains available across page reloads while the launcher is running. It starts fresh with a new launcher. All hooks remain visible. The Context to Live row shows actual sends and acknowledgments separately from hook receipt, so delivery delays are visible.
+
+## Adjusting the conversation
+
+The **Updates** slider changes the speaking preference immediately:
+
+- **Quiet:** answer your questions, flag blockers, and briefly confirm completion.
+- **Milestones:** explain important outcomes and changes in complete thoughts; skip routine commands and retries.
+- **Walkthrough:** explain major stages and design choices, finishing one idea before moving to the next.
+
+All levels receive the same context. The slider changes the model’s instructions, not how much Claude information is collected. Speech behavior is model-controlled, so these are preferences rather than hard guarantees.
+
+**Mic threshold** is an actual noise gate before audio is sent to Live. The default is 0.8% RMS amplitude; zero disables it. Raise it to suppress quiet background noise, or lower it if it misses soft speech. A 160 ms hold preserves quiet word endings after speech. The meter shows the pre-gate level; the operator-audio timeline shows the gated signal, including quiet word endings during the hold. Mute silences both recorded microphone tracks.
+
+**Input ASR** is Live’s own transcription output. We do not run an extra recognizer or send this text back to Live. The bridge uses it to assemble a request only when Live delegates. It can contain spurious text even with silent input, so inspect the audio recordings when auditing it.
 
 ## What the companion follows
 
-Claude's hooks are the main observation path. Each hook payload is forwarded with its fields intact, including tool inputs, completed results, edit patches, metadata, and errors. Known connection credentials and recognizable API keys are redacted. All raw hooks, including assistant messages from `MessageDisplay`, go to GPT Live as quiet background context. The companion answers your questions from that context. For proactive updates, the bridge keeps one replaceable cue about the latest state, waits for a quiet moment, and sends at most one cue every 15 seconds. Live is asked to mention only a meaningful new outcome, blocker, question, or important change in one short sentence. Routine steps and superseded updates should stay quiet; exact spoken behavior still depends on the model.
+Claude's hooks are the main observation path. Hook text, tool inputs, completed results, edit patches, metadata, and errors are forwarded. Encoded image/audio/document attachments are represented by their metadata and an explicit notice: the text-only context cannot view binary attachments. The complete original payload stays in the local hook log and Claude-hooks inspector. Known connection credentials and recognizable API keys are redacted. All hook types, including assistant messages from `MessageDisplay`, go to GPT Live as quiet background context; binary bytes are not treated as text. The companion answers your questions from that context. For proactive updates, the bridge keeps one replaceable cue about the latest state, waits for a quiet moment, and sends at most one cue every 15 seconds. Live is asked to mention only a meaningful new outcome, blocker, question, or important change in one short sentence. Routine steps and superseded updates should stay quiet; exact spoken behavior still depends on the model.
 
 Claude responds normally in its terminal. The channel has no acknowledgment or reply tools; its only job is to deliver spoken requests into the conversation. A request marked **Delivered to channel** has been sent; **Received by Claude** means its prompt hook was observed. Neither status means Claude completed the work. Follow Claude's observed activity and results for progress.
 
-The bridge does not trim hook fields or discard older observations to save context. A bounded prefix of saved history is supplied at session startup, before audio begins; remaining history and new events use quiet appends. It splits text into small appends for the Live API's per-append limit and keeps the observations for a voice restart. An append failure ends voice with an error so reconnecting can replay the saved observations. A single local hook request has a 32 MiB transport limit; oversized events are reported instead of silently truncated. The model's own context capacity still applies.
+The bridge keeps ordinary text fields and older observations. Only recognized binary attachment data is replaced for text context. A bounded prefix of saved history is supplied at session startup, before audio begins; remaining history and new events use quiet appends. It splits text into small appends for the Live API's per-append limit and keeps the observations for a voice restart. An append failure ends voice with an error so reconnecting can replay the saved observations. A single local hook request has a 32 MiB transport limit; oversized events are reported instead of silently truncated. The model's own context capacity still applies.
 
 The launcher registers passive lifecycle hooks, including tool batches, subagent activity, permission events, and compaction. `WorktreeCreate` is excluded because registering it replaces Claude's own worktree creation. `FileChanged` forwards events for files configured in Claude's watch list; it does not automatically watch every file. Tool hooks already describe changes made through Edit and Write, plus the commands and results of Bash. See the [Claude hooks reference](https://code.claude.com/docs/en/hooks) for watch-path configuration and event availability. Use a current Claude Code release; this flow was tested on 2.1.270.
 
@@ -213,7 +227,7 @@ Voice closes automatically if microphone streaming stops or the Claude channel r
 
 ## Local records and sharing
 
-`.runs/` contains connection details, event logs, conversation text, and the budget ledger. `.env`, `.runs/`, `.cache/`, `.scratch/`, and `docs/` are ignored by Git. Each voice connection saves private 24 kHz mono WAV files under `.runs/<run>/audio/<voice-id>/`: `input.wav` (microphone samples sent to Live), `output.wav` (Live audio received, in order), and `playback.wav` (browser-rendered audio, including silent playback gaps). These are local recordings, not OpenAI stored sessions. They use about 8.6 MB per minute combined. `events.jsonl` includes sample offsets, audio levels, playback backlog, hook events, exact context appends and acknowledgments. `timeline.json` preserves the Gantt when voice ends, the browser disconnects, or the launcher exits. Browser crashes may lose their last in-flight playback packets; audit gaps and failures are logged. Old runs without these files cannot recover audio retrospectively. Delete a run’s directory to delete its recordings.
+`.runs/` contains connection details, event logs, conversation text, and the budget ledger. `.env`, `.runs/`, `.cache/`, `.scratch/`, and `docs/` are ignored by Git. Each voice connection saves private 24 kHz mono WAV files under `.runs/<run>/audio/<voice-id>/`: `microphone.wav` (microphone before the noise gate, respecting mute), `input.wav` (gated microphone samples actually sent to Live), `output.wav` (Live audio received, in order), and `playback.wav` (browser-rendered audio, including silent playback gaps). These are local recordings, not OpenAI stored sessions. They use about 11.5 MB per minute combined. `events.jsonl` includes sample offsets, audio levels, playback backlog, hook events, exact context appends and acknowledgments. `timeline.json` preserves the Gantt when voice ends, the browser disconnects, or the launcher exits. Browser crashes may lose their last in-flight playback packets; audit gaps and failures are logged. Old runs without these files cannot recover audio retrospectively. Delete a run’s directory to delete its recordings.
 
 Treat logs and companion links as private. When reporting a problem, share the error and reproduction steps after removing keys, connection tokens, and private project content.
 

@@ -92,7 +92,7 @@ try {
   await batch.click();
   assert.equal(await page.locator('#timeline-live').getAttribute('aria-pressed'), 'false');
   assert.match(await page.locator('#detail-text').textContent(), /All three tests passed/);
-  assert.match(await page.locator('#detail-source').textContent(), /Complete Claude observation/);
+  assert.match(await page.locator('#detail-source').textContent(), /Complete observation/);
   if (artifacts) await page.screenshot({ path: path.join(artifacts, 'timeline-desktop.png'), fullPage: true });
   publish({ type: 'agent_observation', name: 'FileChanged', text: 'A new hook arrived while reviewing.' });
   await page.locator('#timeline-live').click();
@@ -110,14 +110,26 @@ try {
   let inputBytes = 0;
   harness.startLive = async () => {
     harness.audit = new AudioAudit({ dir: path.join(dir,'audio'), log:harness.log, onError:error=>errors.push(error.message) });
-    harness.live = { id: 'offline-audio', state: 'active', usageSeconds: 0, audio: buffer => { inputBytes += buffer.length; }, close: async () => {
+    harness.live = { append:async(kind,text)=>{harness.__preference={kind,text};}, id: 'offline-audio', state: 'active', usageSeconds: 0, audio: buffer => { inputBytes += buffer.length; }, close: async () => {
       harness.live.state = 'closed'; publish({ type: 'voice_closed', finalized: true }); publish(harness.status());
     } };
     publish({ type: 'voice_started', sessionId: 'offline-audio' }); publish(harness.status());
   };
+  await page.locator('#speaking-level').fill('0');
+  await page.locator('#speaking-level').dispatchEvent('input');
+  await page.locator('#speaking-level').dispatchEvent('change');
+  await waitFor(()=>harness.speakingLevel===0,'Quiet preference received');
   await page.getByRole('button', { name: 'Start voice', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#audioState').textContent === 'Microphone on');
   await waitFor(() => inputBytes > 0, 'real worklet sent microphone PCM');
+  await page.locator('#speaking-level').fill('2');
+  await page.locator('#speaking-level').dispatchEvent('input');
+  await page.locator('#speaking-level').dispatchEvent('change');
+  await waitFor(()=>harness.__preference?.text.includes('Walkthrough:'),'live preference applied');
+  await page.locator('#microphone-gate').fill('0.02');
+  await page.locator('#microphone-gate').dispatchEvent('input');
+  await page.locator('#microphone-gate').dispatchEvent('change');
+  await waitFor(()=>fs.existsSync(path.join(dir,'audio','microphone.wav')),'pre-gate microphone recording exists');
   const playback = new Int16Array(12000);
   for (let i = 0; i < playback.length; i++) playback[i] = Math.sin(i / 24000 * Math.PI * 2 * 440) * 8000;
   harness.audit.write('output',Buffer.from(playback.buffer));

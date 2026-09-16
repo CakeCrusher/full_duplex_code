@@ -4,7 +4,8 @@ import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Budget } from './budget.js';
-import { LiveSession } from './live.js';
+import { LiveSession, liveInstructions } from './live.js';
+import { speakingPolicy } from './voice-policy.js';
 import { Mediator } from './mediator.js';
 import { AgentObserver, makeClaudeConfig } from './agent.js';
 import { redact, MAX_HOOK_BYTES, startupHistory } from './context.js';
@@ -22,6 +23,7 @@ async function body(req, maxBytes = 1024 * 1024) {
 export class Harness {
   constructor({ root, runDir, cwd, sessionId, apiKey, maxSeconds = 1800, voice = 'marin', observation = 'hooks', port = 0 }) {
     Object.assign(this, { root, runDir, cwd, sessionId, apiKey, maxSeconds, voice, observation, port });
+    this.speakingLevel = 1;
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
     this.browserToken = randomBytes(32).toString('hex'); this.channelToken = randomBytes(32).toString('hex');
     this.clean = text => redact(text, [apiKey, this.browserToken, this.channelToken]);
@@ -46,7 +48,7 @@ export class Harness {
   saveTimeline() { fs.writeFileSync(path.join(this.runDir, 'timeline.json'), this.clean(JSON.stringify(this.timeline.snapshot())), { mode: 0o600 }); }
   status() {
     const budget = this.budget.summary();
-    return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, maxSeconds: this.maxSeconds, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, remainingUsd: budget.remainingUsd, runDir: this.runDir, observation: this.observation };
+    return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, maxSeconds: this.maxSeconds, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, remainingUsd: budget.remainingUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel };
   }
   async start() {
     this.http = http.createServer((req, res) => this.handleHttp(req, res).catch(error => {
@@ -158,11 +160,23 @@ export class Harness {
         if (event.type === 'start') this.startLive().catch(error => this.fault(error));
         if (event.type === 'stop') this.live?.close('operator ended voice');
         if (event.type === 'mute') this.log({ type: 'voice.mute', muted: Boolean(event.muted) });
+        if (event.type === 'microphone_gate' && Number.isFinite(event.threshold) && event.threshold >= 0 && event.threshold <= .05) this.log({ type: 'voice.microphone_gate', threshold: event.threshold });
+        if (event.type === 'speaking_level') {
+          const policy = speakingPolicy(event.level);
+          this.speakingLevel = event.level;
+          this.log({ type: 'voice.speaking_level', level: event.level });
+          if (this.live?.state === 'active') this.live.append('instructions', policy).catch(error => this.fault(error));
+          this.publish(this.status());
+        }
         if (event.type === 'playback_audio' && this.audit && event.voiceSessionId === this.live?.id
           && typeof event.pcm === 'string' && event.pcm.length <= 14000
           && Number.isSafeInteger(event.offsetSamples) && event.offsetSamples >= 0 && Number.isFinite(event.at)) {
           const pcm = Buffer.from(event.pcm, 'base64');
           if (pcm.length && pcm.length <= 9600 && pcm.length % 2 === 0) this.audit.write('playback', pcm, { offsetSamples: event.offsetSamples, at: event.at });
+          if (typeof event.microphone === 'string' && event.microphone.length <= 14000) {
+            const microphone = Buffer.from(event.microphone, 'base64');
+            if (microphone.length === pcm.length) this.audit.write('microphone', microphone, { offsetSamples: event.offsetSamples, at: event.at });
+          }
         }
         if (event.type === 'audio_level' && [event.at, event.durationMs, event.inputRms, event.outputRms].every(Number.isFinite)
           && Math.abs(event.at - Date.now()) < 5000 && event.durationMs > 0 && event.durationMs <= 500
@@ -176,7 +190,7 @@ export class Harness {
       } catch (error) { this.fault(error); }
     });
     ws.on('error', error => this.fault(error));
-    ws.on('close', () => { if (this.browser === ws) { this.browser = null; this.publish({ type: 'audio_stopped' }); this.saveTimeline(); this.live?.close('voice client disconnected'); } });
+    ws.on('close', () => { if (this.browser === ws) { this.browser = null; if (this.stopping) return; this.publish({ type: 'audio_stopped' }); this.saveTimeline(); this.live?.close('voice client disconnected'); } });
   }
   async startLive() {
     if (this.live && this.live.state !== 'closed') return;
@@ -186,14 +200,14 @@ export class Harness {
     const history = startupHistory(this.observer.observations, Math.max(0, 7600 - Buffer.byteLength(attachment)));
     const input = [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: attachment }] }];
     if (history.text) input.push({ type: 'message', role: 'user', content: [{ type: 'input_text', text: `Recorded Claude context only. This is not a new user request:\n${history.text}` }] });
-    const live = new LiveSession({ apiKey: this.apiKey, budget: this.budget, maxSeconds: this.maxSeconds, voice: this.voice, label: `Claude ${this.sessionId}`, input, log: event => this.log({ liveRun: live.reservation, ...event }) });
+    const live = new LiveSession({ apiKey: this.apiKey, budget: this.budget, maxSeconds: this.maxSeconds, voice: this.voice, instructions: liveInstructions(this.speakingLevel), label: `Claude ${this.sessionId}`, input, log: event => this.log({ liveRun: live.reservation, ...event }) });
     this.audit?.close(); this.audit = null;
     this.live = live;
     this.mediator?.stop();
     this.mediator = new Mediator({ live, observer: this.observer, initialObservationCount: history.count, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
     live.on('fault', error => this.fault(error));
     live.on('sent', event => {
-      if (/^session\.(thinking|commentary)\.append$/.test(event.type)) this.publish({ type: 'context_sent', id: event.event_id, kind: event.type.split('.')[1], text: event.content, notification: event });
+      if (/^session\.(thinking|commentary|instructions)\.append$/.test(event.type)) this.publish({ type: 'context_sent', id: event.event_id, kind: event.type.split('.')[1], text: event.content, notification: event });
     });
     live.on('event', event => {
       if (event.type === 'session.output_audio.delta') {
@@ -203,7 +217,7 @@ export class Harness {
         if (this.browser.bufferedAmount > 1024 * 1024) return live.close('Audio playback connection too slow');
         this.browser.send(pcm);
       }
-      if (/^session\.(thinking|commentary)\.appended$/.test(event.type)) this.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
+      if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
       if (event.type === 'session.started') {
         this.audit = new AudioAudit({ dir: path.join(this.runDir, 'audio', live.reservation), log: event => this.log({ liveRun: live.reservation, ...event }), onError: error => this.fault(error) });
         this.publish({ type: 'voice_started', sessionId: live.id });
