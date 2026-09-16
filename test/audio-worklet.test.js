@@ -5,20 +5,23 @@ import vm from 'node:vm';
 import { Timeline } from '../src/timeline.js';
 
 function fixture() {
-  let Processor; const messages = [], rendered = [];
+  let Processor; const messages = [], rendered = [], transmitted = []; let remote = [];
   const context = vm.createContext({ AudioWorkletProcessor: class { constructor() { this.port = { postMessage: e => messages.push(e) }; } },
     registerProcessor: (_name, type) => { Processor = type; }, sampleRate: 24000, currentTime: 0 });
   vm.runInContext(fs.readFileSync(new URL('../web/audio-worklet.js', import.meta.url), 'utf8'), context);
   const processor = new Processor();
-  const send = data => processor.port.onmessage({ data });
+  const send = data => { if (data.type==='play') remote.push(...new Int16Array(data.pcm)); else processor.port.onmessage({ data }); };
   const run = (value = 0, blocks = 20) => {
     for (let i = 0; i < blocks; i++) {
       const output = new Float32Array(128);
-      processor.process([[new Float32Array(128).fill(value)]], [[output]]);
+      const outgoing = new Float32Array(128);
+      const incoming = Float32Array.from({length:128},()=> (remote.shift()??0)/32768);
+      processor.process([[new Float32Array(128).fill(value)],[incoming]], [[outgoing],[output]]);
+      transmitted.push(...outgoing.map(x=>Math.round(x*32768)));
       rendered.push(...output); context.currentTime += 128 / 24000;
     }
   };
-  const input = () => messages.filter(e => e.type === 'input').flatMap(e => [...new Int16Array(e.pcm)]);
+  const input = () => transmitted;
   const levels = () => messages.filter(e => e.type === 'level');
   return { processor, messages, rendered, context, send, run, input, levels };
 }
@@ -34,7 +37,7 @@ test('audio levels cover the whole measurement interval; audit retains actual re
   const playback = f.messages.filter(e => e.type === 'playback');
   assert.equal(playback.length, 40); assert.equal(playback[39].offsetSamples, 39 * 128);
   assert.deepEqual(playback.flatMap(e => [...new Int16Array(e.pcm)]), f.rendered.map(x => Math.round(x * 32768)));
-  assert.equal(f.rendered.filter(x => x !== 0).length, 128 * 20, 'all samples survive the lead-in and final drain');
+  assert.equal(f.rendered.filter(x => x !== 0).length, 128 * 20, 'all decoded samples are rendered');
   f.send({ type: 'mute', muted: true }); f.run(.5);
   assert.equal(f.levels().at(-1).rms, 0); assert.equal(f.levels().at(-1).outputRms, 0);
 });
@@ -77,29 +80,12 @@ test('gate passes a 300 ms word tail, then closes; mute remains immediate', () =
   assert.ok([...new Int16Array(f.messages.filter(e => e.type === 'playback').at(-1).microphone)].every(x => x === 0));
 });
 
-test('80 ms playback lead-in joins jittered short chunks without losing, mixing or trimming samples', () => {
-  const f = fixture();
-  const chunks = [new Int16Array(960).fill(1000), new Int16Array(960).fill(-2000), new Int16Array(137).fill(3000)];
-  f.send({ type: 'play', pcm: chunks[0].buffer }); f.run(0, 10); // 53 ms: would underrun without buffering
-  f.send({ type: 'play', pcm: chunks[1].buffer }); f.run(0, 8);
-  f.send({ type: 'play', pcm: chunks[2].buffer }); f.run(0, 30);
-  const expected = chunks.flatMap(c => [...c]);
-  const audible = f.rendered.map(x => Math.round(x * 32768));
-  const start = audible.findIndex(x => x !== 0);
-  assert.equal(start / 24, 80, 'bounded additional playback latency');
-  assert.deepEqual(audible.slice(start, start + expected.length), expected, 'no gaps within the jittered burst, including the short final chunk');
-  assert.ok(audible.slice(start + expected.length).every(x => x === 0), 'fully drained into silence');
-  f.send({ type: 'play', pcm: new Int16Array([901, -902, 903]).buffer });
-  const secondStart = f.rendered.length; f.run(0, 20);
-  assert.deepEqual(f.rendered.slice(secondStart).filter(x => x !== 0).map(x => Math.round(x * 32768)), [901, -902, 903], 'a lone tiny clip never waits for a following chunk');
-});
-
 test('native media gates the outgoing track and passes incoming speech unchanged, simultaneously', () => {
   let Processor; const messages = [];
   const context = vm.createContext({ AudioWorkletProcessor: class { constructor() { this.port = { postMessage: e => messages.push(e) }; } },
     registerProcessor: (_name, type) => { Processor = type; }, sampleRate: 24000, currentTime: 0 });
   vm.runInContext(fs.readFileSync(new URL('../web/audio-worklet.js', import.meta.url), 'utf8'), context);
-  const processor = new Processor({processorOptions:{transport:'webrtc'}});
+  const processor = new Processor();
   processor.port.onmessage({data:{type:'audit_start',sessionId:'native-test'}});
   const incoming = Float32Array.from({length:128}, (_,i)=>Math.sin(i*.2)*.25);
   const outgoing = new Float32Array(128), speaker = new Float32Array(128);

@@ -73,10 +73,7 @@ function handle(event) {
 function connect() {
   if (!token) { notice('Open the companion link printed by the launcher in your terminal.'); return; }
   ws = new WebSocket(`${location.origin.replace('http:', 'ws:')}/voice`, ['fd-voice', token]); ws.binaryType = 'arraybuffer';
-  ws.onmessage = ({ data }) => {
-    if (data instanceof ArrayBuffer) { if (node) node.port.postMessage({ type: 'play', pcm: data }, [data]); }
-    else handle(JSON.parse(data));
-  };
+  ws.onmessage = ({ data }) => { if (typeof data === 'string') handle(JSON.parse(data)); };
   ws.onclose = () => { releaseAudio(); showSpeakingUpdate({ state: 'disconnected' }); $('connection').textContent = 'Disconnected'; $('start').disabled = true; notice('The local companion disconnected. Reopen the launcher link to reconnect.'); };
   ws.onerror = () => notice('Unable to connect. Another companion tab may already be open.');
 }
@@ -100,7 +97,7 @@ async function start() {
     if (attempt !== generation) { stream.getTracks().forEach(track => track.stop()); return; }
     await context.audioWorklet.addModule('/audio-worklet.js');
     if (attempt !== generation) return;
-    node = new AudioWorkletNode(context, 'duplex-audio', { numberOfInputs: 2, numberOfOutputs: 2, outputChannelCount: [1, 1], processorOptions: { transport: 'webrtc' } });
+    node = new AudioWorkletNode(context, 'duplex-audio', { numberOfInputs: 2, numberOfOutputs: 2, outputChannelCount: [1, 1] });
     node.port.postMessage({ type: 'gate', threshold: Number($('microphone-gate').value) });
     ws.send(JSON.stringify({ type: 'microphone_gate', threshold: Number($('microphone-gate').value) }));
     const audioEpoch = Date.now() - context.currentTime * 1000;
@@ -111,15 +108,10 @@ async function start() {
           at: audioEpoch + data.startTime * 1000, pcm: btoa(String.fromCharCode(...new Uint8Array(data.pcm))),
           microphone: data.microphone ? btoa(String.fromCharCode(...new Uint8Array(data.microphone))) : undefined }));
       }
-      if (data.type === 'input' && ws?.readyState === WebSocket.OPEN && (active || starting)) {
-        if (ws.bufferedAmount > 128000) { notice('The audio connection is too slow. Please reconnect.'); stop(); return; }
-        ws.send(data.pcm);
-      }
       if (data.type === 'level') {
         $('level').value = Math.min(1, (data.rawRms ?? data.rms) * 5);
         $('gate-state').textContent = !active ? 'Waiting for Live' : muted ? 'Muted' : data.rms > 0 ? 'Passing audio to Live' : 'Gate closed · sending silence';
-        if (ws?.readyState === WebSocket.OPEN && active) ws.send(JSON.stringify({ type: 'audio_level', at: audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, outputRms: data.outputRms, backlogMs: data.backlogMs }));
-        if (data.backlogMs > 2000) { notice('Audio playback fell behind. Please reconnect.'); stop(); }
+        if (ws?.readyState === WebSocket.OPEN && active) ws.send(JSON.stringify({ type: 'audio_level', at: audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, outputRms: data.outputRms }));
       }
     };
     // WebRTC owns decoding, jitter buffering and continuous playback. The
