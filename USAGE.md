@@ -102,6 +102,8 @@ The **Updates** slider changes the speaking preference immediately:
 
 All levels receive the same context. The slider changes the model’s instructions, not how much Claude information is collected. Speech behavior is model-controlled, so these are preferences rather than hard guarantees.
 
+Open **GPT Live prompt** beneath the sliders to read the startup instructions. Before connecting, it previews the next session. During or after a connection, it preserves that session’s startup text and shows the selected speaking preference separately. The base prompt is `BASE_PROMPT` in `src/live.js`; `src/voice-policy.js` provides the speaking preferences. Workspace/history and later context appends are supplied separately. The browser page is the **voice companion dashboard**, and its Gantt chart is the **live session timeline**.
+
 **Mic threshold** is an actual noise gate before audio is sent to Live. The default is 0.8% RMS amplitude; zero disables it. Raise it to suppress quiet background noise, or lower it if it misses soft speech. A 160 ms hold preserves quiet word endings after speech. The meter shows the pre-gate level; the operator-audio timeline shows the gated signal, including quiet word endings during the hold. Mute silences both recorded microphone tracks.
 
 **Input ASR** is Live’s own transcription output. We do not run an extra recognizer or send this text back to Live. The bridge uses it to assemble a request only when Live delegates. It can contain spurious text even with silent input, so inspect the audio recordings when auditing it.

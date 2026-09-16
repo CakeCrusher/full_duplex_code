@@ -20,6 +20,15 @@ function handle(event) {
   timeline.handle(event);
   if (event.type === 'status') {
     currentStatus = event;
+    if (event.prompt) {
+      const texts = {
+        'prompt-state': ({ preview: 'Next voice session · startup preview', session: 'Current voice session · startup instructions', previous: 'Last voice session · startup instructions' })[event.prompt.mode],
+        'prompt-instructions': event.prompt.instructions,
+        'prompt-preference': event.prompt.speakingPreference,
+      };
+      // Preserve text selection while the regular status updates arrive.
+      for (const [id, text] of Object.entries(texts)) if ($(id).textContent !== text) $(id).textContent = text;
+    }
     if (document.activeElement !== $('speaking-level')) showSpeaking(event.speakingLevel ?? 1);
     $('connection').textContent = active ? muted ? 'Microphone muted' : 'Listening' : event.channel ? 'Agent connected' : 'Waiting for Claude';
     $('agentState').textContent = ({ starting: 'Starting in your terminal', idle: 'Ready for your next request', working: 'Working', needs_attention: 'Needs your attention in the terminal', failed: 'Reported an error', exited: 'Session ended' })[event.agent] ?? event.agent;

@@ -8,6 +8,7 @@ import { chromium } from 'playwright';
 import { channelNotification } from '../src/channel-message.js';
 import { Harness } from '../src/server.js';
 import { AudioAudit } from '../src/audio-audit.js';
+import { liveInstructions } from '../src/live.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-ui-timeline-'));
@@ -69,6 +70,11 @@ try {
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(harness.browserUrl);
   await page.locator('.timeline-item[data-track="operator"]').first().waitFor();
+  assert.equal(await page.locator('#prompt-instructions').textContent(), liveInstructions(1));
+  assert.match(await page.locator('#prompt-state').textContent(), /startup preview/);
+  await page.locator('#live-prompt > summary').click();
+  if (artifacts) await page.screenshot({ path: path.join(artifacts, 'prompt-panel.png'), fullPage: true });
+  await page.locator('#live-prompt > summary').click();
   for (const track of ['operator', 'speech', 'transcript', 'claude', 'context', 'requests']) assert.ok(await page.locator(`.timeline-item[data-track="${track}"]`).count() > 0, track);
   assert.equal(await page.locator('.timeline-item[data-track="requests"]').count(), 2, 'voice prompt does not duplicate delivery');
   await page.locator('.timeline-item[data-track="requests"][data-state="observed"]').first().click();
@@ -110,7 +116,7 @@ try {
   let inputBytes = 0;
   harness.startLive = async () => {
     harness.audit = new AudioAudit({ dir: path.join(dir,'audio'), log:harness.log, onError:error=>errors.push(error.message) });
-    harness.live = { append:async(kind,text)=>{harness.__preference={kind,text};}, id: 'offline-audio', state: 'active', usageSeconds: 0, audio: buffer => { inputBytes += buffer.length; }, close: async () => {
+    harness.live = { instructions:liveInstructions(harness.speakingLevel), append:async(kind,text)=>{harness.__preference={kind,text};}, id: 'offline-audio', state: 'active', usageSeconds: 0, audio: buffer => { inputBytes += buffer.length; }, close: async () => {
       harness.live.state = 'closed'; publish({ type: 'voice_closed', finalized: true }); publish(harness.status());
     } };
     publish({ type: 'voice_started', sessionId: 'offline-audio' }); publish(harness.status());
@@ -126,6 +132,11 @@ try {
   await page.locator('#speaking-level').dispatchEvent('input');
   await page.locator('#speaking-level').dispatchEvent('change');
   await waitFor(()=>harness.__preference?.text.includes('Walkthrough:'),'live preference applied');
+  await page.waitForFunction(() => document.querySelector('#prompt-preference').textContent.includes('Walkthrough:'));
+  assert.equal(await page.locator('#prompt-instructions').textContent(), harness.live.instructions, 'startup prompt stays exact after the preference changes');
+  assert.equal(harness.live.instructions, liveInstructions(0), 'this connection started with Quiet');
+  assert.equal(await page.locator('#prompt-preference').textContent(), harness.__preference.text, 'selected preference matches the actual instruction append');
+  assert.match(await page.locator('#prompt-state').textContent(), /Current voice session/);
   await page.locator('#microphone-gate').fill('0.02');
   await page.locator('#microphone-gate').dispatchEvent('input');
   await page.locator('#microphone-gate').dispatchEvent('change');
@@ -149,6 +160,8 @@ try {
   assert.ok(fs.existsSync(path.join(dir,'timeline.json')), 'Gantt saved to disk');
   await page.reload();
   await page.getByRole('button', { name: /Claude hooks\. FileChanged/ }).waitFor();
+  assert.equal(await page.locator('#prompt-instructions').textContent(), harness.live.instructions);
+  assert.match(await page.locator('#prompt-state').textContent(), /Last voice session/);
   assert.ok(await page.locator('.timeline-item[data-track="speech"]').count() >= 1, 'audio history survives reload');
   assert.deepEqual(errors, []);
   console.log('Timeline tracks, hover/pin, zoom/history, live updates, reload, virtual microphone, playback and mute passed. No API spending.');

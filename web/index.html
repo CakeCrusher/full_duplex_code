@@ -14,6 +14,14 @@
     </section>
     <section class="speaking-control" aria-label="Companion speaking preference"><label for="speaking-level">Updates <strong id="speaking-label">Milestones</strong></label><input id="speaking-level" type="range" min="0" max="2" step="1" value="1" aria-valuetext="Milestones"><p id="speaking-description">Important outcomes and discoveries, explained in complete thoughts.</p></section>
     <section class="speaking-control" aria-label="Microphone noise gate"><label for="microphone-gate">Mic threshold <strong id="gate-label">0.8%</strong></label><input id="microphone-gate" type="range" min="0" max="0.05" step="0.001" value="0.008"><p>Silence quiet background noise before it reaches Live. Higher settings can miss soft speech; zero turns the gate off.</p></section>
+    <details id="live-prompt" class="prompt-panel">
+      <summary>GPT Live prompt</summary>
+      <p id="prompt-state">Waiting for the launcher’s prompt…</p>
+      <p>The base prompt is in <code>src/live.js</code> (<code>BASE_PROMPT</code>). The speaking preference from <code>src/voice-policy.js</code> is appended at startup.</p>
+      <pre id="prompt-instructions" tabindex="0" aria-label="GPT Live startup instructions"></pre>
+      <details><summary>Selected speaking preference</summary><p>Changing Updates during voice appends these instructions. Check Context to Live for the exact send and acknowledgment; the startup text above stays unchanged.</p><pre id="prompt-preference" tabindex="0" aria-label="Selected speaking preference instructions"></pre></details>
+      <p>Workspace details and recorded history are supplied separately at startup. Later Claude observations and speech cues appear in Context to Live.</p>
+    </details>
     <p id="notice" role="alert"></p>
     <section class="workspace"><div><span class="label">Claude Code</span><p id="agentState">Waiting for the terminal session</p></div><div><span class="label">Voice session</span><p id="usage">Not connected · $0.05/min</p></div></section>
     <section class="timeline" aria-labelledby="timeline-title">

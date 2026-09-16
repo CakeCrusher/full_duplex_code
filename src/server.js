@@ -48,7 +48,12 @@ export class Harness {
   saveTimeline() { fs.writeFileSync(path.join(this.runDir, 'timeline.json'), this.clean(JSON.stringify(this.timeline.snapshot())), { mode: 0o600 }); }
   status() {
     const budget = this.budget.summary();
-    return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, maxSeconds: this.maxSeconds, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, remainingUsd: budget.remainingUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel };
+    const prompt = {
+      instructions: this.live?.instructions ?? liveInstructions(this.speakingLevel),
+      mode: this.live?.id ? this.live.state === 'closed' ? 'previous' : 'session' : 'preview',
+      speakingPreference: speakingPolicy(this.speakingLevel),
+    };
+    return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, maxSeconds: this.maxSeconds, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, remainingUsd: budget.remainingUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel, prompt };
   }
   async start() {
     this.http = http.createServer((req, res) => this.handleHttp(req, res).catch(error => {
