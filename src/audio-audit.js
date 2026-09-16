@@ -10,7 +10,7 @@ function header(bytes) {
   h.write('data', 36); h.writeUInt32LE(bytes, 40); return h;
 }
 
-// Local, independent tracks: input actually sent, API output in arrival order,
+// Local, independent tracks: input actually sent, API output on its own clock,
 // and browser-rendered output (including silent buffer underruns).
 export class AudioAudit {
   constructor({ dir, log, onError }) {
@@ -33,7 +33,7 @@ export class AudioAudit {
       const offset = metadata.offsetSamples ?? apiOffset ?? file.samples;
       // A missing browser packet is visible in the log and remains silence in
       // the recording; never silently squeeze time out of rendered playback.
-      if (offset < file.samples || offset > file.samples + RATE * 5) throw new Error('Playback audit sample discontinuity');
+      if (!Number.isSafeInteger(offset) || offset < file.samples || (apiOffset === undefined && offset > file.samples + RATE * 5)) throw new Error('Playback audit sample discontinuity');
       if (offset !== file.samples) this.log({ type: 'audio.audit_gap', track, expected: file.samples, actual: offset });
       fs.writeSync(file.fd, pcm, 0, pcm.length, 44 + offset * 2);
       file.samples = offset + pcm.length / 2;

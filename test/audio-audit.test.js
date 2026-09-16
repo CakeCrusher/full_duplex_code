@@ -38,4 +38,9 @@ test('API output timestamps preserve silent intervals instead of compressing the
   assert.deepEqual(data.subarray(200*48,400*48),pcm);
   assert.deepEqual(data.subarray(400*48,600*48),Buffer.alloc(200*48));
   assert.deepEqual(data.subarray(600*48),pcm);
+  audit.write('output',pcm,{startMs:12200,endMs:12400});
+  const afterPause=fs.readFileSync(path.join(dir,'output.wav')).subarray(44);
+  assert.equal(afterPause.length,12400*48);
+  assert.deepEqual(afterPause.subarray(800*48,12200*48),Buffer.alloc(11400*48));
+  assert.deepEqual(afterPause.subarray(12200*48),pcm);
 });
