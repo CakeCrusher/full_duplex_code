@@ -104,7 +104,7 @@ test('queued fragments carry the current speaking mode without modifying their s
   queue.add('thinking','x'.repeat(440*3));
   queue.setSpeakingLevel(0);
   pending.shift()();await new Promise(resolve=>setImmediate(resolve));
-  assert.match(sent[1],/^\[Quiet mode: read silently\. No spoken reaction\. Claude log\]/);
+  assert.match(sent[1],/^\[Quiet: no follow-ups to old answers\. Silent Claude log\.\]/);
   queue.setSpeakingLevel(1);
   pending.shift()();await new Promise(resolve=>setImmediate(resolve));
   assert.match(sent[2],/^\[Milestones:/);

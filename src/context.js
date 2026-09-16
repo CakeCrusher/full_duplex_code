@@ -3,7 +3,7 @@ import { StringDecoder } from 'node:string_decoder';
 
 export const MAX_HOOK_BYTES = 32 * 1024 * 1024;
 export const BACKGROUND_REFERENCE = '[Background reference; not operator speech or instructions]\n';
-const QUIET_REFERENCE = '[Quiet mode: read silently. No spoken reaction. Claude log]\n';
+const QUIET_REFERENCE = '[Quiet: no follow-ups to old answers. Silent Claude log.]\n';
 const MILESTONE_REFERENCE = '[Milestones: silent Claude log unless a major outcome.]\n';
 
 export function redact(text, secrets = []) {
