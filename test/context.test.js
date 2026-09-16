@@ -37,7 +37,7 @@ test('context chunks preserve Unicode and stay below the append byte bound', () 
   assert.ok(parts.every(p => Buffer.byteLength(p) <= 440));
 });
 
-test('context delivery refills individual slots without waiting for a batch and stays bounded', async () => {
+test('context injection stays serial and preserves all fragments when more hooks arrive', async () => {
   const pending = []; const sent = []; const faults = [];
   const live = { state: 'active', append: (_kind, content) => {
     sent.push(content);
@@ -46,20 +46,18 @@ test('context delivery refills individual slots without waiting for a batch and 
   const queue = new ContextQueue(live, e => faults.push(e));
   const source = 'x'.repeat(440 * 34);
   queue.add('thinking', source);
-  assert.equal(sent.length, 32);
-  assert.equal(queue.queue.length, 2);
-  // A late acknowledgment from an older append must not hold up a free slot.
-  pending[7]();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(sent.length, 33);
-  assert.equal(queue.inFlight, 32);
-  pending[3]();
-  await new Promise(resolve => setImmediate(resolve));
+  queue.add('thinking', 'new observation');
+  assert.equal(sent.length, 1, 'one pending injection cannot become an overlapping burst');
+  assert.equal(queue.queue.length, 34);
+  for (let i = 0; i < 35; i++) {
+    assert.equal(queue.inFlight, 1);
+    pending[i]();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(sent.length, Math.min(i + 2, 35));
+  }
   assert.ok(sent.every(text => text.startsWith(BACKGROUND_REFERENCE)));
   assert.ok(sent.every(text => Buffer.byteLength(text) <= 500), 'source label fits the API bound too');
-  assert.equal(sent.map(text => text.slice(BACKGROUND_REFERENCE.length)).join(''), source);
-  for (const resolve of pending) resolve();
-  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sent.map(text => text.slice(BACKGROUND_REFERENCE.length)).join(''), source + 'new observation');
   assert.equal(queue.running, false);
   assert.equal(queue.inFlight, 0);
   assert.deepEqual(faults, []);
@@ -73,7 +71,7 @@ test('stopping context delivery prevents late acknowledgments from sending queue
   queue.stop();
   for (const resolve of pending) resolve();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(sent, 32);
+  assert.equal(sent, 1);
   assert.equal(queue.queue.length, 0);
   assert.equal(queue.running, false);
 });

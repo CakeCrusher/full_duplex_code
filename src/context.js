@@ -73,9 +73,10 @@ export class ContextQueue {
     this.pump();
   }
   pump() {
-    // Refill each slot as its acknowledgment arrives. There are no batch
-    // barriers, but bound pending writes: the API rejects an unlimited flood.
-    while (!this.stopped && this.queue.length && this.live.state === 'active' && this.inFlight < 32) {
+    // Finish injecting one fragment before sending the next. Flooding Live
+    // with overlapping appends degraded recognition of simultaneous speech
+    // in recorded conversation replays. Keep every fragment, in order.
+    while (!this.stopped && this.queue.length && this.live.state === 'active' && this.inFlight < 1) {
       const { kind, content, delegationId } = this.queue.shift();
       this.inFlight++; this.running = true;
       // Each append can be a fragment of code or first-person assistant text.
