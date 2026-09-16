@@ -297,7 +297,7 @@ export class Harness {
       }
       if (event.type === 'session.input_audio.append' && live.transport === 'webrtc') {
         this.lastAudioAt = Date.now();
-        this.audit?.write('input', Buffer.from(event.audio, 'base64'));
+        this.audit?.write('input', Buffer.from(event.audio, 'base64'), { startMs: event.start_ms, endMs: event.end_ms });
       }
       if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
       if (event.type === 'session.started') {

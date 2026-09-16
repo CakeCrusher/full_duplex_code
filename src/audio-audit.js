@@ -30,13 +30,13 @@ export class AudioAudit {
       // Reflected API audio can omit frames. Missing samples are unknown, not
       // confirmed silence. Zero-filled holes preserve their place in the audit;
       // concatenating packets would compress time and disguise missing audio.
-      const apiOffset = track === 'output' && Number.isFinite(metadata.startMs) ? Math.round(metadata.startMs * RATE / 1000) : undefined;
+      const apiOffset = ['input', 'output'].includes(track) && Number.isFinite(metadata.startMs) ? Math.round(metadata.startMs * RATE / 1000) : undefined;
       const offset = metadata.offsetSamples ?? apiOffset ?? file.samples;
       // A missing browser packet is visible in the log and remains silence in
       // the recording; never silently squeeze time out of rendered playback.
       if (!Number.isSafeInteger(offset) || offset < file.samples || (apiOffset === undefined && offset > file.samples + RATE * 5)) throw new Error('Playback audit sample discontinuity');
       if (offset !== file.samples) this.log({ type: 'audio.audit_gap', track, expected: file.samples, actual: offset,
-        reason: apiOffset !== undefined ? 'missing_api_output' : 'missing_audit_samples',
+        reason: apiOffset !== undefined ? `missing_api_${track}` : 'missing_audit_samples',
         startMs: file.samples * 1000 / RATE, endMs: offset * 1000 / RATE,
         durationMs: (offset - file.samples) * 1000 / RATE });
       fs.writeSync(file.fd, pcm, 0, pcm.length, 44 + offset * 2);

@@ -66,7 +66,7 @@ function handle(event) {
     const delivery = event.contextDelivery ?? { waiting: 0, inFlight: 0 };
     $('context-delivery').textContent = event.live !== 'active' ? 'Claude observations stay saved while voice is off.'
       : delivery.waiting ? `${delivery.waiting} context fragments waiting · sending in order, including during speech. All observations remain saved.`
-      : delivery.inFlight ? `Waiting for Live to acknowledge ${delivery.inFlight} context fragment${delivery.inFlight === 1 ? '' : 's'}.` : 'No context waiting to be sent.';
+      : delivery.inFlight ? `All context sent · ${delivery.inFlight} fragment${delivery.inFlight === 1 ? '' : 's'} awaiting Live’s acknowledgment.` : 'No context waiting to be sent.';
     $('connection').textContent = active ? muted ? 'Microphone muted' : 'Listening' : event.channel ? 'Agent connected' : 'Waiting for Claude';
     $('agentState').textContent = ({ starting: 'Starting in your terminal', idle: 'Ready for your next request', working: 'Working', needs_attention: 'Needs your attention in the terminal', failed: 'Reported an error', exited: 'Session ended' })[event.agent] ?? event.agent;
     $('start').disabled = starting || active || !event.channel || ['connecting', 'active', 'closing'].includes(event.live) || event.agent === 'exited';
