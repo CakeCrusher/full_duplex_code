@@ -8,6 +8,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { Harness } from '../src/server.js';
+import { EventEmitter } from 'node:events';
+import { Mediator } from '../src/mediator.js';
 
 async function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-server-'));
@@ -42,6 +44,48 @@ test('local endpoints require the correct capability and reject foreign origins 
   assert.equal((await fetch(h.baseUrl + '/hook', { method: 'POST', headers: channelHeaders, body: JSON.stringify({ ...hook, session_id: randomUUID() }) })).status, 409);
   for (let i = 0; i < 2; i++) assert.equal((await fetch(h.baseUrl + '/hook', { method: 'POST', headers: channelHeaders, body: JSON.stringify(hook) })).status, 200);
   assert.equal(h.observer.text, 'Hello', 'duplicate display batches are not repeated');
+});
+
+test('hook context keeps flowing during continuous microphone and speaker activity', async t => {
+  const h = await fixture(t), sent = [], pending = [];
+  const live = h.live = new EventEmitter();
+  Object.assign(live, { state: 'active', id: 'offline-duplex',
+    append: (kind, content) => new Promise(resolve => { sent.push({ kind, content }); pending.push(resolve); }),
+    close: async () => { live.state = 'closed'; },
+  });
+  h.mediator = new Mediator({ live, observer: h.observer, deliver: () => {}, log: h.log, publish: e => h.publish(e), clean: h.clean });
+  const ws = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/voice', { headers: { Authorization: `Bearer ${h.browserToken}` } });
+  t.after(() => ws.terminate());
+  await new Promise(resolve => ws.on('open', resolve));
+  async function audio(inputRms, outputRms) {
+    ws.send(JSON.stringify({ type: 'audio_level', at: Date.now(), durationMs: 100, inputRms, outputRms, gateThreshold: 0 }));
+    // The pong arrives after the preceding audio-level message was handled.
+    await new Promise(resolve => { ws.once('pong', resolve); ws.ping(); });
+  }
+  const observations = [];
+  for (const [index, name] of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'MessageDisplay', 'Stop'].entries()) {
+    await audio(.0016, .12); // Gate off: quiet background noise stays nonzero.
+    const hook = { session_id: h.sessionId, hook_event_name: name, message_id: 'reply', index,
+      prompt: 'Inspect the whole file.', tool_name: 'Edit', tool_response: { stdout: '世界👋'.repeat(120) },
+      delta: 'The edit is complete.', last_assistant_message: 'Done.', future_field: 'retained',
+    };
+    observations.push(hook);
+    const response = await fetch(h.baseUrl + '/hook', { method: 'POST', headers: { Authorization: `Bearer ${h.channelToken}` }, body: JSON.stringify(hook) });
+    assert.equal(response.status, 200);
+  }
+  assert.equal(sent.length, 1, 'the first hook reaches Live while audio is active; only its ACK can hold the next fragment');
+  assert.ok(h.mediator.context.queue.length > 1);
+  let fragment = 0;
+  while (pending.length) {
+    await audio(fragment++ % 2 ? 0 : .0016, .12);
+    pending.shift()();
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.equal(h.mediator.context.queue.length, 0, 'continuous audio cannot starve context');
+  assert.equal(h.mediator.context.inFlight, 0);
+  assert.ok(sent.every(e => e.kind === 'thinking'));
+  const reconstructed = sent.map(e => e.content.replace(/^\[[^\n]+\]\n\[Claude [^\n]+\]\n/, '')).join('');
+  assert.equal(reconstructed, observations.map(e => `Claude Code observation:\n${JSON.stringify(e)}\n`).join(''), 'every normal field and fragment arrives intact and in order');
 });
 
 test('speaking preference updates the active model through instructions and validates values', async t => {

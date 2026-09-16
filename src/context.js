@@ -66,16 +66,9 @@ export function startupHistory(observations, maxBytes = 7000) {
 }
 
 export class ContextQueue {
-  constructor(live, onError) { Object.assign(this, { live, onError }); this.queue = []; this.inFlight = 0; this.running = false; this.stopped = false; this.audioQuietAfter = 0; this.reference = BACKGROUND_REFERENCE; }
+  constructor(live, onError) { Object.assign(this, { live, onError }); this.queue = []; this.inFlight = 0; this.running = false; this.stopped = false; this.reference = BACKGROUND_REFERENCE; }
   setSpeakingLevel(level) {
     this.reference = level === 0 ? QUIET_REFERENCE : level === 1 ? MILESTONE_REFERENCE : BACKGROUND_REFERENCE;
-  }
-  setAudioActive(active) {
-    // Keep background injection out of spoken phrases. Browser measurements
-    // cover both the gated microphone and actual playback, not ASR guesses.
-    // All observations remain queued; a short quiet tail covers word endings.
-    if (active) this.audioQuietAfter = Date.now() + 300;
-    this.pump();
   }
   add(kind, text, delegationId = null, source = '') {
     if (this.stopped || !text) return;
@@ -86,10 +79,10 @@ export class ContextQueue {
     this.pump();
   }
   pump() {
-    // Finish injecting one fragment before sending the next. Flooding Live
-    // with overlapping appends degraded recognition of simultaneous speech
-    // in recorded conversation replays. Keep every fragment, in order.
-    while (!this.stopped && Date.now() >= this.audioQuietAfter && this.queue.length && this.live.state === 'active' && this.inFlight < 1) {
+    // Keep every fragment in order and wait for its API acknowledgment.
+    // Audio activity never holds context: Live needs Claude's observations
+    // while either party speaks, including when an open mic carries noise.
+    while (!this.stopped && this.queue.length && this.live.state === 'active' && this.inFlight < 1) {
       const { kind, content, delegationId, source = '' } = this.queue.shift();
       this.inFlight++; this.running = true;
       // Each append can be a fragment of code or first-person assistant text.

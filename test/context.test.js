@@ -76,27 +76,6 @@ test('stopping context delivery prevents late acknowledgments from sending queue
   assert.equal(queue.running, false);
 });
 
-test('speech defers background injection without dropping queued observations or canceling the current append', async t => {
-  t.mock.timers.enable({apis:['Date']});
-  const sent=[],pending=[];
-  const live={state:'active',append:(_kind,text)=>{sent.push(text);return new Promise(resolve=>pending.push(resolve));}};
-  const queue=new ContextQueue(live,error=>{throw error;});
-  queue.add('thinking','first');
-  queue.setAudioActive(true);
-  queue.add('thinking','second');
-  queue.add('thinking','third');
-  pending.shift()();await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(sent.length,1);
-  assert.equal(queue.queue.length,2,'complete observations wait while either party speaks');
-  t.mock.timers.tick(299);queue.setAudioActive(false);
-  assert.equal(sent.length,1,'short word tails cannot restart injection');
-  t.mock.timers.tick(1);queue.setAudioActive(false);
-  pending.shift()();await new Promise(resolve=>setImmediate(resolve));
-  pending.shift()();await new Promise(resolve=>setImmediate(resolve));
-  assert.deepEqual(sent.map(s=>s.slice(BACKGROUND_REFERENCE.length)),['first','second','third']);
-  assert.equal(queue.queue.length,0);
-});
-
 test('queued fragments carry the current speaking mode without modifying their source text', async () => {
   const sent=[],pending=[];
   const live={state:'active',append:(_kind,text)=>{sent.push(text);return new Promise(resolve=>pending.push(resolve));}};
