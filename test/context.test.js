@@ -17,6 +17,19 @@ test('binary attachments stay in raw hooks while Live receives metadata and all 
   assert.match(thinkingText(JSON.stringify({type:'image',mimeType:'image/png',data:'ABCxyz'.repeat(5000)})),/30000 encoded characters retained/);
 });
 
+test('Read image results keep dimensions and file metadata without sending file.base64', () => {
+  const file = { base64: 'iVBOR'.repeat(32000), type: 'image/png', originalSize: 120000,
+    dimensions: { originalWidth: 520, originalHeight: 900, displayWidth: 520, displayHeight: 900 } };
+  const raw = JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_response: { type: 'image', file } });
+  const result = JSON.parse(thinkingText(raw)).tool_response.file;
+  assert.match(result.base64, /160000 encoded characters retained/);
+  assert.deepEqual({ ...result, base64: file.base64 }, file);
+  assert.equal(JSON.parse(raw).tool_response.file.base64, file.base64, 'the original audit payload remains intact');
+  assert.ok(startupHistory([{ text: raw }]).text.length < 1000, 'resuming voice also omits the binary bytes');
+  const ordinary = JSON.stringify({ file: { base64: 'ordinary application data' } });
+  assert.equal(thinkingText(ordinary), ordinary, 'untyped data is not assumed to be an attachment');
+});
+
 test('context chunks preserve Unicode and stay below the append byte bound', () => {
   const text = 'Hello 世界 👋\n'.repeat(300);
   const parts = chunks(text);

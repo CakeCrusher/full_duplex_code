@@ -33,6 +33,11 @@ export function thinkingText(text) {
     if (!value || typeof value !== 'object') return value;
     const result = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, visit(child)]));
     if (['image', 'audio', 'document'].includes(value.type)) {
+      // Claude's built-in Read tool uses file.base64, while PostToolBatch
+      // represents the same attachment as source.data.
+      if (typeof value.file?.base64 === 'string') {
+        result.file = { ...result.file, base64: `[${value.file.base64.length} encoded characters retained in the local hook log; binary attachment is not visible to the voice model]` };
+      }
       if (value.source?.type === 'base64' && typeof value.source.data === 'string') {
         result.source = { ...value.source, data: `[${value.source.data.length} encoded characters retained in the local hook log; binary attachment is not visible to the voice model]` };
       }
