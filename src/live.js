@@ -33,9 +33,16 @@ export class LiveSession extends EventEmitter {
   }
   async start() {
     if (this.state !== 'new') throw new Error('Session already started');
-    if (!this.apiKey) throw new Error('OPENAI_API_KEY is missing');
-    // Allow for startup and graceful close before the duration guard terminates.
-    this.reservation = this.budget.reserve(this.maxSeconds + 35, this.label);
+    try {
+      if (!this.apiKey) throw new Error('OPENAI_API_KEY is missing');
+      // Allow for startup and graceful close before the duration guard terminates.
+      this.reservation = this.budget.reserve(this.maxSeconds + 35, this.label);
+    } catch (error) {
+      // A rejected start must release the microphone, allow another attempt,
+      // and settle close() even though no API connection was opened.
+      this.finish(false);
+      throw error;
+    }
     this.state = 'connecting';
     this.ws = new WebSocket(this.url, { headers: { Authorization: `Bearer ${this.apiKey}` }, handshakeTimeout: 15000, maxPayload: 4 * 1024 * 1024 });
     this.hardTimer = setTimeout(() => this.abort('maximum lifetime'), (this.maxSeconds + 30) * 1000);
@@ -115,7 +122,7 @@ export class LiveSession extends EventEmitter {
       this.log({ type: 'bridge.closing', reason });
       this.send({ type: 'session.close', event_id: randomUUID() }); this.state = 'closing';
       this.closeTimer = setTimeout(() => this.abort('Final usage timeout'), 15000);
-    } else if (this.state === 'connecting') this.abort(reason);
+    } else if (this.state === 'new' || this.state === 'connecting') this.abort(reason);
     return this.closed;
   }
   abort(reason) {
@@ -131,7 +138,7 @@ export class LiveSession extends EventEmitter {
     this.rejectReady?.(new Error('Connection closed before startup'));
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Session closed')); }
     this.pending.clear();
-    const result = { finalized: Boolean(finalized || this.finalEvent), usageSeconds: this.usageSeconds, sessionId: this.id };
+    const result = { finalized: Boolean(finalized || this.finalEvent), reserved: Boolean(this.reservation), usageSeconds: this.usageSeconds, sessionId: this.id };
     this.log({ type: 'bridge.closed', ...result }); this.resolveClosed(result); this.emit('closed', result);
   }
 }

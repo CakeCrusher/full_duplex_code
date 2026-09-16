@@ -52,3 +52,27 @@ test('accelerated audio cannot outrun the reserved duration', async t => {
   await live.start(); assert.throws(() => live.audio(Buffer.alloc(24000 * 2 * 4)), /real-time speed/);
   assert.equal((await live.closed).finalized, true);
 });
+
+test('a budget rejection closes without opening a connection or leaving shutdown pending', async t => {
+  const { live, budget } = await fixture(t, () => {});
+  budget.reserve(29990, 'existing usage');
+  let closed = 0; live.on('closed', () => closed++);
+  await assert.rejects(live.start(), /requires \$0\.04, but \$0\.01 remains.*--max-minutes/);
+  assert.equal(live.state, 'closed');
+  assert.equal(live.ws, undefined);
+  const result = await live.close();
+  assert.equal(result.reserved, false);
+  assert.equal(closed, 1);
+  assert.equal(budget.summary().runs.length, 1, 'failed startup adds no reservation');
+});
+
+test('missing credentials and closing an unstarted session both settle shutdown', async t => {
+  const { live, budget } = await fixture(t, () => {});
+  live.apiKey = '';
+  await assert.rejects(live.start(), /OPENAI_API_KEY is missing/);
+  assert.equal((await live.close()).reserved, false);
+  const unstarted = new LiveSession({ apiKey: 'unused', budget });
+  assert.equal((await unstarted.close()).reserved, false);
+  assert.equal(unstarted.state, 'closed');
+  assert.equal(budget.summary().runs.length, 0);
+});

@@ -15,6 +15,20 @@ async function fixture(t) {
   t.after(async () => { await harness.close(); fs.rmSync(root, { recursive: true, force: true }); });
   return harness;
 }
+
+test('budget failure allows repeated start attempts and does not hang harness shutdown', async t => {
+  const h = await fixture(t); h.channelReady = true;
+  h.budget.reserve(29990, 'existing usage');
+  await assert.rejects(h.startLive(), /budget would be exceeded/);
+  const first = h.live;
+  assert.equal(h.status().live, 'closed');
+  assert.equal(h.status().speakingUpdate.state, 'next_session');
+  await assert.rejects(h.startLive(), /budget would be exceeded/);
+  assert.notEqual(h.live, first, 'retry creates a fresh session instead of silently returning');
+  assert.equal(h.live.state, 'closed');
+  assert.equal(h.budget.summary().runs.length, 1);
+  await h.close();
+});
 test('local endpoints require the correct capability and reject foreign origins and sessions', async t => {
   const h = await fixture(t);
   assert.equal((await fetch(h.baseUrl + '/api/status')).status, 403);

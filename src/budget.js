@@ -41,7 +41,8 @@ export class Budget {
     return this.mutate(data => {
       const reservedUsd = maxSeconds * RATE_PER_SECOND;
       const occupied = data.runs.reduce((n, r) => n + (r.finalized ? r.costUsd : r.reservedUsd), 0);
-      if (occupied + reservedUsd > Math.min(BUDGET_USD, data.limitUsd)) throw new Error('OpenAI voice budget would be exceeded');
+      const remainingUsd = Math.max(0, Math.min(BUDGET_USD, data.limitUsd) - occupied);
+      if (occupied + reservedUsd > Math.min(BUDGET_USD, data.limitUsd)) throw new Error(`OpenAI voice budget would be exceeded: this session requires $${reservedUsd.toFixed(2)}, but $${remainingUsd.toFixed(2)} remains. Restart the launcher with a shorter --max-minutes duration.`);
       const run = { id: randomUUID(), label, createdAt: new Date().toISOString(), maxSeconds, reservedUsd, observedSeconds: 0, finalized: false };
       data.runs.push(run);
       return run.id;

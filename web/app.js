@@ -63,7 +63,7 @@ function handle(event) {
   }
   if (event.type === 'voice_closed') {
     releaseAudio();
-    notice(event.finalized ? 'Voice session ended. Claude is still available in your terminal.' : 'Voice connection ended. Final usage was not confirmed; its budget reservation is retained.');
+    notice(event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? 'Voice session ended. Claude is still available in your terminal.' : 'Voice connection ended. Final usage was not confirmed; its budget reservation is retained.');
   }
 }
 function connect() {

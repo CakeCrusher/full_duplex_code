@@ -9,6 +9,7 @@ import { channelNotification } from '../src/channel-message.js';
 import { Harness } from '../src/server.js';
 import { AudioAudit } from '../src/audio-audit.js';
 import { liveInstructions } from '../src/live.js';
+import { Budget } from '../src/budget.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-ui-timeline-'));
@@ -114,6 +115,21 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile page fits');
   if (artifacts) await page.screenshot({ path: path.join(artifacts, 'timeline-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1150 });
+  // Exercise the real rejected-start path before replacing Live with the
+  // offline audio fixture. The temporary ledger cannot spend API credits.
+  harness.budget = new Budget(path.join(dir, 'budget.json'));
+  harness.budget.reserve(29990, 'budget rejection fixture');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.getByRole('button', { name: 'Start voice', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('--max-minutes'));
+    assert.match(await page.locator('#notice').textContent(), /requires \$1\.53, but \$0\.01 remains/);
+    assert.equal(await page.locator('#audioState').textContent(), 'Microphone off');
+    assert.equal(await page.locator('#start').isEnabled(), true);
+    assert.equal(harness.live.state, 'closed');
+    assert.equal(harness.live.ws, undefined);
+    assert.equal(await page.evaluate(() => window.__virtualAudio.destination.stream.getTracks().every(track => track.readyState === 'ended')), true);
+    await page.evaluate(() => window.__virtualAudio.audio.close());
+  }
   let inputBytes = 0; const inputFrames = [];
   harness.startLive = async () => {
     harness.audit = new AudioAudit({ dir: path.join(dir,'audio'), log:harness.log, onError:error=>errors.push(error.message) });

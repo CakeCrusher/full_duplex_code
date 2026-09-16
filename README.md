@@ -38,4 +38,6 @@ npm start -- --cwd /path/to/your/project --dangerously-skip-permissions
 
 **End voice** stops the voice connection and its billing. Claude stays open. **Mute microphone** keeps the paid voice connection running.
 
+To stop everything, type `/exit` in the Claude terminal and press Enter.
+
 For setup details, resuming a session, costs, and troubleshooting, read the [user guide](USAGE.md). Run `npm run doctor` to check your setup, or `npm run usage` to check spending.
