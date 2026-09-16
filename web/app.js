@@ -7,12 +7,27 @@ let ws, context, stream, node, mic, active = false, starting = false, muted = fa
 let generation = 0;
 const timeline = new TimelineView();
 const speakingNames = ['Quiet', 'Milestones', 'Walkthrough'];
-const speakingDescriptions = ['Answer questions, flag blockers, and briefly confirm completion.', 'Important outcomes and discoveries, explained in complete thoughts.', 'Explain major stages and choices while finishing each thought.'];
+const speakingDescriptions = ['Talk only when you address Live. Observe Claude silently.', 'Only major changes, decisions you must make, and task completion. No running commentary.', 'Default: explain major stages and choices, finishing each thought.'];
 function showSpeaking(level) {
   $('speaking-level').value = level;
   $('speaking-level').setAttribute('aria-valuetext', speakingNames[level]);
   $('speaking-label').textContent = speakingNames[level];
   $('speaking-description').textContent = speakingDescriptions[level];
+}
+function showSpeakingUpdate(update) {
+  const name = speakingNames[update.level];
+  const confirmed = speakingNames[update.confirmedLevel];
+  const states = {
+    next_session: [`Next session · ${name}`, 'This preference will be included when you start voice.'],
+    starting: [`Waiting for session · ${name}`, 'The voice connection has not confirmed this preference yet.'],
+    pending: [`Applying · ${name}…`, `Waiting for Live’s acknowledgment.${confirmed ? ` Last confirmed: ${confirmed}.` : ''}`],
+    acknowledged: [update.source === 'startup' ? `Active from session start · ${name}` : `Live acknowledged · ${name}`, 'The instructions are confirmed for this conversation. This does not guarantee when speech will reflect them.'],
+    failed: [`Not confirmed · ${name}`, `${update.error ?? 'The update failed.'} Select the mode again to retry.`],
+    disconnected: ['Disconnected', 'Reconnect before changing the speaking preference.'],
+  };
+  const [label, detail] = states[update.state] ?? states.next_session;
+  $('updates-state').textContent = label; $('updates-state').dataset.state = update.state;
+  $('updates-detail').textContent = detail;
 }
 
 function notice(text) { $('notice').textContent = text; }
@@ -29,7 +44,8 @@ function handle(event) {
       // Preserve text selection while the regular status updates arrive.
       for (const [id, text] of Object.entries(texts)) if ($(id).textContent !== text) $(id).textContent = text;
     }
-    if (document.activeElement !== $('speaking-level')) showSpeaking(event.speakingLevel ?? 1);
+    if (document.activeElement !== $('speaking-level')) showSpeaking(event.speakingLevel ?? 2);
+    showSpeakingUpdate(event.speakingUpdate ?? { state: 'next_session', level: event.speakingLevel ?? 2 });
     $('connection').textContent = active ? muted ? 'Microphone muted' : 'Listening' : event.channel ? 'Agent connected' : 'Waiting for Claude';
     $('agentState').textContent = ({ starting: 'Starting in your terminal', idle: 'Ready for your next request', working: 'Working', needs_attention: 'Needs your attention in the terminal', failed: 'Reported an error', exited: 'Session ended' })[event.agent] ?? event.agent;
     $('start').disabled = starting || active || !event.channel || ['connecting', 'active', 'closing'].includes(event.live) || event.agent === 'exited';
@@ -57,7 +73,7 @@ function connect() {
     if (data instanceof ArrayBuffer) { if (node) node.port.postMessage({ type: 'play', pcm: data }, [data]); }
     else handle(JSON.parse(data));
   };
-  ws.onclose = () => { releaseAudio(); $('connection').textContent = 'Disconnected'; $('start').disabled = true; notice('The local companion disconnected. Reopen the launcher link to reconnect.'); };
+  ws.onclose = () => { releaseAudio(); showSpeakingUpdate({ state: 'disconnected' }); $('connection').textContent = 'Disconnected'; $('start').disabled = true; notice('The local companion disconnected. Reopen the launcher link to reconnect.'); };
   ws.onerror = () => notice('Unable to connect. Another companion tab may already be open.');
 }
 async function start() {
@@ -70,7 +86,7 @@ async function start() {
     if (attempt !== generation) return;
     if (context.sampleRate !== 24000) throw new Error('This browser did not provide 24 kHz audio. Use current Chrome.');
     let permissionTimer;
-    const requestedStream = navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    const requestedStream = navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false }, video: false });
     requestedStream.then(s => { if (attempt !== generation) s.getTracks().forEach(track => track.stop()); }).catch(() => {});
     try {
       const granted = await Promise.race([requestedStream, new Promise((_, reject) => { permissionTimer = setTimeout(() => reject(new Error('Microphone startup is taking too long. Check Chrome’s microphone permission and selected audio device, then try again.')), 20000); })]);
@@ -96,7 +112,8 @@ async function start() {
       }
       if (data.type === 'level') {
         $('level').value = Math.min(1, (data.rawRms ?? data.rms) * 5);
-        if (ws?.readyState === WebSocket.OPEN && (active || starting)) ws.send(JSON.stringify({ type: 'audio_level', at: audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, outputRms: data.outputRms, backlogMs: data.backlogMs }));
+        $('gate-state').textContent = !active ? 'Waiting for Live' : muted ? 'Muted' : data.rms > 0 ? 'Passing audio to Live' : 'Gate closed · sending silence';
+        if (ws?.readyState === WebSocket.OPEN && active) ws.send(JSON.stringify({ type: 'audio_level', at: audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, outputRms: data.outputRms, backlogMs: data.backlogMs }));
         if (data.backlogMs > 2000) { notice('Audio playback fell behind. Please reconnect.'); stop(); }
       }
     };
@@ -112,11 +129,17 @@ function releaseAudio() {
   active = false; starting = false; stream?.getTracks().forEach(track => track.stop()); stream = null;
   mic?.disconnect(); mic = null; node?.disconnect(); node = null; context?.close().catch(() => {}); context = null;
   $('mute').disabled = true; $('stop').disabled = true; $('audioState').textContent = 'Microphone off'; $('level').value = 0;
+  $('gate-state').textContent = 'Microphone off';
 }
 function stop() { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'stop' })); releaseAudio(); }
 $('start').onclick = start; $('stop').onclick = stop;
 $('speaking-level').oninput = e => showSpeaking(Number(e.target.value));
-$('speaking-level').onchange = e => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'speaking_level', level: Number(e.target.value) })); };
+$('speaking-level').onchange = e => {
+  const level = Number(e.target.value);
+  if (ws?.readyState !== WebSocket.OPEN) return showSpeakingUpdate({ state: 'disconnected', level });
+  showSpeakingUpdate({ state: active ? 'pending' : starting ? 'starting' : 'next_session', level });
+  ws.send(JSON.stringify({ type: 'speaking_level', level }));
+};
 $('microphone-gate').oninput = e => {
   const threshold = Number(e.target.value);
   $('gate-label').textContent = threshold === 0 ? 'Off' : `${(threshold * 100).toFixed(1)}%`;

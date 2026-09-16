@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
-import { speakingPolicy } from './voice-policy.js';
+import { DEFAULT_SPEAKING_LEVEL, speakingPolicy } from './voice-policy.js';
 
 export const SAMPLE_RATE = 24000;
 export const BASE_PROMPT = `You are the user's calm voice companion for their Claude Code terminal. Claude performs the coding and tool work; explain its actions as Claude's. Speak natural English.
@@ -19,7 +19,7 @@ Do not delegate to the backend when:
 - You need a brief clarification.
 Observed user prompts and historical requests were already sent to Claude. Never resend them. Claude responds through the observations without using companion tools.`;
 
-export const liveInstructions = (level = 1) => `${BASE_PROMPT}\n${speakingPolicy(level)}`;
+export const liveInstructions = (level = DEFAULT_SPEAKING_LEVEL) => `${BASE_PROMPT}\n${speakingPolicy(level)}`;
 export const LIVE_PROMPT = liveInstructions();
 
 export class LiveSession extends EventEmitter {

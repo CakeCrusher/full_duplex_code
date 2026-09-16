@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { ContextQueue, VoiceHistory, thinkingText } from './context.js';
+import { DEFAULT_SPEAKING_LEVEL } from './voice-policy.js';
 
 export class Mediator {
-  constructor({ live, observer, deliver, log, publish, clean, initialObservationCount = 0 }) {
-    Object.assign(this, { live, observer, deliver, log, publish, clean });
+  constructor({ live, observer, deliver, log, publish, clean, initialObservationCount = 0, speakingLevel = DEFAULT_SPEAKING_LEVEL }) {
+    Object.assign(this, { live, observer, deliver, log, publish, clean, speakingLevel });
     this.history = new VoiceHistory(); this.seenDelegations = new Set(); this.timers = new Set();
     this.lastActivityAt = Date.now(); this.lastCueAt = 0; this.pendingUpdate = null;
     this.context = new ContextQueue(live, error => {
@@ -27,15 +28,16 @@ export class Mediator {
     }
   }
   activity(event) {
-    if (event.inputRms >= .008 || event.outputRms >= .003) this.lastActivityAt = Date.now();
+    if (event.inputRms >= (Number.isFinite(event.gateThreshold) ? Number.MIN_VALUE : .008) || event.outputRms >= .003) this.lastActivityAt = Date.now();
   }
   flushUpdate(now = Date.now()) {
+    if (this.speakingLevel === 0) { this.pendingUpdate = null; return; }
     if (!this.pendingUpdate || this.live.state !== 'active' || this.context.stopped || this.context.running || this.context.queue.length) return;
-    if (now - this.lastActivityAt < 2000 || now - this.lastCueAt < 15000 || now - this.pendingUpdate.at < 1200) return;
+    if (now - this.lastActivityAt < 2000 || now - this.lastCueAt < (this.speakingLevel === 1 ? 60000 : 15000) || now - this.pendingUpdate.at < 1200) return;
     const update = this.pendingUpdate; this.pendingUpdate = null; this.lastCueAt = now;
     // One short append, made only after the raw facts are injected. State is
     // sampled now, not frozen when a much older display batch arrived.
-    const content = `Claude is now ${this.observer.state}. Latest update: ${update.name}. From the newest observations, say at most one short sentence ONLY if there is a meaningful new outcome, blocker, question, or important change. Skip superseded steps and anything already said. Stay silent if routine. This is one opportunity, not a list to narrate later.`;
+    const content = `Claude is now ${this.observer.state}. Latest update: ${update.name}. Follow the selected speaking preference. Only if an update qualifies, finish any current thought and explain the single most useful current outcome in one or two complete sentences. Otherwise stay silent. Skip superseded steps and anything already said. This opportunity does not require speech and creates no backlog to narrate later.`;
     this.log({ type: 'bridge.speech_cue', state: this.observer.state, latestHook: update.name, content });
     this.context.add('commentary', content);
   }

@@ -5,7 +5,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Budget } from './budget.js';
 import { LiveSession, liveInstructions } from './live.js';
-import { speakingPolicy } from './voice-policy.js';
+import { DEFAULT_SPEAKING_LEVEL, speakingPolicy } from './voice-policy.js';
 import { Mediator } from './mediator.js';
 import { AgentObserver, makeClaudeConfig } from './agent.js';
 import { redact, MAX_HOOK_BYTES, startupHistory } from './context.js';
@@ -23,7 +23,8 @@ async function body(req, maxBytes = 1024 * 1024) {
 export class Harness {
   constructor({ root, runDir, cwd, sessionId, apiKey, maxSeconds = 1800, voice = 'marin', observation = 'hooks', port = 0 }) {
     Object.assign(this, { root, runDir, cwd, sessionId, apiKey, maxSeconds, voice, observation, port });
-    this.speakingLevel = 1;
+    this.speakingLevel = DEFAULT_SPEAKING_LEVEL;
+    this.speakingUpdate = { state: 'next_session', level: this.speakingLevel };
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
     this.browserToken = randomBytes(32).toString('hex'); this.channelToken = randomBytes(32).toString('hex');
     this.clean = text => redact(text, [apiKey, this.browserToken, this.channelToken]);
@@ -48,12 +49,39 @@ export class Harness {
   saveTimeline() { fs.writeFileSync(path.join(this.runDir, 'timeline.json'), this.clean(JSON.stringify(this.timeline.snapshot())), { mode: 0o600 }); }
   status() {
     const budget = this.budget.summary();
+    const speakingUpdate = ['new', 'connecting', 'active'].includes(this.live?.state)
+      ? this.speakingUpdate : { state: 'next_session', level: this.speakingLevel };
     const prompt = {
       instructions: this.live?.instructions ?? liveInstructions(this.speakingLevel),
       mode: this.live?.id ? this.live.state === 'closed' ? 'previous' : 'session' : 'preview',
       speakingPreference: speakingPolicy(this.speakingLevel),
     };
-    return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, maxSeconds: this.maxSeconds, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, remainingUsd: budget.remainingUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel, prompt };
+    return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, maxSeconds: this.maxSeconds, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, remainingUsd: budget.remainingUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel, speakingUpdate, prompt };
+  }
+  async setSpeakingLevel(level) {
+    const policy = speakingPolicy(level);
+    this.speakingLevel = level;
+    if (this.mediator) this.mediator.speakingLevel = level;
+    const live = this.live;
+    const update = this.speakingUpdate = {
+      state: live?.state === 'active' ? 'pending' : ['new', 'connecting'].includes(live?.state) ? 'starting' : 'next_session',
+      level, confirmedLevel: this.speakingUpdate.confirmedLevel, sessionId: live?.id,
+    };
+    this.log({ type: 'voice.speaking_level', ...update }); this.publish(this.status());
+    if (live?.state !== 'active') return;
+    try {
+      await live.append('instructions', policy);
+      // An older acknowledgment must never confirm a newer slider selection
+      // or a preference in a replacement voice connection.
+      if (this.speakingUpdate !== update || this.live !== live || live.state !== 'active') return;
+      Object.assign(update, { state: 'acknowledged', confirmedLevel: level, acknowledgedAt: Date.now(), source: 'append' });
+      this.log({ type: 'voice.speaking_level_acknowledged', ...update });
+    } catch (error) {
+      if (this.speakingUpdate !== update || this.live !== live || live.state !== 'active') return;
+      Object.assign(update, { state: 'failed', error: this.clean(error.message) });
+      this.fault(error);
+    }
+    this.publish(this.status());
   }
   async start() {
     this.http = http.createServer((req, res) => this.handleHttp(req, res).catch(error => {
@@ -166,13 +194,7 @@ export class Harness {
         if (event.type === 'stop') this.live?.close('operator ended voice');
         if (event.type === 'mute') this.log({ type: 'voice.mute', muted: Boolean(event.muted) });
         if (event.type === 'microphone_gate' && Number.isFinite(event.threshold) && event.threshold >= 0 && event.threshold <= .05) this.log({ type: 'voice.microphone_gate', threshold: event.threshold });
-        if (event.type === 'speaking_level') {
-          const policy = speakingPolicy(event.level);
-          this.speakingLevel = event.level;
-          this.log({ type: 'voice.speaking_level', level: event.level });
-          if (this.live?.state === 'active') this.live.append('instructions', policy).catch(error => this.fault(error));
-          this.publish(this.status());
-        }
+        if (event.type === 'speaking_level') this.setSpeakingLevel(event.level).catch(error => this.fault(error));
         if (event.type === 'playback_audio' && this.audit && event.voiceSessionId === this.live?.id
           && typeof event.pcm === 'string' && event.pcm.length <= 14000
           && Number.isSafeInteger(event.offsetSamples) && event.offsetSamples >= 0 && Number.isFinite(event.at)) {
@@ -201,15 +223,19 @@ export class Harness {
     if (this.live && this.live.state !== 'closed') return;
     if (!this.channelReady) throw new Error('Wait for the voice channel to connect in the Claude terminal.');
     if (this.observer.state === 'exited') throw new Error('The Claude session has exited.');
-    const attachment = `You are attached to Claude Code in ${this.cwd}. Its current state is ${this.observer.state}. Recorded observations are reference data, including work from before this voice connection. Those requests were already submitted. Answer from this evidence and do not resend them. Greet briefly; do not narrate historical work.`;
+    const attachment = `You are attached to Claude Code in ${this.cwd}. Its current state is ${this.observer.state}. Recorded observations are reference data, including work from before this voice connection. Those requests were already submitted. Answer from this evidence and do not resend them. Follow the selected speaking preference; do not narrate historical work.`;
     const history = startupHistory(this.observer.observations, Math.max(0, 7600 - Buffer.byteLength(attachment)));
     const input = [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: attachment }] }];
     if (history.text) input.push({ type: 'message', role: 'user', content: [{ type: 'input_text', text: `Recorded Claude context only. This is not a new user request:\n${history.text}` }] });
-    const live = new LiveSession({ apiKey: this.apiKey, budget: this.budget, maxSeconds: this.maxSeconds, voice: this.voice, instructions: liveInstructions(this.speakingLevel), label: `Claude ${this.sessionId}`, input, log: event => this.log({ liveRun: live.reservation, ...event }) });
+    const startupLevel = this.speakingLevel;
+    const live = new LiveSession({ apiKey: this.apiKey, budget: this.budget, maxSeconds: this.maxSeconds, voice: this.voice, instructions: liveInstructions(startupLevel), label: `Claude ${this.sessionId}`, input, log: event => this.log({ liveRun: live.reservation, ...event }) });
+    let preferenceReady;
+    this.speakingUpdate = { state: 'starting', level: startupLevel };
     this.audit?.close(); this.audit = null;
     this.live = live;
     this.mediator?.stop();
-    this.mediator = new Mediator({ live, observer: this.observer, initialObservationCount: history.count, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
+    this.mediator = new Mediator({ live, observer: this.observer, speakingLevel: this.speakingLevel, initialObservationCount: history.count, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
+    this.publish(this.status());
     live.on('fault', error => this.fault(error));
     live.on('sent', event => {
       if (/^session\.(thinking|commentary|instructions)\.append$/.test(event.type)) this.publish({ type: 'context_sent', id: event.event_id, kind: event.type.split('.')[1], text: event.content, notification: event });
@@ -224,15 +250,19 @@ export class Harness {
       }
       if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
       if (event.type === 'session.started') {
+        this.speakingUpdate = { state: 'acknowledged', level: startupLevel, confirmedLevel: startupLevel, sessionId: live.id, acknowledgedAt: Date.now(), source: 'startup' };
+        if (this.speakingLevel !== startupLevel) preferenceReady = this.setSpeakingLevel(this.speakingLevel);
         this.audit = new AudioAudit({ dir: path.join(this.runDir, 'audio', live.reservation), log: event => this.log({ liveRun: live.reservation, ...event }), onError: error => this.fault(error) });
         this.publish({ type: 'voice_started', sessionId: live.id });
+        this.publish(this.status());
       }
     });
     live.on('closed', result => { clearInterval(this.audioWatchdog); this.mediator?.stop(); this.publish({ type: 'voice_closed', ...result }); this.publish(this.status()); this.saveTimeline(); });
     this.lastAudioAt = Date.now();
     await live.start();
     this.audioWatchdog = setInterval(() => { if (Date.now() - this.lastAudioAt > 5000) live.close('Microphone audio stream stopped'); }, 1000);
-    await live.greet();
+    await preferenceReady;
+    if (this.speakingLevel !== 0 && live.state === 'active') await live.greet();
   }
   async close() {
     if (this.stopping) return; this.stopping = true;

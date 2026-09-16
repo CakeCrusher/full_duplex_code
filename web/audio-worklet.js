@@ -2,15 +2,23 @@ class DuplexAudio extends AudioWorkletProcessor {
   constructor() {
     super(); this.packet = new Int16Array(480); this.offset = 0; this.muted = false;
     this.queue = []; this.queueOffset = 0; this.queuedSamples = 0; this.ticks = 0;
+    this.playbackWaitSamples = 0;
     this.inputPower = 0; this.outputPower = 0; this.levelSamples = 0;
     this.auditSession = null; this.auditOffset = 0;
     this.gateThreshold = .008; this.gateHoldSamples = 0; this.rawInputPower = 0;
     this.port.onmessage = ({ data }) => {
-      if (data.type === 'play') { this.queue.push(new Int16Array(data.pcm)); this.queuedSamples += data.pcm.byteLength / 2; }
-      if (data.type === 'mute') this.muted = data.muted;
-      if (data.type === 'clear') { this.queue.length = 0; this.queueOffset = 0; this.queuedSamples = 0; }
+      if (data.type === 'play' && data.pcm.byteLength) {
+        // A small, bounded lead-in absorbs uneven chunk arrival. Even a lone
+        // short chunk starts after 80 ms; never wait for a sentence or EOF.
+        if (this.queuedSamples === 0) this.playbackWaitSamples = sampleRate * .08;
+        this.queue.push(new Int16Array(data.pcm)); this.queuedSamples += data.pcm.byteLength / 2;
+      }
+      if (data.type === 'mute') { this.muted = data.muted; if (this.muted) this.gateHoldSamples = 0; }
+      if (data.type === 'clear') { this.queue.length = 0; this.queueOffset = 0; this.queuedSamples = 0; this.playbackWaitSamples = 0; }
       if (data.type === 'audit_start') { this.auditSession = data.sessionId; this.auditOffset = 0; }
-      if (data.type === 'gate' && Number.isFinite(data.threshold) && data.threshold >= 0 && data.threshold <= .05) this.gateThreshold = data.threshold;
+      if (data.type === 'gate' && Number.isFinite(data.threshold) && data.threshold >= 0 && data.threshold <= .05) {
+        this.gateThreshold = data.threshold; this.gateHoldSamples = 0;
+      }
     };
   }
   process(inputs, outputs) {
@@ -18,19 +26,22 @@ class DuplexAudio extends AudioWorkletProcessor {
     let rawPower = 0;
     for (let i = 0; i < output.length; i++) rawPower += (this.muted ? 0 : (input?.[i] ?? 0)) ** 2;
     const rawRms = Math.sqrt(rawPower / output.length);
-    if (rawRms >= this.gateThreshold) this.gateHoldSamples = sampleRate * .16;
+    if (rawRms >= this.gateThreshold) this.gateHoldSamples = sampleRate * .3;
     const gateOpen = this.gateThreshold === 0 || this.gateHoldSamples > 0;
     this.gateHoldSamples = Math.max(0, this.gateHoldSamples - output.length);
     this.rawInputPower += rawPower;
+    const buffering = this.playbackWaitSamples > 0;
+    this.playbackWaitSamples = Math.max(0, this.playbackWaitSamples - output.length);
     for (let i = 0; i < output.length; i++) {
       const sample = this.muted || !gateOpen ? 0 : (input?.[i] ?? 0);
-      this.inputPower += sample * sample;
-      this.packet[this.offset++] = Math.round(Math.max(-1, Math.min(1, sample)) * (sample < 0 ? 32768 : 32767));
+      const sent = Math.round(Math.max(-1, Math.min(1, sample)) * (sample < 0 ? 32768 : 32767));
+      this.inputPower += (sent / 32768) ** 2;
+      this.packet[this.offset++] = sent;
       if (this.offset === this.packet.length) {
         const pcm = this.packet.buffer;
         this.port.postMessage({ type: 'input', pcm }, [pcm]); this.packet = new Int16Array(480); this.offset = 0;
       }
-      if (this.queue.length) {
+      if (this.queue.length && !buffering) {
         output[i] = this.queue[0][this.queueOffset++] / 32768; this.queuedSamples--;
         if (this.queueOffset === this.queue[0].length) { this.queue.shift(); this.queueOffset = 0; }
       } else output[i] = 0;

@@ -94,17 +94,23 @@ The timeline remains available across page reloads while the launcher is running
 
 ## Adjusting the conversation
 
-The **Updates** slider changes the speaking preference immediately:
+The **Updates** slider changes the speaking preference for the current conversation:
 
-- **Quiet:** answer your questions, flag blockers, and briefly confirm completion.
-- **Milestones:** explain important outcomes and changes in complete thoughts; skip routine commands and retries.
-- **Walkthrough:** explain major stages and design choices, finishing one idea before moving to the next.
+- **Quiet:** speak only when you address Live or continue that conversation. Observe Claude silently, including blockers and completion; no unsolicited greeting.
+- **Milestones:** only decisions you must make, discoveries that substantially change the plan, and completion of the whole task. Explain one useful outcome in one or two complete sentences, then stop.
+- **Walkthrough (default):** explain major stages and design choices, finishing one idea before moving to the next. Skip outdated steps when work moves quickly.
 
-All levels receive the same context. The slider changes the model’s instructions, not how much Claude information is collected. Speech behavior is model-controlled, so these are preferences rather than hard guarantees.
+All levels receive the same context. Quiet disables the bridge’s proactive speech cues and opening greeting. Milestones limits those cues to at most once a minute; Walkthrough allows one every fifteen seconds. Cues wait for recent microphone/playback activity and context delivery to settle. These are opportunities to speak, not a schedule or a hard limit on model-generated speech. The prompt asks Live to finish its current idea and never build a backlog of things to say.
+
+The status beneath Updates shows **Applying** until Live acknowledges that change, then **Live acknowledged**. **Active from session start** means the preference was included when that connection opened. **Not confirmed** reports a failed update; select the mode again to retry. **Next session** means voice is disconnected and the preference will be used at the next start. Acknowledgment confirms delivery, not exactly when the model’s speech will reflect it. Changing a preference does not discard audio already generated.
 
 Open **GPT Live prompt** beneath the sliders to read the startup instructions. Before connecting, it previews the next session. During or after a connection, it preserves that session’s startup text and shows the selected speaking preference separately. The base prompt is `BASE_PROMPT` in `src/live.js`; `src/voice-policy.js` provides the speaking preferences. Workspace/history and later context appends are supplied separately. The browser page is the **voice companion dashboard**, and its Gantt chart is the **live session timeline**.
 
-**Mic threshold** is an actual noise gate before audio is sent to Live. The default is 0.8% RMS amplitude; zero disables it. Raise it to suppress quiet background noise, or lower it if it misses soft speech. A 160 ms hold preserves quiet word endings after speech. The meter shows the pre-gate level; the operator-audio timeline shows the gated signal, including quiet word endings during the hold. Mute silences both recorded microphone tracks.
+**Mic threshold** gates the actual microphone samples before they reach Live. The default is 0.8% RMS amplitude; zero disables it. Whisper below the threshold and, once any earlier word tail ends, Live receives digital silence and the operator-audio track stays empty. Lower the threshold and the same whisper passes through and appears on that track. The connection keeps sending silent frames while the gate is closed to keep Live’s clock running.
+
+After speech crosses the threshold, a **300 ms hold** captures quieter word endings. Those quieter samples are sent and shown on the Gantt. Changing the threshold resets the previous hold; mute remains immediate. Chrome is requested to disable automatic gain adjustment so it does not automatically boost a whisper above the gate. The meter shows captured sound before the gate, and the label beneath Mic threshold says **Passing audio to Live** or **Gate closed · sending silence**. Mute silences both recorded microphone tracks.
+
+Playback uses one continuous queue, with an **80 ms lead-in** when audio resumes after the queue empties. This absorbs small arrival gaps and plays even a lone tiny chunk in full; it does not wait for another chunk or a completed sentence. It cannot reconstruct words the model never generated. The playback timeline and recording reflect what the browser actually renders, including this delay. End voice still stops playback immediately.
 
 **Input ASR** is Live’s own transcription output. We do not run an extra recognizer or send this text back to Live. The bridge uses it to assemble a request only when Live delegates. It can contain spurious text even with silent input, so inspect the audio recordings when auditing it.
 

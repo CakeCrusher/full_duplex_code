@@ -151,3 +151,35 @@ test('startup observations are neither replayed twice nor dropped when some over
   assert.ok(appends.every(e => e.kind === 'thinking'));
   assert.equal(mediator.pendingUpdate, null, 'history never schedules proactive narration');
 });
+
+test('Quiet forwards all observations without proactive speech cues, including completion and blockers', async t => {
+  const f = fixture(t); f.mediator.speakingLevel = 0;
+  f.hook({ hook_event_name: 'MessageDisplay', message_id: 'quiet', index: 0, delta: 'Changed the page.' });
+  f.hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' });
+  f.hook({ hook_event_name: 'Stop', last_assistant_message: 'All done.' });
+  await flush(); f.mediator.flushUpdate(Date.now() + 70000); await flush();
+  assert.match(content(f, 'thinking'), /Changed the page/);
+  assert.match(content(f, 'thinking'), /PermissionRequest/);
+  assert.match(content(f, 'thinking'), /All done/);
+  assert.equal(content(f, 'commentary'), '');
+  assert.equal(f.mediator.pendingUpdate, null, 'no spoken backlog is saved while quiet');
+});
+
+test('Milestones limits proactive opportunities to once a minute and waits for accepted whispers', async t => {
+  const f = fixture(t); f.mediator.speakingLevel = 1;
+  f.hook({ hook_event_name: 'Stop', last_assistant_message: 'Done.' });
+  await flush();
+  f.mediator.lastActivityAt = 0;
+  f.mediator.activity({ inputRms: .001, gateThreshold: .0005, outputRms: 0 });
+  assert.ok(f.mediator.lastActivityAt > 0, 'accepted soft speech counts as user activity');
+  f.mediator.flushUpdate(Date.now() + 1000); await flush();
+  assert.equal(content(f, 'commentary'), '');
+  const now = Date.now() + 3000;
+  f.mediator.flushUpdate(now); await flush();
+  assert.equal(f.appends.filter(e => e.kind === 'commentary').length, 1);
+  f.hook({ hook_event_name: 'Stop', last_assistant_message: 'More results.' });
+  await flush(); f.mediator.flushUpdate(now + 59000); await flush();
+  assert.equal(f.appends.filter(e => e.kind === 'commentary').length, 1);
+  f.mediator.flushUpdate(now + 60000); await flush();
+  assert.equal(f.appends.filter(e => e.kind === 'commentary').length, 2);
+});

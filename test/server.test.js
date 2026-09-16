@@ -103,3 +103,65 @@ test('the command hook preserves large structured results, new fields, and UTF-8
   assert.equal(observed.length, 1);
   assert.deepEqual(JSON.parse(observed[0].text), { ...tool, tool_response: { ...tool.tool_response, stderr: '[redacted]' }, future_field: { nested: ['retained', '[redacted]'] } });
 });
+
+test('preference status waits for the matching acknowledgment and reports failures and offline changes', async t => {
+  const h = await fixture(t), pending = [];
+  assert.equal(h.speakingLevel, 2, 'Walkthrough is the default');
+  assert.equal(h.status().speakingUpdate.state, 'next_session');
+  await h.setSpeakingLevel(0);
+  assert.equal(h.status().speakingUpdate.level, 0);
+  const live = h.live = { id: 'offline', state: 'active',
+    append: (kind, text) => new Promise((resolve, reject) => pending.push({ kind, text, resolve, reject })),
+    close: async () => { live.state = 'closed'; },
+  };
+  const first = h.setSpeakingLevel(1);
+  assert.equal(h.status().speakingUpdate.state, 'pending');
+  const second = h.setSpeakingLevel(2);
+  pending[0].resolve(); await first;
+  assert.equal(h.status().speakingUpdate.state, 'pending', 'the earlier ACK cannot confirm the newest selection');
+  assert.equal(h.status().speakingUpdate.level, 2);
+  pending[1].resolve(); await second;
+  assert.equal(h.status().speakingUpdate.state, 'acknowledged');
+  assert.equal(h.status().speakingUpdate.confirmedLevel, 2);
+  const failed = h.setSpeakingLevel(0);
+  pending[2].reject(new Error('append timed out')); await failed;
+  assert.equal(h.status().speakingUpdate.state, 'failed');
+  assert.equal(h.status().speakingUpdate.confirmedLevel, 2);
+  assert.match(h.status().speakingUpdate.error, /timed out/);
+  const late = h.setSpeakingLevel(1);
+  await live.close();
+  assert.equal(h.status().speakingUpdate.state, 'next_session');
+  pending[3].resolve(); await late;
+  assert.equal(h.status().speakingUpdate.state, 'next_session', 'closed-session ACK does not claim to be active');
+});
+
+test('a preference changed during startup reaches the new conversation; Quiet has no unsolicited greeting', async t => {
+  const { LiveSession } = await import('../src/live.js');
+  let release; const ready = new Promise(resolve => { release = resolve; });
+  const appends = []; let greetings = 0;
+  t.mock.method(LiveSession.prototype, 'start', async function () {
+    this.state = 'connecting'; await ready;
+    this.state = 'active'; this.id = this.reservation = 'offline-startup'; this.startedAt = Date.now();
+    this.emit('event', { type: 'session.started' });
+  });
+  t.mock.method(LiveSession.prototype, 'append', async function (kind, text) { appends.push({ kind, text }); });
+  t.mock.method(LiveSession.prototype, 'greet', async () => { greetings++; });
+  t.mock.method(LiveSession.prototype, 'close', async function () {
+    this.state = 'closed'; this.emit('closed', { finalized: true });
+  });
+  const h = await fixture(t); h.channelReady = true;
+  const starting = h.startLive();
+  assert.equal(h.status().speakingUpdate.state, 'starting');
+  await h.setSpeakingLevel(0);
+  assert.equal(h.status().speakingUpdate.state, 'starting');
+  release(); await starting;
+  assert.equal(appends.length, 1); assert.equal(appends[0].kind, 'instructions');
+  assert.match(appends[0].text, /Quiet:/);
+  assert.equal(h.status().speakingUpdate.state, 'acknowledged');
+  assert.equal(h.status().speakingUpdate.confirmedLevel, 0);
+  assert.equal(greetings, 0);
+  await h.live.close(); await h.startLive();
+  assert.equal(appends.length, 1, 'preselected mode is already in startup instructions');
+  assert.equal(h.status().speakingUpdate.source, 'startup');
+  assert.equal(greetings, 0);
+});

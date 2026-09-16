@@ -16,7 +16,7 @@ export class Timeline {
     if (event.type === 'audio_level') {
       // Gated audio is already filtered. Show quiet word tails too; applying
       // the opening threshold again would hide audio that we actually send.
-      const inputThreshold = Number.isFinite(event.gateThreshold) ? .00001 : .008;
+      const inputThreshold = Number.isFinite(event.gateThreshold) ? Number.MIN_VALUE : .008;
       for (const [track, rms, threshold] of [['operator', event.inputRms, inputThreshold], ['speech', event.outputRms, .003]]) {
         let item = this.audio.get(track);
         if (rms >= threshold) {

@@ -59,18 +59,19 @@ try {
   // Exercise the real audio worklet with a virtual microphone, without Claude
   // or OpenAI: synthesized tone in, actual PCM playback out.
   await page.addInitScript(() => {
-    navigator.mediaDevices.getUserMedia = async () => {
+    navigator.mediaDevices.getUserMedia = async constraints => {
+      window.__microphoneConstraints = constraints;
       const audio = new AudioContext({ sampleRate: 24000 }); await audio.resume();
-      const source = audio.createOscillator(); const gain = audio.createGain(); gain.gain.value = .15;
+      const source = audio.createOscillator(); const gain = audio.createGain(); gain.gain.value = .004;
       const destination = audio.createMediaStreamDestination(); source.connect(gain); gain.connect(destination); source.start();
-      window.__virtualAudio = { audio, source, destination }; return destination.stream;
+      window.__virtualAudio = { audio, source, gain, destination }; return destination.stream;
     };
   });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(harness.browserUrl);
   await page.locator('.timeline-item[data-track="operator"]').first().waitFor();
-  assert.equal(await page.locator('#prompt-instructions').textContent(), liveInstructions(1));
+  assert.equal(await page.locator('#prompt-instructions').textContent(), liveInstructions(2));
   assert.match(await page.locator('#prompt-state').textContent(), /startup preview/);
   await page.locator('#live-prompt > summary').click();
   if (artifacts) await page.screenshot({ path: path.join(artifacts, 'prompt-panel.png'), fullPage: true });
@@ -113,12 +114,13 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'mobile page fits');
   if (artifacts) await page.screenshot({ path: path.join(artifacts, 'timeline-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1150 });
-  let inputBytes = 0;
+  let inputBytes = 0; const inputFrames = [];
   harness.startLive = async () => {
     harness.audit = new AudioAudit({ dir: path.join(dir,'audio'), log:harness.log, onError:error=>errors.push(error.message) });
-    harness.live = { instructions:liveInstructions(harness.speakingLevel), append:async(kind,text)=>{harness.__preference={kind,text};}, id: 'offline-audio', state: 'active', usageSeconds: 0, audio: buffer => { inputBytes += buffer.length; }, close: async () => {
+    harness.live = { instructions:liveInstructions(harness.speakingLevel), append:(kind,text)=>{harness.__preference={kind,text};return new Promise(resolve=>{harness.__ackPreference=resolve;});}, id: 'offline-audio', state: 'active', usageSeconds: 0, audio: buffer => { inputBytes += buffer.length; inputFrames.push(Buffer.from(buffer)); }, close: async () => {
       harness.live.state = 'closed'; publish({ type: 'voice_closed', finalized: true }); publish(harness.status());
     } };
+    harness.speakingUpdate = { state: 'acknowledged', level: harness.speakingLevel, confirmedLevel: harness.speakingLevel, source: 'startup' };
     publish({ type: 'voice_started', sessionId: 'offline-audio' }); publish(harness.status());
   };
   await page.locator('#speaking-level').fill('0');
@@ -128,24 +130,52 @@ try {
   await page.getByRole('button', { name: 'Start voice', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#audioState').textContent === 'Microphone on');
   await waitFor(() => inputBytes > 0, 'real worklet sent microphone PCM');
+  await new Promise(resolve => setTimeout(resolve, 350));
+  assert.ok(inputFrames.every(frame => frame.every(byte => byte === 0)), 'quiet virtual whisper is zeroed before the server sees it');
+  assert.ok(!harness.timeline.snapshot().items.some(i => i.track === 'operator' && i.start > now), 'blocked whisper makes no operator bar');
+  assert.match(await page.locator('#gate-state').textContent(), /Gate closed/);
+  assert.equal(await page.evaluate(() => window.__microphoneConstraints.audio.autoGainControl), false);
+  assert.match(await page.locator('#updates-state').textContent(), /Active from session start.*Quiet/);
   await page.locator('#speaking-level').fill('2');
   await page.locator('#speaking-level').dispatchEvent('input');
   await page.locator('#speaking-level').dispatchEvent('change');
-  await waitFor(()=>harness.__preference?.text.includes('Walkthrough:'),'live preference applied');
+  await waitFor(()=>harness.__preference?.text.includes('Walkthrough:'),'live preference sent');
+  await page.waitForFunction(() => document.querySelector('#updates-state').textContent.includes('Applying'));
+  assert.equal(harness.status().speakingUpdate.state, 'pending', 'no false confirmation while the API has not acknowledged');
+  if (artifacts) await page.screenshot({ path: path.join(artifacts, 'preference-pending.png'), fullPage: true });
+  harness.__ackPreference();
+  await page.waitForFunction(() => document.querySelector('#updates-state').textContent.includes('Live acknowledged'));
   await page.waitForFunction(() => document.querySelector('#prompt-preference').textContent.includes('Walkthrough:'));
   assert.equal(await page.locator('#prompt-instructions').textContent(), harness.live.instructions, 'startup prompt stays exact after the preference changes');
   assert.equal(harness.live.instructions, liveInstructions(0), 'this connection started with Quiet');
   assert.equal(await page.locator('#prompt-preference').textContent(), harness.__preference.text, 'selected preference matches the actual instruction append');
   assert.match(await page.locator('#prompt-state').textContent(), /Current voice session/);
+  await page.locator('#microphone-gate').fill('0.001');
+  await page.locator('#microphone-gate').dispatchEvent('input');
+  await page.locator('#microphone-gate').dispatchEvent('change');
+  await waitFor(() => inputFrames.at(-1).some(byte => byte !== 0), 'lower gate passes the same virtual whisper');
+  await waitFor(() => harness.timeline.snapshot().items.some(i => i.track === 'operator' && i.start > now), 'accepted whisper appears on Gantt');
+  await page.waitForFunction(() => document.querySelector('#gate-state').textContent.includes('Passing audio'));
+  if (artifacts) await page.screenshot({ path: path.join(artifacts, 'whisper-passing.png'), fullPage: true });
   await page.locator('#microphone-gate').fill('0.02');
   await page.locator('#microphone-gate').dispatchEvent('input');
   await page.locator('#microphone-gate').dispatchEvent('change');
   await waitFor(()=>fs.existsSync(path.join(dir,'audio','microphone.wav')),'pre-gate microphone recording exists');
+  await waitFor(() => inputFrames.at(-1).every(byte => byte === 0), 'raising the gate blocks the whisper again');
+  await waitFor(() => harness.timeline.audio.get('operator')?.active === false, 'operator bar ends after the gate closes');
+  await page.waitForFunction(() => document.querySelector('#gate-state').textContent.includes('Gate closed'));
+  if (artifacts) await page.screenshot({ path: path.join(artifacts, 'whisper-blocked.png'), fullPage: true });
+  await page.evaluate(() => { window.__virtualAudio.gain.gain.value = .15; });
+  await waitFor(() => inputFrames.at(-1).some(byte => byte !== 0), 'normal voice crosses the higher gate');
   const playback = new Int16Array(12000);
   for (let i = 0; i < playback.length; i++) playback[i] = Math.sin(i / 24000 * Math.PI * 2 * 440) * 8000;
   harness.audit.write('output',Buffer.from(playback.buffer));
-  harness.browser.send(Buffer.from(playback.buffer));
-  await waitFor(() => harness.timeline.snapshot().items.some(i => i.track === 'speech' && i.start > now), 'real rendered playback reached the chart');
+  harness.browser.send(Buffer.from(playback.buffer, 0, 960));
+  await new Promise(resolve => setTimeout(resolve, 30));
+  harness.browser.send(Buffer.from(playback.buffer, 960, 1920));
+  await new Promise(resolve => setTimeout(resolve, 25));
+  harness.browser.send(Buffer.from(playback.buffer, 2880));
+  await waitFor(() => harness.timeline.snapshot().items.some(i => i.track === 'speech' && i.start > now), 'jittered playback reached the chart');
   const measured = harness.timeline.snapshot().items.filter(i => i.start > now);
   assert.ok(measured.some(i => i.track === 'operator'), 'actual microphone measurement reached chart');
   assert.ok(measured.some(i => i.track === 'speech'), 'actual rendered playback reached chart');
@@ -164,5 +194,5 @@ try {
   assert.match(await page.locator('#prompt-state').textContent(), /Last voice session/);
   assert.ok(await page.locator('.timeline-item[data-track="speech"]').count() >= 1, 'audio history survives reload');
   assert.deepEqual(errors, []);
-  console.log('Timeline tracks, hover/pin, zoom/history, live updates, reload, virtual microphone, playback and mute passed. No API spending.');
+  console.log('Timeline, preference acknowledgment, virtual whisper gate, exact jittered playback, mute and reload passed. No API spending.');
 } finally { await browser?.close(); await harness.close(); fs.rmSync(dir, { recursive: true, force: true }); }
