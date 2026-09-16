@@ -56,11 +56,14 @@ export class Harness {
       mode: this.live?.id ? this.live.state === 'closed' ? 'previous' : 'session' : 'preview',
       speakingPreference: speakingPolicy(this.speakingLevel),
     };
-    return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, maxSeconds: this.maxSeconds, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel, speakingUpdate, prompt };
+    const context = this.mediator?.context;
+    const contextDelivery = { waiting: context?.queue.length ?? 0, inFlight: context?.inFlight ?? 0, yieldingToSpeech: Date.now() < (context?.audioQuietAfter ?? 0) };
+    return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, maxSeconds: this.maxSeconds, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel, speakingUpdate, prompt, contextDelivery };
   }
   async setSpeakingLevel(level) {
     const policy = speakingPolicy(level);
     this.speakingLevel = level;
+    this.mediator?.context.setSpeakingLevel(level);
     const live = this.live;
     const update = this.speakingUpdate = {
       state: live?.state === 'active' ? 'pending' : ['new', 'connecting'].includes(live?.state) ? 'starting' : 'next_session',
@@ -207,6 +210,7 @@ export class Harness {
         if (event.type === 'audio_level' && [event.at, event.durationMs, event.inputRms, event.outputRms].every(Number.isFinite)
           && Math.abs(event.at - Date.now()) < 5000 && event.durationMs > 0 && event.durationMs <= 500
           && event.inputRms >= 0 && event.inputRms <= 1 && event.outputRms >= 0 && event.outputRms <= 1) {
+          this.mediator?.context.setAudioActive(event.inputRms > 0 || event.outputRms > .002);
           this.log({ ...event, liveRun: this.live?.reservation, backlogMs: Number.isFinite(event.backlogMs) ? event.backlogMs : undefined });
           const items = this.timeline.add(event);
           if (items.length) ws.send(JSON.stringify({ type: 'timeline_update', items }));
@@ -233,7 +237,7 @@ export class Harness {
     this.audit?.close(); this.audit = null;
     this.live = live;
     this.mediator?.stop();
-    this.mediator = new Mediator({ live, observer: this.observer, initialObservationCount: history.count, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
+    this.mediator = new Mediator({ live, observer: this.observer, initialObservationCount: history.count, speakingLevel: startupLevel, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
     this.publish(this.status());
     live.on('fault', error => this.fault(error));
     live.on('answer', sdp => this.publish({ type: 'voice_answer', sdp }));

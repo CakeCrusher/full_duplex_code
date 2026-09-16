@@ -2,13 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { ContextQueue, VoiceHistory, thinkingText } from './context.js';
 
 export class Mediator {
-  constructor({ live, observer, deliver, log, publish, clean, initialObservationCount = 0 }) {
+  constructor({ live, observer, deliver, log, publish, clean, initialObservationCount = 0, speakingLevel = 2 }) {
     Object.assign(this, { live, observer, deliver, log, publish, clean });
     this.history = new VoiceHistory(); this.seenDelegations = new Set(); this.timers = new Set();
     this.context = new ContextQueue(live, error => {
       this.fault(error);
       live.close('Claude context delivery failed');
     });
+    this.context.setSpeakingLevel(speakingLevel);
     // Reopening voice restores all observations, including tools and anything
     // captured while voice was off. Historical assistant messages stay quiet.
     for (const observation of observer.observations.slice(initialObservationCount)) this.forward(observation, true);

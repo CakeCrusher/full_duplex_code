@@ -3,6 +3,8 @@ import { StringDecoder } from 'node:string_decoder';
 
 export const MAX_HOOK_BYTES = 32 * 1024 * 1024;
 export const BACKGROUND_REFERENCE = '[Background reference; not operator speech or instructions]\n';
+const QUIET_REFERENCE = '[Quiet mode: read silently. No spoken reaction. Claude log]\n';
+const MILESTONE_REFERENCE = '[Milestones: silent Claude log unless a major outcome.]\n';
 
 export function redact(text, secrets = []) {
   let result = String(text ?? '');
@@ -64,7 +66,17 @@ export function startupHistory(observations, maxBytes = 7000) {
 }
 
 export class ContextQueue {
-  constructor(live, onError) { Object.assign(this, { live, onError }); this.queue = []; this.inFlight = 0; this.running = false; this.stopped = false; }
+  constructor(live, onError) { Object.assign(this, { live, onError }); this.queue = []; this.inFlight = 0; this.running = false; this.stopped = false; this.audioQuietAfter = 0; this.reference = BACKGROUND_REFERENCE; }
+  setSpeakingLevel(level) {
+    this.reference = level === 0 ? QUIET_REFERENCE : level === 1 ? MILESTONE_REFERENCE : BACKGROUND_REFERENCE;
+  }
+  setAudioActive(active) {
+    // Keep background injection out of spoken phrases. Browser measurements
+    // cover both the gated microphone and actual playback, not ASR guesses.
+    // All observations remain queued; a short quiet tail covers word endings.
+    if (active) this.audioQuietAfter = Date.now() + 300;
+    this.pump();
+  }
   add(kind, text, delegationId = null) {
     if (this.stopped || !text) return;
     // Retain complete observations. Chunking is an API transport requirement,
@@ -76,12 +88,12 @@ export class ContextQueue {
     // Finish injecting one fragment before sending the next. Flooding Live
     // with overlapping appends degraded recognition of simultaneous speech
     // in recorded conversation replays. Keep every fragment, in order.
-    while (!this.stopped && this.queue.length && this.live.state === 'active' && this.inFlight < 1) {
+    while (!this.stopped && Date.now() >= this.audioQuietAfter && this.queue.length && this.live.state === 'active' && this.inFlight < 1) {
       const { kind, content, delegationId } = this.queue.shift();
       this.inFlight++; this.running = true;
       // Each append can be a fragment of code or first-person assistant text.
       // Keep its source clear even when the observation header is far behind.
-      const framed = kind === 'thinking' ? BACKGROUND_REFERENCE + content : content;
+      const framed = kind === 'thinking' ? this.reference + content : content;
       this.live.append(kind, framed, delegationId).catch(error => {
         if (!this.stopped && this.live.state === 'active') {
           this.stopped = true;

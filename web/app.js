@@ -47,6 +47,10 @@ function handle(event) {
     }
     if (document.activeElement !== $('speaking-level')) showSpeaking(event.speakingLevel ?? 2);
     showSpeakingUpdate(event.speakingUpdate ?? { state: 'next_session', level: event.speakingLevel ?? 2 });
+    const delivery = event.contextDelivery ?? { waiting: 0, inFlight: 0 };
+    $('context-delivery').textContent = event.live !== 'active' ? 'Claude observations stay saved while voice is off.'
+      : delivery.waiting ? `${delivery.waiting} context fragments waiting · ${delivery.yieldingToSpeech ? 'letting the conversation finish' : 'sending in order'}. All observations remain saved.`
+      : delivery.inFlight ? 'Waiting for Live to acknowledge the last context fragment.' : 'No context waiting to be sent.';
     $('connection').textContent = active ? muted ? 'Microphone muted' : 'Listening' : event.channel ? 'Agent connected' : 'Waiting for Claude';
     $('agentState').textContent = ({ starting: 'Starting in your terminal', idle: 'Ready for your next request', working: 'Working', needs_attention: 'Needs your attention in the terminal', failed: 'Reported an error', exited: 'Session ended' })[event.agent] ?? event.agent;
     $('start').disabled = starting || active || !event.channel || ['connecting', 'active', 'closing'].includes(event.live) || event.agent === 'exited';
@@ -58,7 +62,8 @@ function handle(event) {
   if (event.type === 'history') for (const item of event.events) handle(item);
   if (event.type === 'fault') { notice(event.message); if (starting && !active) { starting = false; releaseAudio(); } }
   if (event.type === 'voice_answer' && peer) {
-    peer.setRemoteDescription({ type: 'answer', sdp: event.sdp }).catch(error => { notice(error.message); stop(); });
+    const connection = peer;
+    connection.setRemoteDescription({ type: 'answer', sdp: event.sdp }).catch(error => { if (peer === connection) { notice(error.message); stop(); } });
   }
   if (event.type === 'voice_started') {
     node?.port.postMessage({ type: 'audit_start', sessionId: event.sessionId });
@@ -128,7 +133,7 @@ async function start() {
       // element. Keep that element silent: the measured worklet is the only
       // audible output, so the same track cannot play twice.
       remoteAudio = new Audio(); remoteAudio.srcObject = received; remoteAudio.muted = true;
-      remoteAudio.play().catch(error => { notice(error.message); stop(); });
+      remoteAudio.play().catch(error => { if (peer === connection) { notice(error.message); stop(); } });
       remote = context.createMediaStreamSource(received); remote.connect(node, 0, 1);
     };
     connection.onconnectionstatechange = () => {
