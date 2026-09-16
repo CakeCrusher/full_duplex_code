@@ -23,7 +23,7 @@ if (values.help) {
   --observe hooks       Live display hooks (default), or transcript file tail
   --port 0              Local port (0 chooses a free port)
   npm run doctor        Check local prerequisites without API spending
-  npm run usage         Show the local $25 voice spending budget
+  npm run usage         Show recorded voice usage and cost estimates
 
 Other arguments are forwarded unchanged after the generated Claude options.
 Claude applies its normal override/merge rules. Examples:

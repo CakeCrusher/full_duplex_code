@@ -51,7 +51,7 @@ function handle(event) {
     $('start').disabled = starting || active || !event.channel || ['connecting', 'active', 'closing'].includes(event.live) || event.agent === 'exited';
     $('project').textContent = event.cwd;
     $('usage').textContent = active ? `${Math.floor(event.usageSeconds / 60)}m ${event.usageSeconds % 60}s · $${(event.usageSeconds * 0.05 / 60).toFixed(3)} · ${event.maxSeconds / 60} min limit` : 'Not connected · $0.05/min';
-    $('budget').textContent = `$${event.remainingUsd.toFixed(2)} experiment budget available`;
+    $('budget').textContent = `Estimated total $${event.committedUsd.toFixed(2)} · includes unfinished sessions`;
   }
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
   if (event.type === 'history') for (const item of event.events) handle(item);
@@ -63,7 +63,7 @@ function handle(event) {
   }
   if (event.type === 'voice_closed') {
     releaseAudio();
-    notice(event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? 'Voice session ended. Claude is still available in your terminal.' : 'Voice connection ended. Final usage was not confirmed; its budget reservation is retained.');
+    notice(event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? 'Voice session ended. Claude is still available in your terminal.' : 'Voice connection ended. Final usage was not confirmed; the maximum cost estimate is retained.');
   }
 }
 function connect() {

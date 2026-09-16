@@ -53,17 +53,30 @@ test('accelerated audio cannot outrun the reserved duration', async t => {
   assert.equal((await live.closed).finalized, true);
 });
 
-test('a budget rejection closes without opening a connection or leaving shutdown pending', async t => {
+test('a ledger failure closes without opening a connection or leaving shutdown pending', async t => {
   const { live, budget } = await fixture(t, () => {});
   budget.reserve(29990, 'existing usage');
+  fs.writeFileSync(`${budget.file}.lock`, '');
   let closed = 0; live.on('closed', () => closed++);
-  await assert.rejects(live.start(), /requires \$0\.04, but \$0\.01 remains.*--max-minutes/);
+  await assert.rejects(live.start(), /Usage ledger locked/);
   assert.equal(live.state, 'closed');
   assert.equal(live.ws, undefined);
   const result = await live.close();
   assert.equal(result.reserved, false);
   assert.equal(closed, 1);
   assert.equal(budget.summary().runs.length, 1, 'failed startup adds no reservation');
+});
+
+test('voice can start beyond the former spending cap and still records final usage', async t => {
+  const { live, budget } = await fixture(t, (ws, event) => {
+    if (event.type === 'session.close') ws.send(JSON.stringify({ type: 'session.closed', usage: { seconds: 7 }, reason: 'close_requested', session: { id: 'test-live' } }));
+  });
+  const old = budget.reserve(36000, 'previous session');
+  budget.update(old, 36000, { finalized: true });
+  await live.start();
+  assert.equal(live.state, 'active');
+  assert.equal((await live.close()).finalized, true);
+  assert.ok(Math.abs(budget.summary().committedUsd - (30 + 7 * RATE_PER_SECOND)) < 1e-9);
 });
 
 test('missing credentials and closing an unstarted session both settle shutdown', async t => {

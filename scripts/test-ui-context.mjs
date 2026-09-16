@@ -116,13 +116,13 @@ try {
   if (artifacts) await page.screenshot({ path: path.join(artifacts, 'timeline-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1150 });
   // Exercise the real rejected-start path before replacing Live with the
-  // offline audio fixture. The temporary ledger cannot spend API credits.
+  // offline audio fixture. The temporary ledger lock prevents API connections.
   harness.budget = new Budget(path.join(dir, 'budget.json'));
-  harness.budget.reserve(29990, 'budget rejection fixture');
+  harness.budget.reserve(36000, 'usage tracking fixture');
+  fs.writeFileSync(`${harness.budget.file}.lock`, '');
   for (let attempt = 0; attempt < 2; attempt++) {
     await page.getByRole('button', { name: 'Start voice', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('--max-minutes'));
-    assert.match(await page.locator('#notice').textContent(), /requires \$1\.53, but \$0\.01 remains/);
+    await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('Usage ledger locked'));
     assert.equal(await page.locator('#audioState').textContent(), 'Microphone off');
     assert.equal(await page.locator('#start').isEnabled(), true);
     assert.equal(harness.live.state, 'closed');
@@ -130,6 +130,8 @@ try {
     assert.equal(await page.evaluate(() => window.__virtualAudio.destination.stream.getTracks().every(track => track.readyState === 'ended')), true);
     await page.evaluate(() => window.__virtualAudio.audio.close());
   }
+  fs.unlinkSync(`${harness.budget.file}.lock`);
+  assert.match(await page.locator('#budget').textContent(), /Estimated total \$30\.00/);
   let inputBytes = 0; const inputFrames = [];
   harness.startLive = async () => {
     harness.audit = new AudioAudit({ dir: path.join(dir,'audio'), log:harness.log, onError:error=>errors.push(error.message) });

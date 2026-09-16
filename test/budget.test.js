@@ -24,8 +24,15 @@ test('usage snapshots are cumulative and finalization releases the unused reserv
   b.update(id, 30, { finalized: true });
   assert.equal(b.summary().committedUsd, 30 * RATE_PER_SECOND);
 });
-test('cannot exceed the total authorization by running simultaneous reservations', t => {
-  const b = ledger(t); b.reserve(29990, 'almost all budget');
-  assert.throws(() => b.reserve(20, 'overrun'), /budget would be exceeded/);
-  assert.equal(b.summary().runs.length, 1);
+test('old spending limits are ignored while previous usage is preserved', t => {
+  const b = ledger(t); const old = b.reserve(36000, 'previous session');
+  b.update(old, 36000, { finalized: true });
+  const previous = b.read().runs;
+  fs.writeFileSync(b.file, JSON.stringify({ version: 1, limitUsd: 25, runs: previous }));
+  b.reserve(1835, 'new full-length session');
+  const resumed = new Budget(b.file);
+  assert.deepEqual(resumed.summary().runs[0], previous[0]);
+  assert.equal(resumed.summary().runs.length, 2);
+  assert.equal(resumed.summary().committedUsd, 30 + 1835 * RATE_PER_SECOND);
+  assert.equal(JSON.parse(fs.readFileSync(b.file, 'utf8')).limitUsd, undefined);
 });

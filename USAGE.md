@@ -37,7 +37,7 @@ Check the setup without starting a paid voice session:
 npm run doctor
 ```
 
-The output reports whether Claude is installed and signed in, whether the key is present, and the local spending budget. It checks key presence, not whether OpenAI will accept it or grant model access.
+The output reports whether Claude is installed and signed in, whether the key is present, and recorded local usage. It checks key presence, not whether OpenAI will accept it or grant model access.
 
 ## Start a coding session
 
@@ -209,11 +209,11 @@ OpenAI bills the connected voice session, including time spent listening or mute
 npm run usage
 ```
 
-The application estimates voice cost at $0.05 per minute and enforces a local $25 cumulative budget across runs. Each connection defaults to a 30-minute limit. Check [OpenAI's model page](https://developers.openai.com/api/docs/models/gpt-live-1) for current service pricing and availability.
+The application estimates voice cost at $0.05 per minute and tracks cumulative usage without a local spending cap. Each connection defaults to a 30-minute limit. Check [OpenAI's model page](https://developers.openai.com/api/docs/models/gpt-live-1) for current service pricing and availability.
 
-Before connecting, the application reserves enough of the local budget for the maximum session duration plus a shutdown margin. When final usage arrives, it releases the unused reservation. A session whose final usage could not be confirmed retains its reservation, so the displayed total can be higher than completed usage alone.
+Before connecting, the application records a maximum cost estimate for the session duration plus a shutdown margin. Final usage replaces that estimate when the session ends. Sessions with unconfirmed final usage retain their maximum estimates, so the displayed total can be higher than completed usage alone.
 
-The ledger lives in `.runs/budget.json`. Do not delete it to clear an error or bypass the spending limit. This is a local spending guard, not an account-wide limit for other applications using your API key. A shorter `--max-minutes` value reduces the reservation needed for a new connection.
+Usage history stays in `.runs/budget.json`. Existing history is preserved; old spending limits no longer block new sessions. Use `--max-minutes` to change the duration of each voice connection.
 
 ## Troubleshooting
 
@@ -229,13 +229,13 @@ The ledger lives in `.runs/budget.json`. Do not delete it to clear an error or b
 | The companion misses terminal text | Confirm Claude was started through this launcher. If hooks are unavailable, restart the same session with `--resume SESSION_ID --observe transcript`. |
 | A second companion tab cannot connect | Close the first tab, then open the link again. Only one audio client can connect to each launcher. |
 | Voice disconnected | Keep Claude open, reopen the companion link, and click Start voice. Resolve any terminal/channel issue first. |
-| The budget refuses a session | Run `npm run usage`. Check completed usage and retained reservations; do not delete the ledger. |
+| An old launcher still reports a budget limit | Exit Claude with `/exit`, restart the launcher, and use the newly opened companion tab. |
 
 Voice closes automatically if microphone streaming stops or the Claude channel remains disconnected. This avoids leaving a paid connection running without a usable companion.
 
 ## Local records and sharing
 
-`.runs/` contains connection details, event logs, conversation text, and the budget ledger. `.env`, `.runs/`, `.cache/`, `.scratch/`, and `docs/` are ignored by Git. Each voice connection saves private 24 kHz mono WAV files under `.runs/<run>/audio/<voice-id>/`: `microphone.wav` (microphone before the noise gate, respecting mute), `input.wav` (gated microphone samples actually sent to Live), `output.wav` (Live audio received, in order), and `playback.wav` (browser-rendered audio, including silent playback gaps). These are local recordings, not OpenAI stored sessions. They use about 11.5 MB per minute combined. `events.jsonl` includes sample offsets, audio levels, playback backlog, hook events, exact context appends and acknowledgments. `timeline.json` preserves the Gantt when voice ends, the browser disconnects, or the launcher exits. Browser crashes may lose their last in-flight playback packets; audit gaps and failures are logged. Old runs without these files cannot recover audio retrospectively. Delete a run’s directory to delete its recordings.
+`.runs/` contains connection details, event logs, conversation text, and the usage ledger. `.env`, `.runs/`, `.cache/`, `.scratch/`, and `docs/` are ignored by Git. Each voice connection saves private 24 kHz mono WAV files under `.runs/<run>/audio/<voice-id>/`: `microphone.wav` (microphone before the noise gate, respecting mute), `input.wav` (gated microphone samples actually sent to Live), `output.wav` (Live audio received, in order), and `playback.wav` (browser-rendered audio, including silent playback gaps). These are local recordings, not OpenAI stored sessions. They use about 11.5 MB per minute combined. `events.jsonl` includes sample offsets, audio levels, playback backlog, hook events, exact context appends and acknowledgments. `timeline.json` preserves the Gantt when voice ends, the browser disconnects, or the launcher exits. Browser crashes may lose their last in-flight playback packets; audit gaps and failures are logged. Old runs without these files cannot recover audio retrospectively. Delete a run’s directory to delete its recordings.
 
 Treat logs and companion links as private. When reporting a problem, share the error and reproduction steps after removing keys, connection tokens, and private project content.
 

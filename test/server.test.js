@@ -16,14 +16,15 @@ async function fixture(t) {
   return harness;
 }
 
-test('budget failure allows repeated start attempts and does not hang harness shutdown', async t => {
+test('ledger failure allows repeated start attempts and does not hang harness shutdown', async t => {
   const h = await fixture(t); h.channelReady = true;
   h.budget.reserve(29990, 'existing usage');
-  await assert.rejects(h.startLive(), /budget would be exceeded/);
+  fs.writeFileSync(`${h.budget.file}.lock`, '');
+  await assert.rejects(h.startLive(), /Usage ledger locked/);
   const first = h.live;
   assert.equal(h.status().live, 'closed');
   assert.equal(h.status().speakingUpdate.state, 'next_session');
-  await assert.rejects(h.startLive(), /budget would be exceeded/);
+  await assert.rejects(h.startLive(), /Usage ledger locked/);
   assert.notEqual(h.live, first, 'retry creates a fresh session instead of silently returning');
   assert.equal(h.live.state, 'closed');
   assert.equal(h.budget.summary().runs.length, 1);

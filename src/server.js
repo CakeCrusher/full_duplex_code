@@ -56,7 +56,7 @@ export class Harness {
       mode: this.live?.id ? this.live.state === 'closed' ? 'previous' : 'session' : 'preview',
       speakingPreference: speakingPolicy(this.speakingLevel),
     };
-    return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, maxSeconds: this.maxSeconds, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, remainingUsd: budget.remainingUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel, speakingUpdate, prompt };
+    return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, maxSeconds: this.maxSeconds, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel, speakingUpdate, prompt };
   }
   async setSpeakingLevel(level) {
     const policy = speakingPolicy(level);
