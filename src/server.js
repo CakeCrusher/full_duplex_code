@@ -257,7 +257,7 @@ export class Harness {
         }
         if (event.type === 'audio_transport' && this.live?.state === 'active' && event.voiceSessionId === this.live.id
           && Number.isFinite(event.at) && Math.abs(event.at - Date.now()) < 5000 && event.stats && typeof event.stats === 'object') {
-          const fields = ['clockRate', 'packetsReceived', 'packetsLost', 'packetsDiscarded', 'jitter', 'concealedSamples', 'silentConcealedSamples',
+          const fields = ['clockRate', 'requestedJitterBufferMs', 'packetsReceived', 'packetsLost', 'packetsDiscarded', 'jitter', 'concealedSamples', 'silentConcealedSamples',
             'concealmentEvents', 'totalSamplesReceived', 'insertedSamplesForDeceleration', 'removedSamplesForAcceleration',
             'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount'];
           const stats = Object.fromEntries(fields.filter(key => Number.isFinite(event.stats[key])).map(key => [key, event.stats[key]]));

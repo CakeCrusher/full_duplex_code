@@ -171,6 +171,7 @@ async function start() {
             'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount'];
           const stats = Object.fromEntries(fields.filter(key => Number.isFinite(stat[key])).map(key => [key, stat[key]]));
           stats.clockRate = report.get(stat.codecId)?.clockRate;
+          stats.requestedJitterBufferMs = connection.getReceivers().find(receiver => receiver.track.kind === 'audio')?.jitterBufferTarget;
           ws.send(JSON.stringify({ type: 'audio_transport', voiceSessionId, at: Date.now(), stats }));
         }
       } catch { /* Missing diagnostics must not interrupt audio. */ }
@@ -178,6 +179,9 @@ async function start() {
     }, 1000);
     connection.ontrack = event => {
       if (peer !== connection || !context || !node) return;
+      // Give late network packets a small recovery window in the existing
+      // WebRTC receiver. Speech still streams continuously in both directions.
+      if ('jitterBufferTarget' in event.receiver) event.receiver.jitterBufferTarget = 200;
       const received = new MediaStream([event.track]);
       // Chrome starts the WebRTC receiver's playout clock through a media
       // element. Keep that element silent: the measured worklet is the only

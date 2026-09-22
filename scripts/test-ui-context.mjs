@@ -237,7 +237,7 @@ try {
   await page.getByRole('button', { name: 'Mute microphone', exact: true }).click();
   await waitFor(() => harness.timeline.audio.get('operator')?.active === false, 'muted microphone activity ended');
   const transportEvents = () => fs.readFileSync(path.join(dir, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(e => e.type === 'audio.transport');
-  await waitFor(() => transportEvents().some(e => e.voiceSessionId === 'offline-audio' && e.stats.clockRate === 48000 && e.stats.packetsReceived > 0), 'native receiver diagnostics are saved for this voice connection');
+  await waitFor(() => transportEvents().some(e => e.voiceSessionId === 'offline-audio' && e.stats.clockRate === 48000 && e.stats.packetsReceived > 0 && e.stats.requestedJitterBufferMs === 200), 'native receiver diagnostics and recovery target are saved for this voice connection');
   await new Promise(resolve=>setTimeout(resolve,700));
   await page.getByRole('button', { name: 'End voice', exact: true }).click();
   await new Promise(resolve=>setTimeout(resolve,100));
