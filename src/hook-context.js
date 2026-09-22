@@ -141,7 +141,10 @@ export class HookFeed {
     const weights = batch.reduce((n, item) => n + (urgent.has(item.observation.name) ? 6 : 1), 0);
     const records = batch.map(item => {
       const weight = urgent.has(item.observation.name) ? 6 : 1;
-      const budget = pressured ? Math.max(80, Math.min(600, Math.floor(capacity * weight / weights))) : 600;
+      // Routine code/log detail competes with spoken input even before a long
+      // ACK backlog develops. Reserve the larger view for requests and outcomes.
+      const limit = urgent.has(item.observation.name) ? 600 : 160;
+      const budget = pressured ? Math.max(80, Math.min(limit, Math.floor(capacity * weight / weights))) : limit;
       return { ...this.projector.project(item.observation, { budget, historical: item.historical, state: item.state }), receivedAt: item.receivedAt };
     });
     const text = (this.coalesced ? JSON.stringify({ olderObservationsCoalesced: this.coalesced, detail: 'Full observations retained locally; this feed contains the newer and higher-priority observations.' }) + '\n' : '') + records.map(record => record.text).join('\n');

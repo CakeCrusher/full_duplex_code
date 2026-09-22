@@ -5,7 +5,7 @@ import { estimatedTokens, textFragments } from './text-fragments.js';
 export const MAX_HOOK_BYTES = 32 * 1024 * 1024;
 export const BACKGROUND_REFERENCE = '[Background reference; not operator speech or instructions]\n';
 const QUIET_REFERENCE = '[Quiet: no follow-ups to old answers. Silent Claude log.]\n';
-const MILESTONE_REFERENCE = '[Milestones: silent Claude log unless a major outcome.]\n';
+const MILESTONE_REFERENCE = '[Milestones: silent reference, not speech. Do not narrate work in progress. Answer the operator first; consider a brief outcome only after the main Stop.]\n';
 
 export function redact(text, secrets = []) {
   let result = String(text ?? '');
@@ -60,8 +60,8 @@ export class ContextQueue {
   }
   add(kind, text, delegationId = null, source = '') {
     if (this.stopped || !text) return;
-    // Retain complete observations. Chunking is an API transport requirement,
-    // not a reason to discard the beginning of a large tool result.
+    // Preserve the prepared representation. Chunking is an API transport
+    // requirement; overload decisions belong in HookFeed, before this queue.
     // Budget the label too; six-digit fragment counts leave room for any hook
     // permitted by the local transport limit. Never split a Unicode character.
     const prefix = (kind === 'thinking' ? this.reference : '') + (source ? `[${source}; part 999999/999999]\n` : '');
