@@ -88,6 +88,8 @@ Hover over an item to see its text and timing. Click or tap to pin the full deta
 
 Bars represent durations; thin markers represent instant events. Request durations describe delivery, not how long Claude spends executing a task. Transcript timing may differ from playback because text and audio travel separately. Microphone activity is a level estimate, not a guarantee that every sound is speech.
 
+Output captions can also omit words that were spoken, or include words absent from the audio. A sentence ending in the transcript is therefore not proof of an audible cutoff. Compare the saved API output and browser playback recordings when investigating missing speech.
+
 Click a voice request to see the **full channel message**, including any earlier conversation attached for reference. **Copy message** copies that text. Expand **Channel notification JSON** for the content and metadata sent by the channel. Once Claude's `UserPromptSubmit` hook arrives, the inspector shows the captured prompt and checks that its contents match the sent message. Until then, delivery is not presented as verified receipt. A mismatch is shown explicitly.
 
 The channel uses the latest speech group as the request, with a two-second pause separating groups. Earlier speech remains reference context. The bridge does not rewrite transcription mistakes; the inspector shows what was actually sent.
