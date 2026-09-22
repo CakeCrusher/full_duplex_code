@@ -104,3 +104,32 @@ test('Stop replaces only repeated display text from the same agent and records i
   assert.match(prepared.content, /child/);
   assert.match(prepared.content, /Open it locally/);
 });
+
+test('tight tool views preserve file identity and command outcomes rather than empty batch metadata', () => {
+  const cwd = '/long/local/workspace/' + 'nested/'.repeat(30), file = cwd + '/plane.html';
+  const write = { tool_name: 'Write', tool_input: { file_path: file, content: 'source code\n'.repeat(5000) }, tool_response: `File created successfully at: ${file}` };
+  const check = { tool_name: 'Bash', tool_input: { description: 'Check game syntax', command: 'check '.repeat(3000) }, tool_response: 'JS syntax OK' };
+  for (const tool of [write, check]) {
+    const input = observation('PostToolBatch', { cwd, tool_calls: [tool] });
+    const result = new HookContext().project(input, { budget: 80 });
+    const view = JSON.parse(result.text);
+    assert.equal(view.tool_name, tool.tool_name);
+    assert.equal(view.partial, true);
+    assert.equal(view.tool_count, 1);
+    assert.ok(result.tokens <= 80);
+    if (tool === write) assert.equal(view.file_path, 'plane.html');
+    else assert.match(result.text, /JS syntax OK/);
+    assert.match(input.text, /source code|check check/, 'full raw hook remains intact');
+  }
+});
+
+test('failed command status survives a tight view containing a huge code body', () => {
+  const result = new HookContext().project(observation('PostToolUseFailure', {
+    tool_name: 'Bash', tool_input: { command: 'build '.repeat(10000) },
+    tool_response: { exitCode: 1, stderr: 'missing dependency', stdout: 'log '.repeat(10000) },
+  }), { budget: 80 });
+  const view = JSON.parse(result.text);
+  assert.equal(view.exitCode, 1);
+  assert.equal(view.stderr, 'missing dependency');
+  assert.ok(result.tokens <= 80);
+});

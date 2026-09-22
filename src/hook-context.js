@@ -70,11 +70,25 @@ export class HookContext {
       // Keep an explicit partial view and important scalar fields, never pretend
       // that a clipped nested result is a complete result.
       view = { hook: name, claude_turn_state: state, ...(historical ? { historical: true } : {}), partial: true };
-      for (const key of ['error', 'prompt', 'last_assistant_message', 'delta', 'message', 'tool_name', 'agent_id', 'is_error', 'reason', 'tool_response', 'tool_input']) {
-        if (data[key] === undefined) continue;
-        const value = typeof data[key] === 'string' ? data[key] : JSON.stringify(data[key]);
+      // Preserve the meaning of a tool observation before spending its small
+      // allowance on serialized code bodies. In particular, nested file paths
+      // and command results must not disappear into an empty PostToolBatch.
+      const localPath = path => typeof path === 'string' && data.cwd && path.startsWith(data.cwd + '/') ? path.slice(data.cwd.length + 1) : path;
+      const toolView = tool => ({ tool_name: tool.tool_name,
+        file_path: localPath(tool.tool_input?.file_path ?? tool.tool_response?.filePath),
+        description: tool.tool_input?.description, tool_response: tool.tool_response });
+      const single = data.tool_calls?.length === 1 ? data.tool_calls[0] : data;
+      const input = single.tool_input, result = single.tool_response;
+      const fields = { ...data, tool_name: single.tool_name, tool_response: result,
+        file_path: localPath(input?.file_path ?? result?.filePath),
+        description: input?.description, exitCode: result?.exitCode ?? result?.exit_code,
+        stderr: result?.stderr, stdout: result?.stdout,
+        tool_count: data.tool_calls?.length, tool_calls: data.tool_calls?.length > 1 ? data.tool_calls.map(toolView) : undefined };
+      for (const key of ['agent_id', 'error', 'is_error', 'exitCode', 'stderr', 'prompt', 'last_assistant_message', 'delta', 'message', 'tool_name', 'file_path', 'description', 'stdout', 'reason', 'tool_count', 'tool_calls', 'tool_response', 'tool_input']) {
+        if (fields[key] === undefined || fields[key] === '') continue;
+        const value = typeof fields[key] === 'string' ? fields[key] : JSON.stringify(fields[key]);
         for (const length of [500, 180, 60]) {
-          const candidate = { ...view, [key]: excerpt(value, length) };
+          const candidate = { ...view, [key]: typeof fields[key] === 'object' || typeof fields[key] === 'string' ? excerpt(value, length) : fields[key] };
           if (estimatedTokens(JSON.stringify(candidate)) <= budget) { view = candidate; break; }
         }
       }
