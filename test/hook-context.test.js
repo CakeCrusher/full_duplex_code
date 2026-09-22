@@ -130,6 +130,7 @@ test('failed command status survives a tight view containing a huge code body', 
   assert.equal(view.data.tool_response.exitCode, 1);
   assert.equal(view.data.tool_response.stderr, 'missing dependency');
   assert.ok(result.tokens <= 1200);
+  assert.equal(result.important, true);
 });
 
 test('complete prose retains the middle of long answers, repeated requests and restored messages', () => {

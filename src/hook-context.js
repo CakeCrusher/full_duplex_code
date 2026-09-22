@@ -96,7 +96,7 @@ export class HookContext {
       this.seen.set(item.hash, `hook ${id}${result.reducedFields.includes('wide tool object') ? '' : ' ' + item.field}${full ? ' (complete)' : ' (excerpt only; full value remains local)'}`);
     }
     if (this.seen.size > 2048) this.seen = new Map([...this.seen].slice(-1024));
-    return { ...result, sourceHash: digest(observation.text), name, important: complete.has(name), tokens: estimatedTokens(result.text) };
+    return { ...result, sourceHash: digest(observation.text), name, important: prose || immediate.has(name), tokens: estimatedTokens(result.text) };
   }
 }
 
