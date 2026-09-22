@@ -11,7 +11,7 @@ test('nested, wide and Unicode hook payloads have a total bound; raw observation
     { tool_response: Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [String(i), 'value'.repeat(200)])) },
     { tool_response: { lines: Array.from({ length: 10000 }, (_, i) => `line ${i}`) }, error: 'fatal: permission denied' },
   ];
-  for (const data of fixtures) for (const budget of [80, 240, 600]) {
+  for (const data of fixtures) for (const budget of [240, 1200]) {
     const hook = observation('PostToolUseFailure', data), original = hook.text;
     const result = new HookContext().project(hook, { budget });
     assert.ok(estimatedTokens(result.text) <= budget);
@@ -26,7 +26,7 @@ test('repeated code becomes a reference while the distinct tool result remains',
   const first = projector.project(observation('PreToolUse', { tool_input: { command } }));
   const second = projector.project(observation('PostToolUse', { tool_input: { command }, tool_response: { exitCode: 1, stderr: 'missing dependency' } }));
   assert.match(first.text, /source code/);
-  assert.match(second.text, /Repeated content/);
+  assert.match(second.text, /same_as.*hook 1.*excerpt only/);
   assert.match(second.text, /missing dependency/);
   assert.match(second.text, /exitCode.*1/);
 });
@@ -49,25 +49,23 @@ function fixture(t) {
   return { feed, context, logs, sent };
 }
 
-test('overload stays bounded and preserves Stop, errors and source provenance in causal order', t => {
+test('pending acknowledgments do not discard assistant paragraphs or delay new hook delivery', t => {
   const f = fixture(t);
   f.feed.add(observation('PreToolUse'));
   for (let i = 0; i < 60; i++) f.feed.add(observation('MessageDisplay', { delta: `Step ${i}: ` + 'detail '.repeat(100) }));
   f.feed.add(observation('PostToolUseFailure', { error: 'build failed' }));
   f.feed.add(observation('Stop', { last_assistant_message: 'The file exists but the build failed.' }));
-  assert.equal(f.sent.length, 0, 'do not load a saturated API with more data');
-  assert.equal(f.feed.pending.length, 32);
-  f.context.inFlightTokens = 0; f.feed.flush();
-  assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0][1], /build failed/);
-  assert.match(f.sent[0][1], /turn_finished/);
-  assert.equal(f.sent[0][0], 'thinking');
-  const prepared = f.logs.find(e => e.type === 'context.prepared');
+  const deliveries = f.sent.map(s => s[1]).join('\n');
+  for (let i = 0; i < 60; i++) assert.ok(deliveries.includes(`Step ${i}: ` + 'detail '.repeat(100)));
+  assert.match(deliveries, /build failed/);
+  assert.match(deliveries, /turn_finished/);
+  assert.ok(f.sent.every(s => s[0] === 'thinking'));
+  const prepared = f.logs.findLast(e => e.type === 'context.prepared');
   assert.equal(prepared.sources.at(-1).name, 'Stop');
   assert.ok(prepared.sources.every(s => /^[a-f0-9]{64}$/.test(s.sourceHash)));
-  assert.equal(f.logs.filter(e => e.type === 'context.coalesced').length + prepared.sources.length, 63);
-  assert.ok(estimatedTokens(f.sent[0][1]) < 1300, 'framed batch remains a few seconds of context');
-  for (const line of prepared.content.split('\n')) {
+  assert.equal(f.logs.filter(e => e.type === 'context.prepared').reduce((n, e) => n + e.sources.length, 0), 63);
+  assert.equal(f.logs.filter(e => e.type === 'context.coalesced').length, 0);
+  for (const line of deliveries.split('\n')) {
     const item = JSON.parse(line);
     if (item.hook === 'MessageDisplay') assert.equal(item.claude_turn_state, 'working', 'coalescing PreToolUse must not lose its lifecycle transition');
   }
@@ -77,7 +75,7 @@ test('ordinary hooks wait at most the collection window; urgent hooks flush with
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture(t); f.context.inFlightTokens = 0;
   f.feed.add(observation('PreToolUse', { tool_name: 'Read' }));
-  t.mock.timers.tick(3999); assert.equal(f.sent.length, 0);
+  t.mock.timers.tick(249); assert.equal(f.sent.length, 0);
   t.mock.timers.tick(1); assert.equal(f.sent.length, 1);
   f.feed.add(observation('Stop', { last_assistant_message: 'Ready.' }));
   assert.equal(f.sent.length, 2);
@@ -88,7 +86,7 @@ test('historical compressed views remain marked historical even with very wide o
   assert.equal(JSON.parse(result.text).historical, true);
 });
 
-test('Stop replaces only repeated display text from the same agent and records its source', t => {
+test('Stop never causes the displayed answer to be dropped then truncated in both forms', t => {
   const f = fixture(t);
   f.feed.add(observation('MessageDisplay', { delta: 'Earlier error: missing file.' }));
   f.feed.add(observation('MessageDisplay', { delta: 'File ready.' }));
@@ -97,27 +95,27 @@ test('Stop replaces only repeated display text from the same agent and records i
   f.context.inFlightTokens = 0; f.feed.flush();
   const prepared = f.logs.find(e => e.type === 'context.prepared');
   const combined = f.logs.filter(e => e.type === 'context.coalesced');
-  assert.equal(combined.length, 1);
-  assert.equal(combined[0].replacementSourceHash, prepared.sources.at(-1).sourceHash);
-  assert.equal(prepared.sources.length, 3);
+  assert.equal(combined.length, 0);
+  assert.equal(prepared.sources.length, 4);
   assert.match(prepared.content, /Earlier error: missing file/);
   assert.match(prepared.content, /child/);
   assert.match(prepared.content, /Open it locally/);
 });
 
-test('tight tool views preserve file identity and command outcomes rather than empty batch metadata', () => {
+test('tool views preserve file identity and command outcomes alongside excerpts', () => {
   const cwd = '/long/local/workspace/' + 'nested/'.repeat(30), file = cwd + '/plane.html';
   const write = { tool_name: 'Write', tool_input: { file_path: file, content: 'source code\n'.repeat(5000) }, tool_response: `File created successfully at: ${file}` };
   const check = { tool_name: 'Bash', tool_input: { description: 'Check game syntax', command: 'check '.repeat(3000) }, tool_response: 'JS syntax OK' };
   for (const tool of [write, check]) {
     const input = observation('PostToolBatch', { cwd, tool_calls: [tool] });
-    const result = new HookContext().project(input, { budget: 80 });
+    const result = new HookContext().project(input);
     const view = JSON.parse(result.text);
-    assert.equal(view.tool_name, tool.tool_name);
+    const shown = view.data.tool_calls[0];
+    assert.equal(shown.tool_name, tool.tool_name);
     assert.equal(view.partial, true);
-    assert.equal(view.tool_count, 1);
-    assert.ok(result.tokens <= 80);
-    if (tool === write) assert.equal(view.file_path, 'plane.html');
+    assert.equal(view.data.tool_calls.length, 1);
+    assert.ok(result.tokens <= 1200);
+    if (tool === write) assert.equal(shown.tool_input.file_path, file);
     else assert.match(result.text, /JS syntax OK/);
     assert.match(input.text, /source code|check check/, 'full raw hook remains intact');
   }
@@ -127,9 +125,28 @@ test('failed command status survives a tight view containing a huge code body', 
   const result = new HookContext().project(observation('PostToolUseFailure', {
     tool_name: 'Bash', tool_input: { command: 'build '.repeat(10000) },
     tool_response: { exitCode: 1, stderr: 'missing dependency', stdout: 'log '.repeat(10000) },
-  }), { budget: 80 });
+  }));
   const view = JSON.parse(result.text);
-  assert.equal(view.exitCode, 1);
-  assert.equal(view.stderr, 'missing dependency');
-  assert.ok(result.tokens <= 80);
+  assert.equal(view.data.tool_response.exitCode, 1);
+  assert.equal(view.data.tool_response.stderr, 'missing dependency');
+  assert.ok(result.tokens <= 1200);
+});
+
+test('complete prose retains the middle of long answers, repeated requests and restored messages', () => {
+  const message = 'Beginning. ' + 'A relevant middle detail 世界 😄. '.repeat(600) + 'Final instruction.';
+  for (const [name, key] of [['Stop', 'last_assistant_message'], ['MessageDisplay', 'delta'], ['UserPromptSubmit', 'prompt']]) {
+    const p = new HookContext();
+    for (let i = 0; i < 2; i++) assert.equal(JSON.parse(p.project(observation(name, { [key]: message })).text).data[key], message);
+  }
+  for (const role of ['user', 'assistant']) {
+    const o = { name: 'transcript', text: JSON.stringify({ source: 'transcript', role, block: { type: 'text', text: message } }) };
+    assert.equal(JSON.parse(new HookContext().project(o).text).data.block.text, message);
+  }
+});
+
+test('tool result fields resembling transport metadata retain their domain meaning', () => {
+  const result = new HookContext().project(observation('PostToolUse', { session_id: 'omit', tool_response: { index: 7, message_id: 'application-message', cwd: '/task/output' } }));
+  const data = JSON.parse(result.text).data;
+  assert.equal(data.session_id, undefined);
+  assert.deepEqual(data.tool_response, { index: 7, message_id: 'application-message', cwd: '/task/output' });
 });

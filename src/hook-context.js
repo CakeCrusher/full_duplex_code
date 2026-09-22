@@ -2,19 +2,60 @@ import { createHash } from 'node:crypto';
 import { estimatedTokens } from './text-fragments.js';
 import { thinkingText } from './context.js';
 
-const metadata = new Set(['session_id', 'transcript_path', 'scratchpad_dir', 'permission_mode', 'prompt_id', 'effort', 'turn_id', 'stop_hook_active', 'hook_event_name', 'tool_use_id', 'message_id']);
-const urgent = new Set(['UserPromptSubmit', 'Stop', 'StopFailure', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied', 'Elicitation', 'TaskCompleted', 'SessionEnd']);
-const notable = /\b(error|failed|failure|warning|tests?|passed|saved|wrote|created|requires|caveat|not implemented)\b/i;
+const metadata = new Set(['session_id', 'transcript_path', 'scratchpad_dir', 'permission_mode', 'prompt_id', 'effort', 'turn_id', 'stop_hook_active', 'hook_event_name', 'tool_use_id', 'message_id', 'index', 'final', 'session_crons']);
+const complete = new Set(['MessageDisplay', 'Stop', 'UserPromptSubmit', 'StopFailure', 'PermissionRequest', 'PermissionDenied', 'Elicitation', 'TaskCompleted', 'SessionEnd']);
+const immediate = new Set(['UserPromptSubmit', 'Stop', 'StopFailure', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied', 'Elicitation', 'TaskCompleted', 'SessionEnd']);
 const digest = text => createHash('sha256').update(text).digest('hex');
-const excerpt = (text, limit) => {
-  const chars = Array.from(text);
-  return chars.length <= limit ? text : chars.slice(0, Math.ceil(limit * .65)).join('') + ` … [${chars.length} chars in local hook log] … ` + chars.slice(-Math.floor(limit * .35)).join('');
+const excerpt = (value, limit) => {
+  const chars = Array.from(value), n = Math.floor(limit / 2);
+  return chars.length <= limit ? value : { excerpt: chars.slice(0, n).join('') + ` … [${chars.length} chars; excerpt] … ` + chars.slice(-n).join(''), originalCharacters: chars.length };
 };
 
-// This is a view of the hook, not its storage representation. AgentObserver and
-// events.jsonl retain the original. No task-specific model or narration engine.
+// Budget tool detail, never the operator's request or Claude's prose. Select
+// excerpts against the whole record so short results retain all their fields.
+function fit(record, budget) {
+  const full = JSON.stringify(record);
+  let members = 0;
+  const count = value => { if (!value || typeof value !== 'object') return; for (const v of Object.values(value)) { if (++members > budget / 2) return; count(v); } };
+  count(record.data);
+  const wide = members > budget / 2;
+  if (!wide && estimatedTokens(full) <= budget) return { text: full, reducedFields: [] };
+  let reducedFields = [];
+  const shrink = (value, limit, field = 'data') => {
+    if (typeof value === 'string') {
+      const result = excerpt(value, limit);
+      if (result !== value) reducedFields.push(field);
+      return result;
+    }
+    if (Array.isArray(value)) return value.map((v, i) => shrink(v, limit, `${field}.${i}`));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, shrink(v, limit, `${field}.${k}`)]));
+    return value;
+  };
+  let low = 24, high = full.length, best;
+  while (!wide && low <= high) {
+    const limit = Math.floor((low + high) / 2);
+    reducedFields = [];
+    const text = JSON.stringify({ ...record, data: shrink(record.data, limit), partial: true });
+    if (estimatedTokens(text) <= budget) { best = { text, reducedFields: [...reducedFields] }; low = limit + 1; }
+    else high = limit - 1;
+  }
+  if (best) return best;
+  // Thousands of small array/object members can exceed the allowance even
+  // without long strings. Retain the outcome and identify the omitted body.
+  const data = record.data, result = data.tool_response;
+  const essentials = { tool_name: data.tool_name, error: data.error, exitCode: result?.exitCode ?? result?.exit_code,
+    stderr: result?.stderr, file_path: data.tool_input?.file_path ?? result?.filePath };
+  for (let limit = Math.min(2000, full.length); limit >= 0; limit = Math.floor(limit / 2) - 1) {
+    const text = JSON.stringify({ ...record, partial: true, data: { ...shrink(essentials, Math.max(24, limit)),
+      ...(limit ? { detail: excerpt(JSON.stringify(data), limit) } : {}) } });
+    if (estimatedTokens(text) <= budget) return { text, reducedFields: ['wide tool object'] };
+  }
+  return { text: JSON.stringify({ id: record.id, hook: record.hook, claude_turn_state: record.claude_turn_state,
+    ...(record.historical ? { historical: true } : {}), partial: true, detail: 'Wide tool record retained in local hook log' }), reducedFields: ['wide tool object'] };
+}
+
 export class HookContext {
-  constructor() { this.seen = new Set(); this.state = 'unknown'; }
+  constructor() { this.seen = new Map(); this.sequence = 0; this.state = 'unknown'; }
   observe(observation) {
     let data;
     try { data = JSON.parse(observation.text); } catch { data = {}; }
@@ -28,154 +69,58 @@ export class HookContext {
     }
     return this.state;
   }
-  project(observation, { budget = 600, historical = false, state = this.observe(observation) } = {}) {
-    const hash = digest(observation.text);
+  project(observation, { budget = 1200, historical = false, state = this.observe(observation) } = {}) {
     let data;
-    try { data = JSON.parse(thinkingText(observation.text)); }
-    catch { data = { text: observation.text }; }
-    const name = observation.name ?? data.hook_event_name ?? data.source ?? 'transcript';
-    const reduced = [], newHashes = new Set();
-    const shrink = (value, key, limit, depth = 0) => {
-      if (typeof value === 'string') {
-        const fullLimit = ['prompt', 'delta', 'last_assistant_message'].includes(key) ? limit * 6 : limit;
-        if (value.length <= fullLimit) return value;
-        const id = digest(value).slice(0, 12);
-        reduced.push(key);
-        if (this.seen.has(id)) return `[Repeated content ${id}; original retained in local hook log]`;
-        newHashes.add(id);
-        const lines = value.split('\n').filter(line => notable.test(line)).slice(0, 4);
-        return { excerpt: excerpt(value, fullLimit), ...(lines.length ? { notableLines: lines.map(line => excerpt(line, Math.min(limit, 180))) } : {}), originalCharacters: value.length, rawId: id };
+    try { data = JSON.parse(thinkingText(observation.text)); } catch { data = { text: observation.text }; }
+    const name = observation.name ?? data.hook_event_name ?? data.source ?? 'transcript', id = ++this.sequence;
+    const prose = complete.has(name) || (name === 'transcript' && ['user', 'assistant'].includes(data.role) && data.block?.type === 'text');
+    const newStrings = [];
+    const clean = (value, field = 'data') => {
+      if (!prose && typeof value === 'string' && value.length >= 80) {
+        const hash = digest(value);
+        if (this.seen.has(hash)) return { same_as: this.seen.get(hash) };
+        newStrings.push({ hash, value, field });
       }
-      if (!value || typeof value !== 'object') return value;
-      if (depth > 8) { reduced.push(key); return { excerpt: excerpt(JSON.stringify(value), limit), partial: true }; }
-      if (Array.isArray(value)) {
-        if (value.length <= 6) return value.map(v => shrink(v, key, limit, depth + 1));
-        reduced.push(key);
-        const indices = new Set([0, 1, value.length - 2, value.length - 1]);
-        value.forEach((v, i) => { if (indices.size < 8 && (typeof v === 'string' ? notable.test(v) : v?.is_error || v?.error)) indices.add(i); });
-        return { totalItems: value.length, partial: true, items: [...indices].sort((a, b) => a - b).map(i => ({ index: i, value: shrink(value[i], key, limit, depth + 1) })) };
-      }
-      return Object.fromEntries(Object.entries(value).filter(([k]) => depth !== 0 || (!metadata.has(k) && (k !== 'cwd' || name === 'CwdChanged'))).map(([k, v]) => [k, shrink(v, k, limit, depth + 1)]));
+      if (Array.isArray(value)) return value.map((v, i) => clean(v, `${field}.${i}`));
+      if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
+        .filter(([k]) => field !== 'data' || (!metadata.has(k) && (k !== 'cwd' || name === 'CwdChanged')))
+        .map(([k, v]) => [k, clean(v, `${field}.${k}`)]));
+      return value;
     };
-    let view, text;
-    for (let limit = 400; ; limit = Math.floor(limit / 2)) {
-      reduced.length = 0; newHashes.clear();
-      view = { hook: name, claude_turn_state: state, ...(historical ? { historical: true } : {}), data: shrink(data, '', limit) };
-      if (reduced.length) view.partial = true;
-      text = JSON.stringify(view);
-      if (estimatedTokens(text) <= budget || limit <= 25) break;
+    const record = { id, hook: name, claude_turn_state: state, ...(historical ? { historical: true } : {}), data: clean(data) };
+    const result = prose ? { text: JSON.stringify(record), reducedFields: [] } : fit(record, budget);
+    for (const item of newStrings) {
+      const full = result.text.includes(JSON.stringify(item.value));
+      // A repeat of an excerpt is still an excerpt. Never imply that Live has
+      // seen the complete original merely because it is saved on this machine.
+      this.seen.set(item.hash, `hook ${id}${result.reducedFields.includes('wide tool object') ? '' : ' ' + item.field}${full ? ' (complete)' : ' (excerpt only; full value remains local)'}`);
     }
-    if (estimatedTokens(text) > budget) {
-      // Exceptionally wide objects need a total bound, not just field limits.
-      // Keep an explicit partial view and important scalar fields, never pretend
-      // that a clipped nested result is a complete result.
-      view = { hook: name, claude_turn_state: state, ...(historical ? { historical: true } : {}), partial: true };
-      // Preserve the meaning of a tool observation before spending its small
-      // allowance on serialized code bodies. In particular, nested file paths
-      // and command results must not disappear into an empty PostToolBatch.
-      const localPath = path => typeof path === 'string' && data.cwd && path.startsWith(data.cwd + '/') ? path.slice(data.cwd.length + 1) : path;
-      const toolView = tool => ({ tool_name: tool.tool_name,
-        file_path: localPath(tool.tool_input?.file_path ?? tool.tool_response?.filePath),
-        description: tool.tool_input?.description, tool_response: tool.tool_response });
-      const single = data.tool_calls?.length === 1 ? data.tool_calls[0] : data;
-      const input = single.tool_input, result = single.tool_response;
-      const fields = { ...data, tool_name: single.tool_name, tool_response: result,
-        file_path: localPath(input?.file_path ?? result?.filePath),
-        description: input?.description, exitCode: result?.exitCode ?? result?.exit_code,
-        stderr: result?.stderr, stdout: result?.stdout,
-        tool_count: data.tool_calls?.length, tool_calls: data.tool_calls?.length > 1 ? data.tool_calls.map(toolView) : undefined };
-      for (const key of ['agent_id', 'error', 'is_error', 'exitCode', 'stderr', 'prompt', 'last_assistant_message', 'delta', 'message', 'tool_name', 'file_path', 'description', 'stdout', 'reason', 'tool_count', 'tool_calls', 'tool_response', 'tool_input']) {
-        if (fields[key] === undefined || fields[key] === '') continue;
-        const value = typeof fields[key] === 'string' ? fields[key] : JSON.stringify(fields[key]);
-        for (const length of [500, 180, 60]) {
-          const candidate = { ...view, [key]: typeof fields[key] === 'object' || typeof fields[key] === 'string' ? excerpt(value, length) : fields[key] };
-          if (estimatedTokens(JSON.stringify(candidate)) <= budget) { view = candidate; break; }
-        }
-      }
-      if (!Object.keys(view).some(key => !['hook', 'claude_turn_state', 'partial'].includes(key))) {
-        const candidate = { ...view, fields: Object.keys(data).slice(0, 6), excerpt: excerpt(JSON.stringify(data), 120) };
-        if (estimatedTokens(JSON.stringify(candidate)) <= budget) view = candidate;
-      }
-      text = JSON.stringify(view);
-      reduced.push('wide object');
-    }
-    for (const id of newHashes) this.seen.add(id);
-    if (this.seen.size > 2048) this.seen = new Set([...this.seen].slice(-1024));
-    return { text, sourceHash: hash, name, important: urgent.has(name), reducedFields: [...new Set(reduced)], tokens: estimatedTokens(text) };
+    if (this.seen.size > 2048) this.seen = new Map([...this.seen].slice(-1024));
+    return { ...result, sourceHash: digest(observation.text), name, important: complete.has(name), tokens: estimatedTokens(result.text) };
   }
 }
 
 export class HookFeed {
-  constructor(context, log, { coalesceMs = 4000 } = {}) {
+  constructor(context, log, { coalesceMs = 250 } = {}) {
     Object.assign(this, { context, log, coalesceMs });
     this.projector = new HookContext(); this.pending = []; this.stopped = false;
   }
   add(observation, historical = false) {
     if (this.stopped) return;
-    // Capture lifecycle at receipt even if this observation is later coalesced.
-    // A discarded PreToolUse must still mark subsequent observations as working.
-    this.pending.push({ observation, historical, receivedAt: Date.now(), state: this.projector.observe(observation) });
-    if (this.pending.length > 32) {
-      // Keep recent/important state during an exceptional burst. This only
-      // coalesces the Live view: every original is already in the local audit.
-      let index = this.pending.findIndex(item => !urgent.has(item.observation.name));
-      if (index < 0) index = 0;
-      const [item] = this.pending.splice(index, 1);
-      this.coalesce(item);
-    }
+    const receivedAt = Date.now(), state = this.projector.observe(observation);
+    this.pending.push({ ...this.projector.project(observation, { historical, state }), receivedAt });
     if (!this.timer) this.timer = setTimeout(() => this.flush(), this.coalesceMs);
-    if (this.coalesceMs === 0 || (urgent.has(observation.name) && !historical)) this.flush();
-  }
-  coalesce(item, reason = 'Burst exceeded the current context allowance; original remains in local audit', replacementSourceHash) {
-    this.coalesced ??= {};
-    const name = item.observation.name ?? 'transcript';
-    this.coalesced[name] = (this.coalesced[name] ?? 0) + 1;
-    this.log({ type: 'context.coalesced', name, sourceHash: digest(item.observation.text), receivedAt: item.receivedAt, reason, ...(replacementSourceHash ? { replacementSourceHash } : {}) });
+    if (!this.coalesceMs || (immediate.has(observation.name) && !historical)) this.flush();
   }
   flush() {
     clearTimeout(this.timer); this.timer = null;
     if (this.stopped || !this.pending.length) return;
-    const backlogSeconds = this.context.inFlightTokens / this.context.tokensPerSecond;
-    if (backlogSeconds > 2 || this.context.queue.length) {
-      // A bounded pipeline, not one-send-per-ACK serialization. Keep accepting
-      // and coalescing raw observations while the existing API work drains.
-      this.timer = setTimeout(() => this.flush(), 50);
-      return;
-    }
-    const pressured = backlogSeconds > 1 || this.pending.length > 1;
-    let batch = this.pending.splice(0);
-    // Stop repeats the final displayed answer. Avoid sending that same prose
-    // twice when both forms are still waiting in the collection window.
-    const finals = batch.filter(item => item.observation.name === 'Stop').map(item => ({ item, data: JSON.parse(item.observation.text) }));
-    if (finals.length) batch = batch.filter(item => {
-      if (item.observation.name !== 'MessageDisplay') return true;
-      const data = JSON.parse(item.observation.text);
-      const replacement = data.delta && finals.find(final => final.data.agent_id === data.agent_id && final.data.last_assistant_message?.includes(data.delta));
-      if (!replacement) return true;
-      this.coalesce(item, 'Displayed text is repeated in the pending Stop; its bounded final-answer view carries this context', digest(replacement.item.observation.text));
-      return false;
-    });
-    const capacity = Math.max(200, Math.min(1000, this.context.tokensPerSecond * 2.5 - this.context.inFlightTokens));
-    const count = Math.max(2, Math.min(8, Math.floor(capacity / 100)));
-    if (batch.length > count) {
-      const priority = item => item.observation.name === 'Stop' ? 3 : urgent.has(item.observation.name) ? 2 : 1;
-      const selected = new Set(batch.map((item, index) => ({ item, index })).sort((a, b) => priority(b.item) - priority(a.item) || b.index - a.index).slice(0, count).map(x => x.item));
-      for (const item of batch) if (!selected.has(item)) this.coalesce(item);
-      batch = batch.filter(item => selected.has(item)); // Preserve causal order.
-    }
-    const weights = batch.reduce((n, item) => n + (urgent.has(item.observation.name) ? 6 : 1), 0);
-    const records = batch.map(item => {
-      const weight = urgent.has(item.observation.name) ? 6 : 1;
-      // Routine code/log detail competes with spoken input even before a long
-      // ACK backlog develops. Reserve the larger view for requests and outcomes.
-      const limit = urgent.has(item.observation.name) ? 240 : 80;
-      const budget = pressured ? Math.max(80, Math.min(limit, Math.floor(capacity * weight / weights))) : limit;
-      return { ...this.projector.project(item.observation, { budget, historical: item.historical, state: item.state }), receivedAt: item.receivedAt };
-    });
-    const text = (this.coalesced ? JSON.stringify({ olderObservationsCoalesced: this.coalesced, detail: 'Full observations retained locally; this feed contains the newer and higher-priority observations.' }) + '\n' : '') + records.map(record => record.text).join('\n');
-    this.coalesced = null;
-    this.log({ type: 'context.prepared', backlogSeconds, representation: pressured ? 'compact' : 'standard', sources: records.map(({ text, ...source }) => source), content: text });
-    this.context.add('thinking', `Claude observations, in order. Partial fields are excerpts; full records remain in the local hook log.\n${text}\n`, null, 'Claude hooks');
+    const records = this.pending.splice(0), content = records.map(record => record.text).join('\n');
+    this.log({ type: 'context.prepared', representation: 'complete prose; bounded tool detail',
+      sources: records.map(({ text, ...source }) => source), content });
+    // All observations remain in order. In-flight ACKs do not stall new hooks,
+    // and a burst never silently drops assistant paragraphs or whole events.
+    this.context.add('thinking', content, null, 'Claude hooks');
   }
   stop() { this.stopped = true; clearTimeout(this.timer); this.pending.length = 0; }
 }

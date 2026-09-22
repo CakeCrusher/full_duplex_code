@@ -131,7 +131,10 @@ test('a full burst of observations remains thinking after idle time; no progress
   assert.equal(f.observer.observations.length, 82, 'all original hooks survive locally');
   assert.match(content(f), /PermissionRequest/);
   assert.match(content(f), /All work complete/);
-  assert.match(content(f), /olderObservationsCoalesced/);
+  for (let i = 0; i < 40; i++) {
+    assert.ok(content(f).includes(`Detail ${i}.`));
+    assert.ok(content(f).includes(`Result ${i}.`));
+  }
   assert.ok(f.appends.every(e => e.kind === 'thinking'), 'idle time does not turn an observation into a command to speak');
   assert.equal(f.deliveries.length, 0, 'a conversation steering request is not automatically sent to Claude');
 });
