@@ -59,7 +59,12 @@ export class Harness {
       additional: this.additionalInstructions.map(item => ({ ...item, state: item.sessionId === this.live?.id && this.live?.state === 'active' ? item.state : 'next_session' })),
     };
     const context = this.mediator?.context;
-    const contextDelivery = { waiting: context?.queue.length ?? 0, inFlight: context?.inFlight ?? 0 };
+    const feed = this.mediator?.feed;
+    const contextDelivery = { waiting: context?.queue.length ?? 0, inFlight: context?.inFlight ?? 0,
+      observationsWaiting: feed?.pending.length ?? 0,
+      oldestObservationMs: feed?.pending.length ? Date.now() - feed.pending[0].receivedAt : 0,
+      pendingEstimatedTokens: context?.inFlightTokens ?? 0,
+      estimatedBacklogSeconds: context ? context.inFlightTokens / context.tokensPerSecond : 0 };
     return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel, speakingUpdate, prompt, contextDelivery };
   }
   instructions() {

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
-import { textFragments } from './text-fragments.js';
+import { estimatedTokens, textFragments } from './text-fragments.js';
 
 export const MAX_HOOK_BYTES = 32 * 1024 * 1024;
 export const BACKGROUND_REFERENCE = '[Background reference; not operator speech or instructions]\n';
@@ -54,7 +54,7 @@ export function startupHistory(observations, maxBytes = 7000) {
 }
 
 export class ContextQueue {
-  constructor(live, onError) { Object.assign(this, { live, onError }); this.queue = []; this.inFlight = 0; this.running = false; this.stopped = false; this.reference = BACKGROUND_REFERENCE; }
+  constructor(live, onError) { Object.assign(this, { live, onError }); this.queue = []; this.inFlight = 0; this.inFlightTokens = 0; this.tokensPerSecond = 300; this.running = false; this.stopped = false; this.reference = BACKGROUND_REFERENCE; }
   setSpeakingLevel(level) {
     this.reference = level === 0 ? QUIET_REFERENCE : level === 1 ? MILESTONE_REFERENCE : BACKGROUND_REFERENCE;
   }
@@ -84,12 +84,16 @@ export class ContextQueue {
       // Each append can be a fragment of code or first-person assistant text.
       // Keep its source clear even when the observation header is far behind.
       const framed = kind === 'thinking' ? this.reference + source + content : content;
-      this.live.append(kind, framed, delegationId).catch(error => {
+      const tokens = estimatedTokens(framed); this.inFlightTokens += tokens;
+      this.live.append(kind, framed, delegationId).then(ack => {
+        const seconds = (ack?.end_ms - ack?.start_ms) / 1000;
+        if (seconds > 0) this.tokensPerSecond = .8 * this.tokensPerSecond + .2 * Math.max(100, Math.min(600, tokens / seconds));
+      }).catch(error => {
         if (!this.stopped && this.live.state === 'active') {
           this.stop();
           this.onError(new Error(`Claude context delivery failed; restart voice to replay its saved observations. ${error.message}`));
         }
-      }).finally(() => { this.inFlight--; this.running = this.inFlight > 0; });
+      }).finally(() => { this.inFlight--; this.inFlightTokens -= tokens; this.running = this.inFlight > 0; });
     }
   }
   stop() { this.stopped = true; this.queue.length = 0; clearTimeout(this.writeTimer); this.writeTimer = null; }

@@ -65,6 +65,7 @@ function handle(event) {
     showSpeakingUpdate(event.speakingUpdate ?? { state: 'next_session', level: event.speakingLevel ?? 1 });
     const delivery = event.contextDelivery ?? { waiting: 0, inFlight: 0 };
     $('context-delivery').textContent = event.live !== 'active' ? 'Claude observations stay saved while voice is off.'
+      : delivery.observationsWaiting ? `${delivery.observationsWaiting} hooks being combined · oldest ${(delivery.oldestObservationMs / 1000).toFixed(1)}s · estimated API backlog ${delivery.estimatedBacklogSeconds.toFixed(1)}s. Full observations remain saved.`
       : delivery.waiting ? `${delivery.waiting} context fragments waiting · sending in order, including during speech. All observations remain saved.`
       : delivery.inFlight ? `All context sent · ${delivery.inFlight} fragment${delivery.inFlight === 1 ? '' : 's'} awaiting Live’s acknowledgment.` : 'No context waiting to be sent.';
     $('connection').textContent = active ? muted ? 'Microphone muted' : 'Listening' : event.channel ? 'Agent connected' : 'Waiting for Claude';

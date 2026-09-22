@@ -9,13 +9,13 @@ function fixture(t, state = 'active', observer = new AgentObserver({ sessionId: 
   const live = new EventEmitter(); live.state = state; live.close = () => { live.state = 'closed'; };
   const appends = []; live.append = async (kind, content, delegationId) => { appends.push({ kind, content, delegationId }); };
   const deliveries = [];
-  const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String });
+  const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, coalesceMs: 0 });
   t.after(() => { mediator.stop(); observer.close(); });
   const hook = event => observer.hook({ session_id: 'test', ...event });
   return { live, observer, mediator, appends, deliveries, hook };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
-const unframe = text => text.slice(BACKGROUND_REFERENCE.length).replace(/^\[Claude [^\n]+\]\n/, '');
+const unframe = text => text.replace(/^\[[^\n]+\]\n\[Claude [^\n]+\]\n/, '');
 const content = (f, kind) => f.appends.filter(e => !kind || e.kind === kind).map(e => e.kind === 'thinking' ? unframe(e.content) : e.content).join('');
 
 test('hooks are primary: all raw hooks, including assistant batches, are quiet thinking', async t => {
@@ -37,7 +37,7 @@ test('hooks are primary: all raw hooks, including assistant batches, are quiet t
   assert.equal(f.deliveries.length, 0, 'observed input never triggers a new channel request');
 });
 
-test('voice startup and restart retain whole tool results instead of a clipped summary', async t => {
+test('voice startup and restart keep full local results and send explicitly bounded views', async t => {
   const observer = new AgentObserver({ sessionId: 'test' });
   const output = 'BEGIN\n' + 'File detail 世界\n'.repeat(25000) + 'END';
   observer.hook({ session_id: 'test', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: { stdout: output } });
@@ -47,14 +47,19 @@ test('voice startup and restart retain whole tool results instead of a clipped s
   assert.equal(f.appends.length, 0);
   f.live.state = 'active'; f.live.emit('event', { type: 'session.started' });
   await flush();
-  const expected = observer.observations.map((o, i) => `Claude Code observation${i < 2 ? ' (history)' : ''}:\n${o.text}\n`).join('');
-  assert.equal(content(f), expected);
-  assert.ok(f.appends.length > 256, 'exercise the former backlog limit');
+  f.mediator.feed.flush(); await flush();
+  assert.match(content(f), /BEGIN/); assert.match(content(f), /END/);
+  assert.match(content(f), /partial/); assert.match(content(f), /Earlier answer/);
+  assert.match(content(f), /Typed during startup/);
+  assert.equal(JSON.parse(observer.observations[0].text).tool_response.stdout, output);
+  assert.ok(content(f).length < 5000, 'large logs cannot create minutes of timed context');
   assert.ok(f.appends.every(e => e.kind === 'thinking'), 'old assistant messages do not get spoken again');
   f.mediator.stop();
   const restarted = fixture(t, 'active', observer);
   await flush();
-  assert.equal(content(restarted), observer.observations.map(o => `Claude Code observation (history):\n${o.text}\n`).join(''));
+  restarted.mediator.feed.flush(); await flush();
+  assert.match(content(restarted), /BEGIN/); assert.match(content(restarted), /END/);
+  assert.match(content(restarted), /"historical":true/);
 });
 
 test('a delegation sends ordinary user text once, without asking Claude to use companion tools', async t => {
@@ -99,10 +104,13 @@ test('startup observations are neither replayed twice nor dropped when some over
   assert.equal(initial.count, 1);
   const live = new EventEmitter(); live.state = 'active';
   const appends = []; live.append = async (kind, content) => appends.push({ kind, content });
-  const mediator = new Mediator({ live, observer, initialObservationCount: initial.count, log: () => {}, publish: () => {}, clean: String });
+  const mediator = new Mediator({ live, observer, initialObservationCount: initial.count, log: () => {}, publish: () => {}, clean: String, coalesceMs: 0 });
   t.after(() => { mediator.stop(); observer.close(); });
   await flush();
-  assert.equal(initial.text + appends.map(e => unframe(e.content)).join(''), observer.observations.map(o => `Claude Code observation (history):\n${o.text}\n`).join(''));
+  assert.match(initial.text, /first/);
+  assert.doesNotMatch(appends.map(e => e.content).join(''), /"prompt":"first"/);
+  assert.match(appends.map(e => e.content).join(''), /PostToolUse/);
+  assert.equal(JSON.parse(observer.observations[1].text).tool_response.stdout, 'x'.repeat(1000));
   assert.ok(appends.every(e => e.kind === 'thinking'));
 });
 
@@ -118,8 +126,12 @@ test('a full burst of observations remains thinking after idle time; no progress
   f.hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' });
   f.hook({ hook_event_name: 'Stop', last_assistant_message: 'All work complete.' });
   await flush();
+  for (let i = 0; i < 10; i++) { f.mediator.feed.flush(); await flush(); }
   t.mock.timers.tick(300000); await flush();
-  assert.equal(content(f), f.observer.observations.map(o => `Claude Code observation:\n${o.text}\n`).join(''), 'every observation survives unchanged and in order');
+  assert.equal(f.observer.observations.length, 82, 'all original hooks survive locally');
+  assert.match(content(f), /PermissionRequest/);
+  assert.match(content(f), /All work complete/);
+  assert.match(content(f), /olderObservationsCoalesced/);
   assert.ok(f.appends.every(e => e.kind === 'thinking'), 'idle time does not turn an observation into a command to speak');
   assert.equal(f.deliveries.length, 0, 'a conversation steering request is not automatically sent to Claude');
 });
