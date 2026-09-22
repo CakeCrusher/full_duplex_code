@@ -8,8 +8,8 @@ let peer, remote, remoteAudio, microphoneDestination;
 let generation = 0;
 let instructionHistory = '';
 const timeline = new TimelineView();
-const speakingNames = ['Quiet', 'Milestones', 'Walkthrough'];
-const speakingDescriptions = ['Answer you and confirm sent requests. Observe Claude silently.', 'Only major changes, decisions you must make, and task completion. No running commentary.', 'Default: explain stages, choices, checks, and the final result in detail. Your spoken requests come first.'];
+const speakingNames = ['Quiet', 'Milestones'];
+const speakingDescriptions = ['Answer you and confirm sent requests. Observe Claude silently.', 'Default: meaningful outcomes, major changes, and decisions you must make. Complete thoughts, without running commentary. Your spoken requests come first.'];
 function showSpeaking(level) {
   $('speaking-level').value = level;
   $('speaking-level').setAttribute('aria-valuetext', speakingNames[level]);
@@ -61,8 +61,8 @@ function handle(event) {
       }
       $('instruction-append').disabled = ['new', 'connecting', 'closing'].includes(event.live) || additional.some(item => item.state === 'pending');
     }
-    if (document.activeElement !== $('speaking-level')) showSpeaking(event.speakingLevel ?? 2);
-    showSpeakingUpdate(event.speakingUpdate ?? { state: 'next_session', level: event.speakingLevel ?? 2 });
+    if (document.activeElement !== $('speaking-level')) showSpeaking(event.speakingLevel ?? 1);
+    showSpeakingUpdate(event.speakingUpdate ?? { state: 'next_session', level: event.speakingLevel ?? 1 });
     const delivery = event.contextDelivery ?? { waiting: 0, inFlight: 0 };
     $('context-delivery').textContent = event.live !== 'active' ? 'Claude observations stay saved while voice is off.'
       : delivery.waiting ? `${delivery.waiting} context fragments waiting · sending in order, including during speech. All observations remain saved.`

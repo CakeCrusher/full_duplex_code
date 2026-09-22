@@ -194,7 +194,7 @@ test('the command hook preserves large structured results, new fields, and UTF-8
 
 test('preference status waits for the matching acknowledgment and reports failures and offline changes', async t => {
   const h = await fixture(t), pending = [];
-  assert.equal(h.speakingLevel, 2, 'Walkthrough is the default');
+  assert.equal(h.speakingLevel, 1, 'Milestones is the default');
   assert.equal(h.status().speakingUpdate.state, 'next_session');
   await h.setSpeakingLevel(0);
   assert.equal(h.status().speakingUpdate.level, 0);
@@ -207,14 +207,14 @@ test('preference status waits for the matching acknowledgment and reports failur
   const second = h.setSpeakingLevel(2);
   pending[0].resolve(); await first;
   assert.equal(h.status().speakingUpdate.state, 'pending', 'the earlier ACK cannot confirm the newest selection');
-  assert.equal(h.status().speakingUpdate.level, 2);
+  assert.equal(h.status().speakingUpdate.level, 1, 'legacy Walkthrough selection migrates to Milestones');
   pending[1].resolve(); await second;
   assert.equal(h.status().speakingUpdate.state, 'acknowledged');
-  assert.equal(h.status().speakingUpdate.confirmedLevel, 2);
+  assert.equal(h.status().speakingUpdate.confirmedLevel, 1);
   const failed = h.setSpeakingLevel(0);
   pending[2].reject(new Error('append timed out')); await failed;
   assert.equal(h.status().speakingUpdate.state, 'failed');
-  assert.equal(h.status().speakingUpdate.confirmedLevel, 2);
+  assert.equal(h.status().speakingUpdate.confirmedLevel, 1);
   assert.match(h.status().speakingUpdate.error, /timed out/);
   const late = h.setSpeakingLevel(1);
   await live.close();

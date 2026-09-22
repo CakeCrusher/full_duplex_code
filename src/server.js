@@ -5,7 +5,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Budget } from './budget.js';
 import { LiveSession, liveInstructions } from './live.js';
-import { DEFAULT_SPEAKING_LEVEL, speakingPolicy } from './voice-policy.js';
+import { DEFAULT_SPEAKING_LEVEL, normalizeSpeakingLevel, speakingPolicy } from './voice-policy.js';
 import { Mediator } from './mediator.js';
 import { AgentObserver, makeClaudeConfig } from './agent.js';
 import { redact, MAX_HOOK_BYTES, startupHistory } from './context.js';
@@ -90,6 +90,7 @@ export class Harness {
     this.publish(this.status());
   }
   async setSpeakingLevel(level) {
+    level = normalizeSpeakingLevel(level);
     const policy = speakingPolicy(level);
     this.speakingLevel = level;
     this.mediator?.context.setSpeakingLevel(level);
