@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { estimatedTokens } from './text-fragments.js';
 import { thinkingText } from './context.js';
 
-const metadata = new Set(['session_id', 'transcript_path', 'scratchpad_dir', 'permission_mode', 'prompt_id', 'effort', 'turn_id', 'stop_hook_active']);
+const metadata = new Set(['session_id', 'transcript_path', 'scratchpad_dir', 'permission_mode', 'prompt_id', 'effort', 'turn_id', 'stop_hook_active', 'hook_event_name', 'tool_use_id', 'message_id']);
 const urgent = new Set(['UserPromptSubmit', 'Stop', 'StopFailure', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied', 'Elicitation', 'TaskCompleted', 'SessionEnd']);
 const notable = /\b(error|failed|failure|warning|tests?|passed|saved|wrote|created|requires|caveat|not implemented)\b/i;
 const digest = text => createHash('sha256').update(text).digest('hex');
@@ -55,7 +55,7 @@ export class HookContext {
         value.forEach((v, i) => { if (indices.size < 8 && (typeof v === 'string' ? notable.test(v) : v?.is_error || v?.error)) indices.add(i); });
         return { totalItems: value.length, partial: true, items: [...indices].sort((a, b) => a - b).map(i => ({ index: i, value: shrink(value[i], key, limit, depth + 1) })) };
       }
-      return Object.fromEntries(Object.entries(value).filter(([k]) => depth !== 0 || !metadata.has(k)).map(([k, v]) => [k, shrink(v, k, limit, depth + 1)]));
+      return Object.fromEntries(Object.entries(value).filter(([k]) => depth !== 0 || (!metadata.has(k) && (k !== 'cwd' || name === 'CwdChanged'))).map(([k, v]) => [k, shrink(v, k, limit, depth + 1)]));
     };
     let view, text;
     for (let limit = 400; ; limit = Math.floor(limit / 2)) {
@@ -92,7 +92,7 @@ export class HookContext {
 }
 
 export class HookFeed {
-  constructor(context, log, { coalesceMs = 500 } = {}) {
+  constructor(context, log, { coalesceMs = 4000 } = {}) {
     Object.assign(this, { context, log, coalesceMs });
     this.projector = new HookContext(); this.pending = []; this.stopped = false;
   }
@@ -112,11 +112,11 @@ export class HookFeed {
     if (!this.timer) this.timer = setTimeout(() => this.flush(), this.coalesceMs);
     if (this.coalesceMs === 0 || (urgent.has(observation.name) && !historical)) this.flush();
   }
-  coalesce(item) {
+  coalesce(item, reason = 'Burst exceeded the current context allowance; original remains in local audit', replacementSourceHash) {
     this.coalesced ??= {};
     const name = item.observation.name ?? 'transcript';
     this.coalesced[name] = (this.coalesced[name] ?? 0) + 1;
-    this.log({ type: 'context.coalesced', name, sourceHash: digest(item.observation.text), receivedAt: item.receivedAt, reason: 'Burst exceeded the current context allowance; original remains in local audit' });
+    this.log({ type: 'context.coalesced', name, sourceHash: digest(item.observation.text), receivedAt: item.receivedAt, reason, ...(replacementSourceHash ? { replacementSourceHash } : {}) });
   }
   flush() {
     clearTimeout(this.timer); this.timer = null;
@@ -130,6 +130,17 @@ export class HookFeed {
     }
     const pressured = backlogSeconds > 1 || this.pending.length > 1;
     let batch = this.pending.splice(0);
+    // Stop repeats the final displayed answer. Avoid sending that same prose
+    // twice when both forms are still waiting in the collection window.
+    const finals = batch.filter(item => item.observation.name === 'Stop').map(item => ({ item, data: JSON.parse(item.observation.text) }));
+    if (finals.length) batch = batch.filter(item => {
+      if (item.observation.name !== 'MessageDisplay') return true;
+      const data = JSON.parse(item.observation.text);
+      const replacement = data.delta && finals.find(final => final.data.agent_id === data.agent_id && final.data.last_assistant_message?.includes(data.delta));
+      if (!replacement) return true;
+      this.coalesce(item, 'Displayed text is repeated in the pending Stop; its bounded final-answer view carries this context', digest(replacement.item.observation.text));
+      return false;
+    });
     const capacity = Math.max(200, Math.min(1000, this.context.tokensPerSecond * 2.5 - this.context.inFlightTokens));
     const count = Math.max(2, Math.min(8, Math.floor(capacity / 100)));
     if (batch.length > count) {
@@ -143,7 +154,7 @@ export class HookFeed {
       const weight = urgent.has(item.observation.name) ? 6 : 1;
       // Routine code/log detail competes with spoken input even before a long
       // ACK backlog develops. Reserve the larger view for requests and outcomes.
-      const limit = urgent.has(item.observation.name) ? 600 : 160;
+      const limit = urgent.has(item.observation.name) ? 240 : 80;
       const budget = pressured ? Math.max(80, Math.min(limit, Math.floor(capacity * weight / weights))) : limit;
       return { ...this.projector.project(item.observation, { budget, historical: item.historical, state: item.state }), receivedAt: item.receivedAt };
     });

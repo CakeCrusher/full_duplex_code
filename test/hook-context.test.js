@@ -77,7 +77,7 @@ test('ordinary hooks wait at most the collection window; urgent hooks flush with
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture(t); f.context.inFlightTokens = 0;
   f.feed.add(observation('PreToolUse', { tool_name: 'Read' }));
-  t.mock.timers.tick(499); assert.equal(f.sent.length, 0);
+  t.mock.timers.tick(3999); assert.equal(f.sent.length, 0);
   t.mock.timers.tick(1); assert.equal(f.sent.length, 1);
   f.feed.add(observation('Stop', { last_assistant_message: 'Ready.' }));
   assert.equal(f.sent.length, 2);
@@ -86,4 +86,21 @@ test('ordinary hooks wait at most the collection window; urgent hooks flush with
 test('historical compressed views remain marked historical even with very wide objects', () => {
   const result = new HookContext().project(observation('PostToolUse', { tool_response: Object.fromEntries(Array.from({ length: 300 }, (_, i) => [i, 'data'.repeat(200)])) }), { budget: 80, historical: true });
   assert.equal(JSON.parse(result.text).historical, true);
+});
+
+test('Stop replaces only repeated display text from the same agent and records its source', t => {
+  const f = fixture(t);
+  f.feed.add(observation('MessageDisplay', { delta: 'Earlier error: missing file.' }));
+  f.feed.add(observation('MessageDisplay', { delta: 'File ready.' }));
+  f.feed.add(observation('MessageDisplay', { agent_id: 'child', delta: 'File ready.' }));
+  f.feed.add(observation('Stop', { last_assistant_message: 'File ready. Open it locally.' }));
+  f.context.inFlightTokens = 0; f.feed.flush();
+  const prepared = f.logs.find(e => e.type === 'context.prepared');
+  const combined = f.logs.filter(e => e.type === 'context.coalesced');
+  assert.equal(combined.length, 1);
+  assert.equal(combined[0].replacementSourceHash, prepared.sources.at(-1).sourceHash);
+  assert.equal(prepared.sources.length, 3);
+  assert.match(prepared.content, /Earlier error: missing file/);
+  assert.match(prepared.content, /child/);
+  assert.match(prepared.content, /Open it locally/);
 });

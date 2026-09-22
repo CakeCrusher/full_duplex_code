@@ -4,7 +4,7 @@ import { HookFeed } from './hook-context.js';
 import { DEFAULT_SPEAKING_LEVEL } from './voice-policy.js';
 
 export class Mediator {
-  constructor({ live, observer, deliver, log, publish, clean, initialObservationCount = 0, speakingLevel = DEFAULT_SPEAKING_LEVEL, coalesceMs = 500 }) {
+  constructor({ live, observer, deliver, log, publish, clean, initialObservationCount = 0, speakingLevel = DEFAULT_SPEAKING_LEVEL, coalesceMs }) {
     Object.assign(this, { live, observer, deliver, log, publish, clean });
     this.history = new VoiceHistory(); this.seenDelegations = new Set(); this.timers = new Set();
     this.context = new ContextQueue(live, error => {
