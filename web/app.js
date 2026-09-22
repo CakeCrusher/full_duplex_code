@@ -4,7 +4,7 @@ const $ = id => document.getElementById(id);
 const token = location.hash.slice(1) || sessionStorage.getItem('fd-voice-token');
 if (location.hash) { sessionStorage.setItem('fd-voice-token', token); history.replaceState(null, '', location.pathname); }
 let ws, context, stream, node, mic, active = false, starting = false, muted = false, currentStatus;
-let peer, remote, remoteAudio, microphoneDestination;
+let peer, remote, remoteAudio, microphoneDestination, transportTimer, voiceSessionId;
 let generation = 0;
 let instructionHistory = '';
 const timeline = new TimelineView();
@@ -83,6 +83,7 @@ function handle(event) {
     connection.setRemoteDescription({ type: 'answer', sdp: event.sdp }).catch(error => { if (peer === connection) { notice(error.message); stop(); } });
   }
   if (event.type === 'voice_started') {
+    voiceSessionId = event.sessionId;
     node?.port.postMessage({ type: 'audit_start', sessionId: event.sessionId });
     active = true; starting = false; notice('');
     $('mute').disabled = false; $('stop').disabled = false; $('audioState').textContent = 'Microphone on';
@@ -153,6 +154,28 @@ async function start() {
     microphoneDestination = context.createMediaStreamDestination();
     node.connect(microphoneDestination, 0, 0); node.connect(context.destination, 1, 0);
     const connection = peer = new RTCPeerConnection();
+    // Audit the receiver independently of captions and worklet playback.
+    // A final packetsLost count can be zero even when late packets caused
+    // audible concealment earlier, so retain the counters over time.
+    let samplingTransport = false;
+    transportTimer = setInterval(async () => {
+      if (!active || samplingTransport || peer !== connection) return;
+      samplingTransport = true;
+      try {
+        const report = await connection.getStats();
+        if (!active || peer !== connection || ws?.readyState !== WebSocket.OPEN) return;
+        for (const stat of report.values()) {
+          if (stat.type !== 'inbound-rtp' || stat.kind !== 'audio') continue;
+          const fields = ['packetsReceived', 'packetsLost', 'packetsDiscarded', 'jitter', 'concealedSamples', 'silentConcealedSamples',
+            'concealmentEvents', 'totalSamplesReceived', 'insertedSamplesForDeceleration', 'removedSamplesForAcceleration',
+            'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount'];
+          const stats = Object.fromEntries(fields.filter(key => Number.isFinite(stat[key])).map(key => [key, stat[key]]));
+          stats.clockRate = report.get(stat.codecId)?.clockRate;
+          ws.send(JSON.stringify({ type: 'audio_transport', voiceSessionId, at: Date.now(), stats }));
+        }
+      } catch { /* Missing diagnostics must not interrupt audio. */ }
+      finally { samplingTransport = false; }
+    }, 1000);
     connection.ontrack = event => {
       if (peer !== connection || !context || !node) return;
       const received = new MediaStream([event.track]);
@@ -184,6 +207,8 @@ async function start() {
   } catch (error) { if (attempt !== generation) return; releaseAudio(); notice(error.name === 'NotAllowedError' ? 'Allow microphone access in Chrome, then click Start voice.' : error.message); if (currentStatus) handle(currentStatus); }
 }
 function releaseAudio() {
+  clearInterval(transportTimer); transportTimer = null;
+  voiceSessionId = null;
   if (node && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'audio_stopped' }));
   generation++;
   active = false; starting = false; stream?.getTracks().forEach(track => track.stop()); stream = null;

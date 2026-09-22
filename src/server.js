@@ -255,6 +255,14 @@ export class Harness {
             if (microphone.length === pcm.length) this.audit.write('microphone', microphone, { offsetSamples: event.offsetSamples, at: event.at });
           }
         }
+        if (event.type === 'audio_transport' && this.live?.state === 'active' && event.voiceSessionId === this.live.id
+          && Number.isFinite(event.at) && Math.abs(event.at - Date.now()) < 5000 && event.stats && typeof event.stats === 'object') {
+          const fields = ['clockRate', 'packetsReceived', 'packetsLost', 'packetsDiscarded', 'jitter', 'concealedSamples', 'silentConcealedSamples',
+            'concealmentEvents', 'totalSamplesReceived', 'insertedSamplesForDeceleration', 'removedSamplesForAcceleration',
+            'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount'];
+          const stats = Object.fromEntries(fields.filter(key => Number.isFinite(event.stats[key])).map(key => [key, event.stats[key]]));
+          this.log({ type: 'audio.transport', at: event.at, liveRun: this.live.reservation, voiceSessionId: this.live.id, stats });
+        }
         if (event.type === 'audio_level' && [event.at, event.durationMs, event.inputRms, event.outputRms].every(Number.isFinite)
           && Math.abs(event.at - Date.now()) < 5000 && event.durationMs > 0 && event.durationMs <= 500
           && event.inputRms >= 0 && event.inputRms <= 1 && event.outputRms >= 0 && event.outputRms <= 1) {

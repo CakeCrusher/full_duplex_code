@@ -282,3 +282,24 @@ test('additional instructions preserve the base, show exact text, and wait for a
   await assert.rejects(h.appendInstruction(' '),/Enter/);
   await assert.rejects(h.appendInstruction('x'.repeat(441)),/shorten/);
 });
+
+test('receiver diagnostics retain concealment over time and reject stale voice sessions', async t => {
+  const h = await fixture(t);
+  h.live = { id: 'current-voice', state: 'active', reservation: 'audit-run', close: async () => {} };
+  const ws = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/voice', { headers: { Authorization: `Bearer ${h.browserToken}` } });
+  t.after(() => ws.terminate());
+  await new Promise(resolve => ws.on('open', resolve));
+  const send = async (voiceSessionId, stats) => {
+    ws.send(JSON.stringify({ type: 'audio_transport', at: Date.now(), voiceSessionId, stats }));
+    await new Promise(resolve => { ws.once('pong', resolve); ws.ping(); });
+  };
+  await send('current-voice', { clockRate: 48000, packetsLost: 2, concealedSamples: 2400 });
+  await send('current-voice', { clockRate: 48000, packetsLost: 0, concealedSamples: 4800, jitter: 'invalid', unrelated: 'not retained' });
+  await send('old-voice', { concealedSamples: 999999 });
+  const events = fs.readFileSync(path.join(h.runDir, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(e => e.type === 'audio.transport');
+  assert.equal(events.length, 2);
+  assert.deepEqual(events.map(e => e.stats.packetsLost), [2, 0], 'late packets may reduce the final loss count');
+  assert.deepEqual(events.map(e => e.stats.concealedSamples), [2400, 4800], 'earlier audible repairs remain visible');
+  assert.deepEqual(events[1].stats, { clockRate: 48000, packetsLost: 0, concealedSamples: 4800 });
+  assert.ok(events.every(e => e.liveRun === 'audit-run' && e.voiceSessionId === 'current-voice'));
+});

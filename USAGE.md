@@ -90,6 +90,8 @@ Bars represent durations; thin markers represent instant events. Request duratio
 
 Output captions can also omit words that were spoken, or include words absent from the audio. A sentence ending in the transcript is therefore not proof of an audible cutoff. Compare the saved API output and browser playback recordings when investigating missing speech.
 
+Runs also save `audio.transport` events once per second with the browser receiver’s packet and audio-repair counters. These help distinguish native model pauses from degraded delivery. A final lost-packet count of zero does not rule out earlier damage: late packets may arrive after the browser already substituted sound. The counters are diagnostics; they do not alter playback.
+
 Click a voice request to see the **full channel message**, including any earlier conversation attached for reference. **Copy message** copies that text. Expand **Channel notification JSON** for the content and metadata sent by the channel. Once Claude's `UserPromptSubmit` hook arrives, the inspector shows the captured prompt and checks that its contents match the sent message. Until then, delivery is not presented as verified receipt. A mismatch is shown explicitly.
 
 The channel uses the latest speech group as the request, with a two-second pause separating groups. Earlier speech remains reference context. The bridge does not rewrite transcription mistakes; the inspector shows what was actually sent.

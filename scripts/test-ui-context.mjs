@@ -236,9 +236,14 @@ try {
   assert.ok(measured.some(i => i.track === 'speech'), 'actual rendered playback reached chart');
   await page.getByRole('button', { name: 'Mute microphone', exact: true }).click();
   await waitFor(() => harness.timeline.audio.get('operator')?.active === false, 'muted microphone activity ended');
+  const transportEvents = () => fs.readFileSync(path.join(dir, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(e => e.type === 'audio.transport');
+  await waitFor(() => transportEvents().some(e => e.voiceSessionId === 'offline-audio' && e.stats.clockRate === 48000 && e.stats.packetsReceived > 0), 'native receiver diagnostics are saved for this voice connection');
   await new Promise(resolve=>setTimeout(resolve,700));
   await page.getByRole('button', { name: 'End voice', exact: true }).click();
   await new Promise(resolve=>setTimeout(resolve,100));
+  const stoppedTransportCount = transportEvents().length;
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.equal(transportEvents().length, stoppedTransportCount, 'receiver diagnostics end with the voice connection');
   const recorded = fs.readFileSync(path.join(dir,'audio','playback.wav')).subarray(44);
   const samples = new Int16Array(recorded.buffer,recorded.byteOffset,recorded.length/2);
   const audible = [...samples].filter(x=>Math.abs(x)>300).length/24000;
