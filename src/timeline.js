@@ -24,7 +24,7 @@ export class Timeline {
           if (!item || start - item.end > 220 || !item.active) {
             item = this.item({ track, start, end: at, active: true, peak: rms,
               label: track === 'operator' ? 'Microphone' : 'Live speech',
-              source: track === 'operator' ? 'Microphone activity from the signal sent to Live, after mute and the noise gate' : 'Audio rendered by the browser; bars split after 220 ms below the level threshold, not at sentence boundaries. Nearby API captions are approximate and do not verify the words played',
+              source: track === 'operator' ? 'Microphone activity from the signal sent to Live, after mute and the noise gate' : 'Audio rendered by the browser; bars split after 220 ms below the level threshold, not at sentence boundaries',
             });
             this.audio.set(track, item);
           }
@@ -46,9 +46,7 @@ export class Timeline {
       let item = this.transcripts.get(key);
       if (!item || start - item.end > 1200 || start < item.start) {
         item = this.item({ track: 'transcript', role: event.role, start, end, text: '', fragments: 0,
-          label: event.role === 'operator' ? 'Input transcript' : 'Live',
-          source: event.role === 'operator' ? 'API input transcript, not verified microphone speech; approximate session timestamps'
-            : 'API output caption, not a verified transcript of browser playback; approximate session timestamps',
+          label: event.role === 'operator' ? 'Input transcript' : 'Live', source: 'API transcript, not verified microphone speech; approximate session timestamps',
           voiceSessionId: event.voiceSessionId,
         });
         this.transcripts.set(key, item);

@@ -5,7 +5,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Budget } from './budget.js';
 import { LiveSession, liveInstructions } from './live.js';
-import { DEFAULT_SPEAKING_LEVEL, normalizeSpeakingLevel, speakingPolicy } from './voice-policy.js';
+import { DEFAULT_SPEAKING_LEVEL, speakingPolicy } from './voice-policy.js';
 import { Mediator } from './mediator.js';
 import { AgentObserver, makeClaudeConfig } from './agent.js';
 import { redact, MAX_HOOK_BYTES, startupHistory } from './context.js';
@@ -59,12 +59,7 @@ export class Harness {
       additional: this.additionalInstructions.map(item => ({ ...item, state: item.sessionId === this.live?.id && this.live?.state === 'active' ? item.state : 'next_session' })),
     };
     const context = this.mediator?.context;
-    const feed = this.mediator?.feed;
-    const contextDelivery = { waiting: context?.queue.length ?? 0, inFlight: context?.inFlight ?? 0,
-      observationsWaiting: feed?.pending.length ?? 0,
-      oldestObservationMs: feed?.pending.length ? Date.now() - feed.pending[0].receivedAt : 0,
-      pendingEstimatedTokens: context?.inFlightTokens ?? 0,
-      estimatedBacklogSeconds: context ? context.inFlightTokens / context.tokensPerSecond : 0 };
+    const contextDelivery = { waiting: context?.queue.length ?? 0, inFlight: context?.inFlight ?? 0 };
     return { type: 'status', agent: this.observer.state, channel: Boolean(this.channelReady), live: this.live?.state ?? 'disconnected', cwd: this.cwd, sessionId: this.sessionId, usageSeconds: this.live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: this.runDir, observation: this.observation, speakingLevel: this.speakingLevel, speakingUpdate, prompt, contextDelivery };
   }
   instructions() {
@@ -95,7 +90,6 @@ export class Harness {
     this.publish(this.status());
   }
   async setSpeakingLevel(level) {
-    level = normalizeSpeakingLevel(level);
     const policy = speakingPolicy(level);
     this.speakingLevel = level;
     this.mediator?.context.setSpeakingLevel(level);
@@ -263,14 +257,6 @@ export class Harness {
             const microphone = Buffer.from(event.microphone, 'base64');
             if (microphone.length === pcm.length) this.audit.write('microphone', microphone, { offsetSamples: event.offsetSamples, at: event.at });
           }
-        }
-        if (event.type === 'audio_transport' && this.live?.state === 'active' && event.voiceSessionId === this.live.id
-          && Number.isFinite(event.at) && Math.abs(event.at - Date.now()) < 5000 && event.stats && typeof event.stats === 'object') {
-          const fields = ['clockRate', 'requestedJitterBufferMs', 'packetsReceived', 'packetsLost', 'packetsDiscarded', 'jitter', 'concealedSamples', 'silentConcealedSamples',
-            'concealmentEvents', 'totalSamplesReceived', 'insertedSamplesForDeceleration', 'removedSamplesForAcceleration',
-            'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount'];
-          const stats = Object.fromEntries(fields.filter(key => Number.isFinite(event.stats[key])).map(key => [key, event.stats[key]]));
-          this.log({ type: 'audio.transport', at: event.at, liveRun: this.live.reservation, voiceSessionId: this.live.id, stats });
         }
         if (event.type === 'audio_level' && [event.at, event.durationMs, event.inputRms, event.outputRms].every(Number.isFinite)
           && Math.abs(event.at - Date.now()) < 5000 && event.durationMs > 0 && event.durationMs <= 500

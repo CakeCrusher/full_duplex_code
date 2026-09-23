@@ -123,8 +123,4 @@ test('native media gates the outgoing track and passes incoming speech unchanged
   assert.deepEqual(speaker,incoming, 'mute only affects the microphone');
   assert.equal(messages.filter(e=>e.type==='input').length,0, 'no second microphone stream over the control socket');
   assert.deepEqual([...new Int16Array(messages.at(-1).pcm)], [...incoming].map(x=>Math.round(x*32768)), 'audit measures the speaker track');
-  incoming.set([-1.01, -1, 1, 1.01]);
-  step(0);
-  assert.deepEqual([...new Int16Array(messages.at(-1).pcm)].slice(0,4), [-32768,-32768,32767,32767], 'audit peaks saturate instead of wrapping to the opposite sign');
-  assert.deepEqual(speaker,incoming, 'audit encoding never changes speaker samples');
 });

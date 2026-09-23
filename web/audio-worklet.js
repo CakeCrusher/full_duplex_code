@@ -43,9 +43,7 @@ class DuplexAudio extends AudioWorkletProcessor {
     }
     this.levelSamples += output.length;
     if (this.auditSession) {
-      // Clamp only the audit's integer encoding. A decoded peak at +1 (or an
-      // Opus overshoot) must not wrap to the opposite sign in the recording.
-      const pcm = Int16Array.from(output, sample => Math.max(-32768, Math.min(32767, Math.round(sample * 32768)))).buffer;
+      const pcm = Int16Array.from(output, sample => Math.round(sample * 32768)).buffer;
       const microphone = Int16Array.from({ length: output.length }, (_, i) => {
         const sample = this.muted ? 0 : Math.max(-1, Math.min(1, input?.[i] ?? 0));
         return Math.round(sample * (sample < 0 ? 32768 : 32767));
