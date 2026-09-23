@@ -21,8 +21,8 @@ async function body(req, maxBytes = 1024 * 1024) {
 }
 
 export class Harness {
-  constructor({ root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = 'hooks', port = 0 }) {
-    Object.assign(this, { root, runDir, cwd, sessionId, apiKey, voice, observation, port });
+  constructor({ root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = 'hooks', port = 0, portFallback = false }) {
+    Object.assign(this, { root, runDir, cwd, sessionId, apiKey, voice, observation, port, portFallback });
     this.speakingLevel = DEFAULT_SPEAKING_LEVEL;
     this.speakingUpdate = { state: 'next_session', level: this.speakingLevel };
     this.additionalInstructions = [];
@@ -137,7 +137,16 @@ export class Harness {
       }
       this.wss.handleUpgrade(req, socket, head, ws => route === '/channel' ? this.attachChannel(ws) : this.attachBrowser(ws));
     });
-    await new Promise((resolve, reject) => { this.http.once('error', reject); this.http.listen(this.port, '127.0.0.1', resolve); });
+    const listen = port => new Promise((resolve, reject) => {
+      this.http.once('error', reject);
+      this.http.listen(port, '127.0.0.1', () => { this.http.off('error', reject); resolve(); });
+    });
+    try { await listen(this.port); } catch (error) {
+      // Only the launcher's default port yields to another companion; an
+      // explicitly requested port that is taken remains an error.
+      if (error.code !== 'EADDRINUSE' || !this.portFallback) throw error;
+      this.portFellBack = true; await listen(0);
+    }
     this.baseUrl = `http://127.0.0.1:${this.http.address().port}`;
     this.browserUrl = `${this.baseUrl}/#${this.browserToken}`;
     this.config = makeClaudeConfig({ root: this.root, runDir: this.runDir, baseUrl: this.baseUrl, channelToken: this.channelToken });

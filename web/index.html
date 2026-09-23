@@ -10,6 +10,7 @@
     <section class="intro"><h1>Talk through the work.</h1><p>Talk while Claude works. Watch your voice, its progress, and the companion’s responses unfold together.</p></section>
     <section class="controls" aria-label="Voice controls">
       <button id="start" disabled>Start voice</button><button id="mute" disabled aria-pressed="false">Mute microphone</button><button id="stop" disabled>End voice</button>
+      <label class="microphone-device" for="microphone-device">Microphone <select id="microphone-device"><option value="">Chrome default</option></select></label>
       <div class="levels"><span id="audioState">Microphone off</span><meter id="level" min="0" max="1" value="0" aria-label="Microphone level"></meter></div>
     </section>
     <section class="speaking-control" aria-label="Companion speaking preference"><label for="speaking-level">Configurations <strong id="speaking-label">Milestones</strong></label><input id="speaking-level" type="range" min="0" max="1" step="1" value="1" aria-valuetext="Milestones"><p id="speaking-description">Default: meaningful outcomes, major changes, and decisions you must make. Complete thoughts, without running commentary. Your spoken requests come first.</p><div class="preference-status" role="status" aria-live="polite"><strong id="updates-state">Next session · Milestones</strong><span id="updates-detail">This preference will be included when you start voice.</span></div></section>

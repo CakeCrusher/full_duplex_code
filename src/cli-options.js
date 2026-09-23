@@ -4,7 +4,7 @@ const options = {
   cwd: { type: 'string' }, resume: { type: 'string' }, 'session-id': { type: 'string' },
   'no-open': { type: 'boolean', default: false },
   voice: { type: 'string', default: 'marin' }, observe: { type: 'string', default: 'hooks' },
-  port: { type: 'string', default: '0' }, help: { type: 'boolean', short: 'h' },
+  port: { type: 'string' }, help: { type: 'boolean', short: 'h' },
 };
 
 export function parseLaunchArgs(args, cwd = process.cwd()) {

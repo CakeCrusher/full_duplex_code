@@ -113,6 +113,8 @@ The status beneath Configurations shows **Applying** until Live acknowledges tha
 
 Open **GPT Live prompt** beneath the sliders to read the startup instructions. Before connecting, it previews the next session. During or after a connection, it preserves that session’s startup text and shows the selected speaking preference separately. The base prompt is `BASE_PROMPT` in `src/live.js`; `src/voice-policy.js` provides the speaking preferences. Workspace/history, the one-time welcome, and later context appends are supplied separately. The browser page is the **voice companion dashboard**, and its Gantt chart is the **live session timeline**.
 
+**Microphone** chooses the input device. **Chrome default** follows Chrome's own microphone setting. Device names appear after Chrome first grants microphone access. The choice is remembered in this browser and applies the next time you click **Start voice**; it is locked while voice is connected, so use **End voice** before switching. If the saved device is unplugged, the list shows Chrome default until it returns.
+
 **Mic threshold** gates the actual microphone samples before they reach Live. The default is 0.8% RMS amplitude; zero disables it. Whisper below the threshold and, once any earlier word tail ends, Live receives digital silence and the operator-audio track stays empty. Lower the threshold and the same whisper passes through and appears on that track. The connection keeps sending silent frames while the gate is closed to keep Live’s clock running.
 
 After speech crosses the threshold, a **300 ms hold** captures quieter word endings. Those quieter samples are sent and shown on the Gantt. Changing the threshold resets the previous hold; mute remains immediate. Chrome is requested to disable automatic gain adjustment so it does not automatically boost a whisper above the gate. The meter shows captured sound before the gate, and the label beneath Mic threshold says **Passing audio to Live** or **Gate closed · sending silence**. Mute silences both recorded microphone tracks.
@@ -185,7 +187,7 @@ Add options after `npm start --`:
 | `--session-id UUID` | Choose the full UUID for a new conversation. Use either this or `--resume`. |
 | `--no-open` | Print the companion link without opening the browser. |
 | `--observe transcript` | Add saved-text/tool fallback observation if display hooks are unavailable. |
-| `--port 8123` | Use a fixed local port. The default chooses an available port. |
+| `--port 8123` | Choose the local port. The default is 8123, so the companion address and Chrome's microphone permission stay the same between launches. If 8123 is busy, for example with a second companion, the launcher uses a free port and says so. `--port 0` always chooses a free port. |
 
 For example:
 
@@ -242,7 +244,7 @@ Usage history stays in `.runs/budget.json`. Existing history is preserved; old s
 | The launcher won't start | Run it in an interactive terminal and run `npm run doctor`. Check Node, Claude sign-in, and `.env`. |
 | Start voice stays disabled | Accept any pending channel notice or trust prompt in the Claude terminal. Check whether your organization permits channels. |
 | The browser didn't open | Open the companion URL printed by the launcher in Chrome. |
-| The companion can't hear you | Allow microphone access in Chrome and macOS. Check the selected microphone and whether it is muted. |
+| The companion can't hear you | Allow microphone access in Chrome and macOS. Check the **Microphone** selection beside the voice buttons and whether it is muted. |
 | OpenAI rejects the connection | Check the key, API account billing, and access to `gpt-live-1`. A successful doctor check alone does not verify these. |
 | Claude hooks | Every raw observation, including tool calls/results, file changes, displayed text, and lifecycle hooks, at bridge receipt time. The bounded Live view goes to thinking; originals remain here. |
 | Context to Live | Every actual thinking append and commentary append, from send to acknowledgment. Click for the exact JSON. Acknowledgment does not mean the model has finished using the content. |

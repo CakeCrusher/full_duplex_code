@@ -20,7 +20,7 @@ if (values.help) {
   --no-open             Print the companion link without opening the browser
   --voice marin         GPT Live voice
   --observe hooks       Live display hooks (default), or transcript file tail
-  --port 0              Local port (0 chooses a free port)
+  --port 8123           Local port (default 8123; 0 chooses a free port)
   npm run doctor        Check local prerequisites without API spending
   npm run usage         Show recorded voice usage and cost estimates
 
@@ -47,13 +47,16 @@ if (command === 'doctor') {
 if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Launch npm start in a terminal. The final interface is the normal interactive Claude Code chat.');
 if (!process.env.OPENAI_API_KEY) throw new Error('Add OPENAI_API_KEY to .env or your environment.');
 if (!['hooks', 'transcript'].includes(values.observe)) throw new Error('--observe must be hooks or transcript');
-const port = Number(values.port);
+// A stable address lets Chrome remember microphone access between launches.
+const DEFAULT_PORT = 8123;
+const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port');
 const cwd = fs.realpathSync(values.cwd);
 const sessionId = values.resume ?? values['session-id'] ?? randomUUID();
 if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(sessionId)) throw new Error('--resume and --session-id require a Claude session UUID');
 const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId.slice(0, 8)}`);
-const harness = await new Harness({ root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY, port, voice: values.voice, observation: values.observe }).start();
+const harness = await new Harness({ root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe }).start();
+if (harness.portFellBack) console.log(`\nPort ${DEFAULT_PORT} is in use, probably by another companion. This one uses ${new URL(harness.baseUrl).port}; Chrome may ask for microphone access again.`);
 console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nClaude will open here. Click Start voice in the browser when the channel is ready.\nLocal run: ${runDir}\n`);
 if (!values['no-open']) {
   const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? null : 'xdg-open';

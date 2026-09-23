@@ -303,3 +303,15 @@ test('receiver diagnostics retain concealment over time and reject stale voice s
   assert.deepEqual(events[1].stats, { clockRate: 48000, packetsLost: 0, concealedSamples: 4800 });
   assert.ok(events.every(e => e.liveRun === 'audit-run' && e.voiceSessionId === 'current-voice'));
 });
+
+test('the default port yields to a busy port only when fallback is allowed', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-port-'));
+  const options = { root: path.resolve(fileURLToPath(new URL('..', import.meta.url))), cwd: dir, sessionId: randomUUID(), apiKey: 'test-key-unused' };
+  const first = await new Harness({ ...options, runDir: path.join(dir, 'a') }).start();
+  const port = Number(new URL(first.baseUrl).port);
+  const second = await new Harness({ ...options, runDir: path.join(dir, 'b'), port, portFallback: true }).start();
+  assert.equal(second.portFellBack, true);
+  assert.notEqual(new URL(second.baseUrl).port, String(port));
+  await assert.rejects(new Harness({ ...options, runDir: path.join(dir, 'c'), port }).start(), { code: 'EADDRINUSE' });
+  await second.close(); await first.close();
+});

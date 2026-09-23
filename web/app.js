@@ -103,6 +103,35 @@ $('instruction-form').onsubmit = event => {
   $('instruction-status').textContent = 'Submitted. Check the instruction status below for confirmation.';
   $('instruction-text').value = '';
 };
+// The chosen input is a per-browser convenience. Labels appear only after
+// Chrome has granted microphone access, so the list refreshes after capture.
+const MICROPHONE_KEY = 'fd-microphone-device';
+function storedMicrophone() { try { return localStorage.getItem(MICROPHONE_KEY) ?? ''; } catch { return ''; } }
+async function listMicrophones() {
+  const select = $('microphone-device');
+  let inputs = [];
+  try { inputs = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'audioinput' && device.deviceId); } catch { return; }
+  const devices = inputs.filter(device => !['default', 'communications'].includes(device.deviceId));
+  // Name the device behind Chrome's default: it can differ from the macOS input.
+  const fallback = inputs.find(device => device.deviceId === 'default')?.label.replace(/^Default - /, '');
+  const wanted = select.value || storedMicrophone();
+  select.replaceChildren(new Option(fallback ? `Chrome default (${fallback})` : 'Chrome default', ''), ...devices.map((device, index) => new Option(device.label || `Microphone ${index + 1}`, device.deviceId)));
+  // An unplugged choice stays saved; Chrome's default is used until it returns.
+  select.value = devices.some(device => device.deviceId === wanted) ? wanted : '';
+}
+// Each launcher port is a new site to Chrome, which hides devices until it grants
+// microphone access. Ask when the operator opens the list, not on page load.
+async function revealMicrophones() {
+  if ([...$('microphone-device').options].some(option => option.value)) return;
+  try { (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach(track => track.stop()); }
+  catch { notice('Allow microphone access in Chrome to list your microphones.'); return; }
+  await listMicrophones();
+}
+$('microphone-device').addEventListener('pointerdown', revealMicrophones);
+$('microphone-device').addEventListener('focus', revealMicrophones);
+$('microphone-device').onchange =e => { try { localStorage.setItem(MICROPHONE_KEY, e.target.value); } catch {} };
+navigator.mediaDevices?.addEventListener('devicechange', listMicrophones);
+listMicrophones();
 function connect() {
   if (!token) { notice('Open the companion link printed by the launcher in your terminal.'); return; }
   ws = new WebSocket(`${location.origin.replace('http:', 'ws:')}/voice`, ['fd-voice', token]); ws.binaryType = 'arraybuffer';
@@ -113,6 +142,8 @@ function connect() {
 async function start() {
   if (active || starting) return; starting = true; $('start').disabled = true; notice('');
   const attempt = ++generation;
+  // The input is captured once per voice connection; change it after End voice.
+  $('microphone-device').disabled = true;
   $('stop').disabled = false; $('audioState').textContent = 'Waiting for microphone…';
   try {
     context = new AudioContext({ sampleRate: 24000, latencyHint: 'interactive' });
@@ -120,13 +151,15 @@ async function start() {
     if (attempt !== generation) return;
     if (context.sampleRate !== 24000) throw new Error('This browser did not provide 24 kHz audio. Use current Chrome.');
     let permissionTimer;
-    const requestedStream = navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false }, video: false });
+    const deviceId = $('microphone-device').value;
+    const requestedStream = navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) }, video: false });
     requestedStream.then(s => { if (attempt !== generation) s.getTracks().forEach(track => track.stop()); }).catch(() => {});
     try {
       const granted = await Promise.race([requestedStream, new Promise((_, reject) => { permissionTimer = setTimeout(() => reject(new Error('Microphone startup is taking too long. Check Chrome’s microphone permission and selected audio device, then try again.')), 20000); })]);
       if (attempt !== generation) { granted.getTracks().forEach(track => track.stop()); return; }
       stream = granted;
     } finally { clearTimeout(permissionTimer); }
+    listMicrophones();
     if (attempt !== generation) { stream.getTracks().forEach(track => track.stop()); return; }
     await context.audioWorklet.addModule('/audio-worklet.js');
     if (attempt !== generation) return;
@@ -208,7 +241,13 @@ async function start() {
     muted = false; $('mute').textContent = 'Mute microphone'; $('mute').setAttribute('aria-pressed', 'false');
     ws.send(JSON.stringify({ type: 'start', sdp: connection.localDescription.sdp }));
     $('stop').disabled = false; $('audioState').textContent = 'Connecting voice…';
-  } catch (error) { if (attempt !== generation) return; releaseAudio(); notice(error.name === 'NotAllowedError' ? 'Allow microphone access in Chrome, then click Start voice.' : error.message); if (currentStatus) handle(currentStatus); }
+  } catch (error) {
+    if (attempt !== generation) return; releaseAudio();
+    notice(error.name === 'NotAllowedError' ? 'Allow microphone access in Chrome, then click Start voice.'
+      : ['OverconstrainedError', 'NotFoundError'].includes(error.name) ? 'The selected microphone is unavailable. Choose another microphone, then click Start voice.'
+      : error.message);
+    if (currentStatus) handle(currentStatus);
+  }
 }
 function releaseAudio() {
   clearInterval(transportTimer); transportTimer = null;
@@ -222,6 +261,7 @@ function releaseAudio() {
   mic?.disconnect(); mic = null; node?.disconnect(); node = null; context?.close().catch(() => {}); context = null;
   $('mute').disabled = true; $('stop').disabled = true; $('audioState').textContent = 'Microphone off'; $('level').value = 0;
   $('gate-state').textContent = 'Microphone off';
+  $('microphone-device').disabled = false;
 }
 function stop() { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'stop' })); releaseAudio(); }
 $('start').onclick = start; $('stop').onclick = stop;
