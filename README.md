@@ -6,6 +6,10 @@ Talk to Claude Code while it works. A voice companion powered by GPT Live 1 list
 
 Ask for a change, ask what just happened, or change direction while Claude is working. The companion follows Claude’s messages, file edits, commands, and tool results automatically. It answers from that context and passes requests to Claude when more work is needed.
 
+You don't have to stay at your desk. Hand off a task, go do something else, and keep talking to Claude from wherever you are: check in, change your mind, and hear when it's done.
+
+![Full-Duplex Code: hand off a game change, take a bath, check in and redirect by voice, then come back to the finished game](assets/full-duplex-hand-off.gif)
+
 ## Quick start
 
 You'll need Node.js 22+, Claude Code installed and signed in, Chrome, a microphone, and an OpenAI API key with GPT Live 1 access. Tested on macOS.
