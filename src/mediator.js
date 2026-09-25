@@ -4,7 +4,7 @@ import { HookFeed } from './hook-context.js';
 import { DEFAULT_SPEAKING_LEVEL } from './voice-policy.js';
 
 export class Mediator {
-  constructor({ live, observer, deliver, log, publish, clean, initialObservationCount = 0, speakingLevel = DEFAULT_SPEAKING_LEVEL, coalesceMs }) {
+  constructor({ live, observer, deliver, log, publish, clean, speakingLevel = DEFAULT_SPEAKING_LEVEL, coalesceMs }) {
     Object.assign(this, { live, observer, deliver, log, publish, clean });
     this.history = new VoiceHistory(); this.seenDelegations = new Set(); this.timers = new Set();
     this.context = new ContextQueue(live, error => {
@@ -13,16 +13,15 @@ export class Mediator {
     });
     this.context.setSpeakingLevel(speakingLevel);
     this.feed = new HookFeed(this.context, log, { coalesceMs });
-    for (const observation of observer.observations.slice(0, initialObservationCount)) this.feed.projector.observe(observation);
-    // Reopening voice restores all observations, including tools and anything
-    // captured while voice was off. Historical assistant messages stay quiet.
-    for (const observation of observer.observations.slice(initialObservationCount)) this.forward(observation, true);
+    // Earlier work reaches Live only through the bounded startup history.
+    // Track its turn state here, but send only observations that arrive from now on.
+    for (const observation of observer.observations) this.feed.projector.observe(observation);
     this.onObservation = event => this.forward(event);
     this.onLive = event => this.liveEvent(event);
     live.on('event', this.onLive); observer.on('observation', this.onObservation);
   }
-  forward(event, historical = false) {
-    this.feed.add(event, historical);
+  forward(event) {
+    this.feed.add(event);
   }
   fault(error) { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: error.message }); }
   liveEvent(event) {

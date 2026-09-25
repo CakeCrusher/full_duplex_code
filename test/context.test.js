@@ -139,13 +139,24 @@ test('a later command keeps answered questions in context, not in its request te
 });
 
 
-test('startup context uses a complete chronological prefix and leaves overflow for quiet replay', () => {
-  const observations = [{ text: 'first' }, { text: '世界'.repeat(4000) }, { text: 'last' }];
-  const history = startupHistory(observations, 100);
-  assert.equal(history.count, 1); assert.match(history.text, /first/);
-  assert.doesNotMatch(history.text, /last/);
-  assert.ok(Buffer.byteLength(history.text) <= 100);
+test('startup context keeps the most recent observations in order and notes what it omitted', () => {
+  const observations = Array.from({ length: 10 }, (_, i) => ({ text: `observation ${i} ` + 'x'.repeat(100) }));
+  const history = startupHistory(observations, 700);
+  assert.ok(history.count > 0 && history.count < 10);
+  assert.equal(history.omitted, 10 - history.count);
+  assert.match(history.text, /observation 9/); assert.doesNotMatch(history.text, /observation 0 /);
+  assert.ok(history.text.indexOf('observation 8') < history.text.indexOf('observation 9'), 'chronological order');
+  assert.match(history.text, new RegExp(`${history.omitted} earlier observations`));
+  assert.ok(Buffer.byteLength(history.text) <= 700);
   assert.equal(startupHistory(observations, 0).count, 0);
+  assert.equal(startupHistory([], 700).text, '');
+});
+
+test('an oversized newest observation is excerpted rather than hiding all recent work', () => {
+  const history = startupHistory([{ text: 'older' }, { text: 'START' + '世界'.repeat(4000) + 'FINISH' }], 3000);
+  assert.equal(history.count, 2);
+  assert.match(history.text, /START/); assert.match(history.text, /FINISH/); assert.match(history.text, /full record in the local hook log/);
+  assert.ok(Buffer.byteLength(history.text) <= 3000);
 });
 
 test('every fragment names its originating hook and reconstructs the full UTF-8 payload', async () => {

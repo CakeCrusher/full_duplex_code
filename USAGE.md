@@ -153,7 +153,7 @@ If Claude asks a question, you can answer by voice or in the terminal. Keep the 
 
 - **Mute microphone** stops sharing your microphone input. Voice stays connected and billable. Click **Unmute microphone** to speak again.
 - **End voice** closes the paid voice connection. Claude stays open and can continue working.
-- **Start voice** opens a new connection and replays the observations retained by this launcher, including tool results and work performed while voice was off. Historical assistant messages are restored quietly.
+- **Start voice** opens a new connection. Its startup context holds the most recent observations retained by this launcher, including work performed while voice was off, within a fixed size limit. Longer records are shortened to their start and end. Earlier history is not re-sent; it stays in the local log. Only observations that arrive after the connection opens are sent as they happen.
 - Exit Claude in the terminal to stop the whole application.
 
 Closing the companion tab also closes its voice connection. A disconnected voice session does not erase Claude's conversation.
@@ -168,7 +168,7 @@ npm start -- --cwd /path/to/your/project --resume CLAUDE_SESSION_ID
 
 For a session launched by Full-Duplex Code, the terminal prints a **Local run** folder at startup. Open `connection.json` in that folder and copy its `sessionId` value. Use the complete ID; do not use the short suffix of the folder name. Keep the rest of that file private because it also contains connection credentials.
 
-Accept the channel notice, open the new companion link, and click **Start voice**. The companion restores saved prompts, assistant text, tool calls, and tool results from that Claude session's transcript. Transcript records supply the history; newly arriving hooks supply live observations. Private thinking is not imported. Old voice conversations are not restored independently of Claude's saved history, and the voice model has a finite context capacity.
+Accept the channel notice, open the new companion link, and click **Start voice**. The companion reads saved prompts, assistant text, tool calls, and tool results from that Claude session's transcript. Like any new voice connection, it starts with only the most recent of these; the rest stays in the transcript. Transcript records supply the history; newly arriving hooks supply live observations. Private thinking is not imported. Old voice conversations are not restored independently of Claude's saved history, and the voice model has a finite context capacity.
 
 ## Add instructions to Live
 
