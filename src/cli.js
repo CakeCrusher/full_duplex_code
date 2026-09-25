@@ -8,7 +8,9 @@ import { Harness } from './server.js';
 import { Budget } from './budget.js';
 import { claudeArgs } from './agent.js';
 import { parseLaunchArgs } from './cli-options.js';
+import qrcode from 'qrcode-terminal';
 import { startTunnel } from './tunnel.js';
+import { confirmStart } from './launch-prompt.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 try { process.loadEnvFile(path.join(root, '.env')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -59,33 +61,48 @@ if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(sessionId)) throw new Er
 const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId.slice(0, 8)}`);
 const harness = await new Harness({ root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe }).start();
 if (harness.portFellBack) console.log(`\nPort ${DEFAULT_PORT} is in use, probably by another companion. This one uses ${new URL(harness.baseUrl).port}; Chrome may ask for microphone access again.`);
-let tunnel, stopping = false;
+let tunnel, child, stopping = false;
+// One ordered teardown for every way the launcher can end: Claude exiting or
+// failing to start, quitting at the prompt, the terminal closing, or a crash.
+// The bridge closes first (ending the voice session and its sockets), then the
+// tunnel, which runs in its own process group and would otherwise outlive us.
+async function stop(reason) {
+  if (stopping) return; stopping = true;
+  harness.log({ type: 'launcher.stopping', reason });
+  await harness.close().catch(error => console.error(`Stopping the companion: ${error.message}`));
+  await tunnel?.stop().catch(error => console.error(`Stopping the tunnel: ${error.message}`));
+  if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+}
+async function exit(reason, code) { await stop(reason); process.exit(code); }
+// Last resort if the process ends without stop() finishing: never leave the tunnel running.
+process.on('exit', () => { if (tunnel?.child.exitCode === null) tunnel.child.kill('SIGKILL'); });
+process.on('SIGTERM', () => exit('SIGTERM', 143));
+process.on('SIGHUP', () => exit('terminal closed', 129));
+process.on('uncaughtException', error => { console.error(error); exit('crash', 1); });
+process.on('unhandledRejection', error => { console.error(error); exit('crash', 1); });
 if (values.public) {
   // Claude takes over the terminal next, so wait here until the address works.
   console.log('\nStarting a Cloudflare tunnel for --public…');
   try { tunnel = await startTunnel({ port: new URL(harness.baseUrl).port, log: line => harness.log({ type: 'tunnel.log', line }) }); }
-  catch (error) { await harness.close(); throw error; }
+  catch (error) { console.error(error.message); await exit('tunnel failed', 1); }
   harness.setPublicUrl(tunnel.url);
   harness.log({ type: 'tunnel.started', url: tunnel.url });
   tunnel.child.on('exit', code => { if (!stopping) harness.fault(new Error(`The Cloudflare tunnel stopped (${code}); the phone link no longer works.`)); });
-  console.log(`\nFrom your phone: ${harness.publicBrowserUrl}\nAnyone with this link can direct Claude on this computer. Don't share it. The tunnel closes when you exit Claude.`);
+  console.log(`\nFrom your phone: ${harness.publicBrowserUrl}\nScan with your phone's camera:`);
+  qrcode.generate(harness.publicBrowserUrl, { small: true }, code => console.log(code));
+  console.log("Anyone with this link can direct Claude on this computer. Don't share it. The tunnel closes when you exit Claude.");
 }
 // The launcher only prints the link; open it in Chrome or another Chromium browser.
-console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nOpen this link in Chrome, then click Start voice when the channel is ready. Claude will open here.\nLocal run: ${runDir}\n`);
+console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nOpen this link in Chrome, then click Start voice when the channel is ready.\nLocal run: ${runDir}\n`);
+if (!(await confirmStart())) await exit('quit before Claude started', 0);
 const childEnv = { ...process.env, FD_BRIDGE_TOKEN: harness.channelToken };
 delete childEnv.OPENAI_API_KEY;
-const child = spawn('claude', claudeArgs({ config: harness.config, sessionId, resume: Boolean(values.resume), extraArgs }), { cwd, env: childEnv, stdio: 'inherit' });
-async function stop() {
-  if (stopping) return; stopping = true;
-  tunnel?.stop();
-  await harness.close();
-  if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
-}
+child = spawn('claude', claudeArgs({ config: harness.config, sessionId, resume: Boolean(values.resume), extraArgs }), { cwd, env: childEnv, stdio: 'inherit' });
 // Ctrl-C belongs to Claude's terminal interaction. Exiting Claude ends the harness.
 process.on('SIGINT', () => {});
-// The tunnel runs in its own process group, so it must be stopped explicitly.
-process.on('exit', () => tunnel?.stop());
-process.on('SIGTERM', () => stop());
-process.on('SIGHUP', () => stop());
-child.on('error', async error => { console.error(error.message); await stop(); process.exitCode = 1; });
-child.on('exit', async code => { await stop(); console.log('\nFull-Duplex Code stopped. Usage saved in .runs/budget.json.'); process.exitCode = code ?? 0; });
+child.on('error', async error => { console.error(error.message); await exit('Claude failed to start', 1); });
+child.on('exit', async (code, signal) => {
+  await stop(signal ? `Claude ended (${signal})` : `Claude exited (${code})`);
+  console.log(`\nFull-Duplex Code stopped${tunnel ? ' and closed the Cloudflare tunnel' : ''}. Usage saved in .runs/budget.json.`);
+  process.exit(code ?? 1);
+});

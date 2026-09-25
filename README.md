@@ -38,8 +38,8 @@ Claude Code flags work here too. To skip its tool permission prompts:
 npm start -- --cwd /path/to/your/project --dangerously-skip-permissions
 ```
 
-1. Accept Claude's development-channel notice and any workspace trust prompt in the terminal.
-2. Open the companion link printed in the terminal in Chrome, click **Start voice**, and allow microphone access.
+1. Open the companion link printed in the terminal in Chrome, then press Enter in the terminal to start Claude. Claude fills the terminal, which hides the link until you exit.
+2. Accept Claude's development-channel notice and any workspace trust prompt, then click **Start voice** in the companion and allow microphone access.
 3. Start talking: “Ask Claude to add a dark mode.” You can also type into Claude and ask, “What did I just tell Claude?”
 
 **End voice** stops the voice connection and its billing. Claude stays open. **Mute microphone** keeps the paid voice connection running.

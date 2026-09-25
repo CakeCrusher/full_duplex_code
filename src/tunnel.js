@@ -10,7 +10,17 @@ export function startTunnel({ port, command = 'cloudflared', args = ['tunnel', '
     // process group keeps Ctrl-C in Claude's terminal from stopping the tunnel.
     const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
     let url, output = '', settled = false;
-    const stop = () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); };
+    const running = () => child.exitCode === null && child.signalCode === null;
+    const exited = new Promise(resolve => child.once('exit', resolve));
+    // Ask cloudflared to shut down, and force it if it has not exited in time.
+    const stop = async (graceMs = 5000) => {
+      if (!running()) return;
+      child.kill('SIGTERM');
+      let timer;
+      const late = new Promise(resolve => { timer = setTimeout(() => resolve('late'), graceMs); });
+      if (await Promise.race([exited, late]) === 'late' && running()) { child.kill('SIGKILL'); await exited; }
+      clearTimeout(timer);
+    };
     const done = (error, value) => {
       if (settled) return; settled = true; clearTimeout(timer);
       if (error) { stop(); reject(error); } else resolve(value);

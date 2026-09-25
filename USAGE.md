@@ -49,7 +49,7 @@ npm start -- --cwd /path/to/your/project
 
 To work in the Full-Duplex Code repository itself, use `npm start`.
 
-Claude opens in the same terminal. Accept its development-channel notice and any workspace trust prompt. Open the companion link printed in the terminal in Chrome. Once the channel connects, click **Start voice**, allow microphone access, and wait for the greeting.
+The launcher prints the companion link and waits. Open the link in Chrome, then press Enter to start Claude, or Ctrl-C to quit. Claude fills the terminal once it starts, which hides the link until you exit. Accept Claude's development-channel notice and any workspace trust prompt. Once the channel connects, click **Start voice**, allow microphone access, and wait for the greeting.
 
 The launcher does not open a browser for you. That link grants access to your local companion, so keep it private. Use one companion tab per running session.
 
@@ -231,7 +231,7 @@ You can talk to Claude from your phone while it keeps running on your computer. 
 npm start -- --cwd /path/to/your/project --public
 ```
 
-The launcher starts a temporary Cloudflare tunnel, waits until it is ready, and prints a **From your phone** link. Open it on your phone in Chrome or another Chromium browser and click **Start voice**. The tunnel stops when you exit Claude. Without `--public`, nothing is reachable from outside this computer.
+The launcher starts a temporary Cloudflare tunnel, waits until it is ready, and prints a **From your phone** link with a QR code. Scan it with your phone's camera, open it in Chrome or another Chromium browser, and click **Start voice**. Then press Enter in the terminal to start Claude. When Claude ends for any reason, including Ctrl-C at the prompt or closing the terminal, the launcher closes the voice session and stops the tunnel. Without `--public`, nothing is reachable from outside this computer.
 
 The tunnel gives the page the `https://` address a phone needs for its microphone. Voice audio does not use it: it goes directly between the phone and OpenAI, as it does from a desktop browser. Only the page and its voice connection are accepted through the tunnel; Claude's hooks and channel connection are refused unless they come from this computer directly.
 
