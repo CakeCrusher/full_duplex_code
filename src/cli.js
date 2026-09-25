@@ -8,6 +8,7 @@ import { Harness } from './server.js';
 import { Budget } from './budget.js';
 import { claudeArgs } from './agent.js';
 import { parseLaunchArgs } from './cli-options.js';
+import { startTunnel } from './tunnel.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 try { process.loadEnvFile(path.join(root, '.env')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -21,7 +22,8 @@ if (values.help) {
   --voice marin         GPT Live voice
   --observe hooks       Live display hooks (default), or transcript file tail
   --port 8123           Local port (default 8123; 0 chooses a free port)
-  --public-url URL      https address of a tunnel to this port, for use from a phone
+  --public              Also reach the companion from a phone, through a temporary
+                        Cloudflare tunnel this launcher starts and stops (needs cloudflared)
   npm run doctor        Check local prerequisites without API spending
   npm run usage         Show recorded voice usage and cost estimates
 
@@ -56,17 +58,19 @@ const cwd = fs.realpathSync(values.cwd);
 const sessionId = values.resume ?? values['session-id'] ?? randomUUID();
 if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(sessionId)) throw new Error('--resume and --session-id require a Claude session UUID');
 const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId.slice(0, 8)}`);
-let publicUrl;
-if (values['public-url'] !== undefined) {
-  try { publicUrl = new URL(values['public-url']); } catch { throw new Error('--public-url must be a full https:// address'); }
-  // The microphone requires a secure page; only the origin is used.
-  if (publicUrl.protocol !== 'https:' || publicUrl.pathname !== '/' || publicUrl.search || publicUrl.hash) throw new Error('--public-url must be an https:// origin such as https://voice.example.com');
-}
-const harness = await new Harness({ root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY, port, voice: values.voice, observation: values.observe, publicUrl: publicUrl?.origin,
-  // A tunnel forwards to one fixed port, so never silently move to another one.
-  portFallback: values.port === undefined && !publicUrl }).start();
+const harness = await new Harness({ root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe }).start();
 if (harness.portFellBack) console.log(`\nPort ${DEFAULT_PORT} is in use, probably by another companion. This one uses ${new URL(harness.baseUrl).port}; Chrome may ask for microphone access again.`);
-if (harness.publicBrowserUrl) console.log(`\nFrom another device: ${harness.publicBrowserUrl}\nAnyone with this link can direct Claude on this computer. Keep it private and put a login (for example Cloudflare Access) in front of the tunnel.`);
+let tunnel, stopping = false;
+if (values.public) {
+  // Claude takes over the terminal next, so wait here until the address works.
+  console.log('\nStarting a Cloudflare tunnel for --public…');
+  try { tunnel = await startTunnel({ port: new URL(harness.baseUrl).port, log: line => harness.log({ type: 'tunnel.log', line }) }); }
+  catch (error) { await harness.close(); throw error; }
+  harness.setPublicUrl(tunnel.url);
+  harness.log({ type: 'tunnel.started', url: tunnel.url });
+  tunnel.child.on('exit', code => { if (!stopping) harness.fault(new Error(`The Cloudflare tunnel stopped (${code}); the phone link no longer works.`)); });
+  console.log(`\nFrom your phone: ${harness.publicBrowserUrl}\nAnyone with this link can direct Claude on this computer. Don't share it. The tunnel closes when you exit Claude.`);
+}
 console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nClaude will open here. Click Start voice in the browser when the channel is ready.\nLocal run: ${runDir}\n`);
 if (!values['no-open']) {
   const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? null : 'xdg-open';
@@ -75,14 +79,16 @@ if (!values['no-open']) {
 const childEnv = { ...process.env, FD_BRIDGE_TOKEN: harness.channelToken };
 delete childEnv.OPENAI_API_KEY;
 const child = spawn('claude', claudeArgs({ config: harness.config, sessionId, resume: Boolean(values.resume), extraArgs }), { cwd, env: childEnv, stdio: 'inherit' });
-let stopping = false;
 async function stop() {
   if (stopping) return; stopping = true;
+  tunnel?.stop();
   await harness.close();
   if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
 }
 // Ctrl-C belongs to Claude's terminal interaction. Exiting Claude ends the harness.
 process.on('SIGINT', () => {});
+// The tunnel runs in its own process group, so it must be stopped explicitly.
+process.on('exit', () => tunnel?.stop());
 process.on('SIGTERM', () => stop());
 process.on('SIGHUP', () => stop());
 child.on('error', async error => { console.error(error.message); await stop(); process.exitCode = 1; });

@@ -23,13 +23,13 @@ async function body(req, maxBytes = 1024 * 1024) {
 export class Harness {
   constructor({ root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = 'hooks', port = 0, portFallback = false, publicUrl }) {
     Object.assign(this, { root, runDir, cwd, sessionId, apiKey, voice, observation, port, portFallback });
-    // Optional public address of a tunnel (for example Cloudflare) that forwards to this bridge.
-    this.publicOrigin = publicUrl ? new URL(publicUrl).origin : null;
+    this.publicOrigin = null; this.publicBrowserUrl = null;
     this.speakingLevel = DEFAULT_SPEAKING_LEVEL;
     this.speakingUpdate = { state: 'next_session', level: this.speakingLevel };
     this.additionalInstructions = [];
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
     this.browserToken = randomBytes(32).toString('hex'); this.channelToken = randomBytes(32).toString('hex');
+    if (publicUrl) this.setPublicUrl(publicUrl);
     this.clean = text => redact(text, [apiKey, this.browserToken, this.channelToken]);
     this.log = event => fs.appendFileSync(path.join(runDir, 'events.jsonl'), this.clean(JSON.stringify({ at: Date.now(), ...event })) + '\n', { mode: 0o600 });
     this.budget = new Budget(path.join(root, '.runs', 'budget.json')); this.outbox = new Map(); this.uiEvents = [];
@@ -49,6 +49,12 @@ export class Harness {
     if (this.browser?.readyState === WebSocket.OPEN) this.browser.send(JSON.stringify(event));
   }
   fault(error) { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: this.clean(error.message) }); }
+  // Public address of a tunnel that forwards to this bridge. Known only after
+  // the tunnel starts, which needs the bridge's port first.
+  setPublicUrl(url) {
+    this.publicOrigin = new URL(url).origin;
+    this.publicBrowserUrl = `${this.publicOrigin}/#${this.browserToken}`;
+  }
   // The page and /voice may arrive locally or through the tunnel. Hooks and the
   // channel belong to processes on this machine, never to forwarded requests.
   access(req) {
@@ -161,7 +167,6 @@ export class Harness {
     }
     this.baseUrl = `http://127.0.0.1:${this.http.address().port}`;
     this.browserUrl = `${this.baseUrl}/#${this.browserToken}`;
-    this.publicBrowserUrl = this.publicOrigin ? `${this.publicOrigin}/#${this.browserToken}` : null;
     this.config = makeClaudeConfig({ root: this.root, runDir: this.runDir, baseUrl: this.baseUrl, channelToken: this.channelToken });
     // This private descriptor permits repeatable local tests without exposing the API key.
     fs.writeFileSync(path.join(this.runDir, 'connection.json'), JSON.stringify({ baseUrl: this.baseUrl, browserToken: this.browserToken, sessionId: this.sessionId, cwd: this.cwd }, null, 2), { mode: 0o600 });
