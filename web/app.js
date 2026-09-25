@@ -1,4 +1,5 @@
 import { TimelineView } from './timeline.js';
+import { CuePlayer, CueTracker } from './cues.js';
 
 const $ = id => document.getElementById(id);
 const token = location.hash.slice(1) || sessionStorage.getItem('fd-voice-token');
@@ -7,6 +8,8 @@ let ws, context, stream, node, mic, active = false, starting = false, muted = fa
 let peer, remote, remoteAudio, microphoneDestination, transportTimer, voiceSessionId;
 let generation = 0;
 let instructionHistory = '';
+const cues = new CueTracker(), cuePlayer = new CuePlayer();
+let replaying = false;
 const timeline = new TimelineView();
 const speakingNames = ['Quiet', 'Milestones'];
 const speakingDescriptions = ['Answer you and confirm sent requests. Observe Claude silently.', 'Default: meaningful outcomes, major changes, and decisions you must make. Complete thoughts, without running commentary. Your spoken requests come first.'];
@@ -35,6 +38,8 @@ function showSpeakingUpdate(update) {
 function notice(text) { $('notice').textContent = text; }
 function handle(event) {
   timeline.handle(event);
+  const cue = cues.cue(event, { replaying });
+  if (cue) cuePlayer.play(cue);
   if (event.type === 'status') {
     currentStatus = event;
     if (event.prompt) {
@@ -76,7 +81,10 @@ function handle(event) {
     $('budget').textContent = `Estimated total $${event.committedUsd.toFixed(2)} · includes unfinished sessions`;
   }
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
-  if (event.type === 'history') for (const item of event.events) handle(item);
+  if (event.type === 'history') {
+    replaying = true;
+    try { for (const item of event.events) handle(item); } finally { replaying = false; }
+  }
   if (event.type === 'fault') { notice(event.message); if (starting && !active) { starting = false; releaseAudio(); } }
   if (event.type === 'voice_answer' && peer) {
     const connection = peer;
@@ -136,11 +144,12 @@ function connect() {
   if (!token) { notice('Open the companion link printed by the launcher in your terminal.'); return; }
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/voice`, ['fd-voice', token]); ws.binaryType = 'arraybuffer';
   ws.onmessage = ({ data }) => { if (typeof data === 'string') handle(JSON.parse(data)); };
-  ws.onclose = () => { releaseAudio(); showSpeakingUpdate({ state: 'disconnected' }); $('connection').textContent = 'Disconnected'; $('start').disabled = true; notice('The local companion disconnected. Reopen the launcher link to reconnect.'); };
+  ws.onclose = () => { const cue = cues.end(); if (cue) cuePlayer.play(cue); releaseAudio(); showSpeakingUpdate({ state: 'disconnected' }); $('connection').textContent = 'Disconnected'; $('start').disabled = true; notice('The local companion disconnected. Reopen the launcher link to reconnect.'); };
   ws.onerror = () => notice('Unable to connect. Another companion tab may already be open.');
 }
 async function start() {
   if (active || starting) return; starting = true; $('start').disabled = true; notice('');
+  cuePlayer.unlock(); // Start voice is the user gesture that allows audio cues.
   const attempt = ++generation;
   // The input is captured once per voice connection; change it after End voice.
   $('microphone-device').disabled = true;

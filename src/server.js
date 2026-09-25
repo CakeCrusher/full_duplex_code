@@ -186,7 +186,7 @@ export class Harness {
       if (!equal(req.headers.authorization, `Bearer ${this.browserToken}`)) { res.writeHead(403); return res.end(); }
       res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(this.status()));
     }
-    const files = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/timeline.js': ['timeline.js', 'text/javascript'], '/icon.svg': ['icon.svg', 'image/svg+xml'], '/audio-worklet.js': ['audio-worklet.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
+    const files = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/timeline.js': ['timeline.js', 'text/javascript'], '/cues.js': ['cues.js', 'text/javascript'], '/icon.svg': ['icon.svg', 'image/svg+xml'], '/audio-worklet.js': ['audio-worklet.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
     if (req.method !== 'GET' || !files[req.url]) { res.writeHead(404); return res.end(); }
     const [name, type] = files[req.url]; res.setHeader('Content-Type', `${type}; charset=utf-8`);
     return res.end(fs.readFileSync(path.join(this.root, 'web', name)));
