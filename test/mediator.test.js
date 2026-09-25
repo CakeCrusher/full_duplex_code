@@ -37,29 +37,32 @@ test('hooks are primary: all raw hooks, including assistant batches, are quiet t
   assert.equal(f.deliveries.length, 0, 'observed input never triggers a new channel request');
 });
 
-test('voice startup and restart keep full local results and send explicitly bounded views', async t => {
+test('voice startup and restart send only new observations; earlier work goes to bounded startup history', async t => {
   const observer = new AgentObserver({ sessionId: 'test' });
   const output = 'BEGIN\n' + 'File detail 世界\n'.repeat(25000) + 'END';
   observer.hook({ session_id: 'test', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: { stdout: output } });
   observer.hook({ session_id: 'test', hook_event_name: 'MessageDisplay', message_id: 'old', index: 0, delta: 'Earlier answer.' });
+  const history = startupHistory(observer.observations);
+  assert.match(history.text, /BEGIN/); assert.match(history.text, /END/); assert.match(history.text, /Earlier answer/);
+  assert.ok(Buffer.byteLength(history.text) <= 7000, 'a large log cannot overflow the startup input');
   const f = fixture(t, 'connecting', observer);
   f.hook({ hook_event_name: 'UserPromptSubmit', prompt: 'Typed during startup' });
   assert.equal(f.appends.length, 0);
   f.live.state = 'active'; f.live.emit('event', { type: 'session.started' });
   await flush();
   f.mediator.feed.flush(); await flush();
-  assert.match(content(f), /BEGIN/); assert.match(content(f), /END/);
-  assert.match(content(f), /partial/); assert.match(content(f), /Earlier answer/);
   assert.match(content(f), /Typed during startup/);
+  assert.doesNotMatch(content(f), /BEGIN|Earlier answer/, 'earlier work is not replayed as appends');
   assert.equal(JSON.parse(observer.observations[0].text).tool_response.stdout, output);
-  assert.ok(content(f).length < 5000, 'large logs cannot create minutes of timed context');
   assert.ok(f.appends.every(e => e.kind === 'thinking'), 'old assistant messages do not get spoken again');
   f.mediator.stop();
   const restarted = fixture(t, 'active', observer);
   await flush();
   restarted.mediator.feed.flush(); await flush();
-  assert.match(content(restarted), /BEGIN/); assert.match(content(restarted), /END/);
-  assert.match(content(restarted), /"historical":true/);
+  assert.equal(restarted.appends.length, 0, 'restarting voice sends no backlog');
+  restarted.hook({ hook_event_name: 'Stop', last_assistant_message: 'Done after restart.' });
+  await flush();
+  assert.match(content(restarted), /Done after restart/);
 });
 
 test('a delegation sends ordinary user text once, without asking Claude to use companion tools', async t => {
@@ -96,24 +99,23 @@ test('a failed append surfaces a fault and ends stale voice instead of silently 
 });
 
 
-test('startup observations are neither replayed twice nor dropped when some overflow', async t => {
+test('a restart after a long session starts with no burst of appends', async t => {
   const observer = new AgentObserver({ sessionId: 'test' });
-  observer.hook({ session_id: 'test', hook_event_name: 'UserPromptSubmit', prompt: 'first' });
-  observer.hook({ session_id: 'test', hook_event_name: 'PostToolUse', tool_response: { stdout: 'x'.repeat(1000) } });
-  const initial = startupHistory(observer.observations, 300);
-  assert.equal(initial.count, 1);
-  const live = new EventEmitter(); live.state = 'active';
-  const appends = []; live.append = async (kind, content) => appends.push({ kind, content });
-  const mediator = new Mediator({ live, observer, initialObservationCount: initial.count, log: () => {}, publish: () => {}, clean: String, coalesceMs: 0 });
-  t.after(() => { mediator.stop(); observer.close(); });
+  for (let i = 0; i < 200; i++) {
+    observer.hook({ session_id: 'test', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: { stdout: `Result ${i} `.repeat(400) } });
+    observer.hook({ session_id: 'test', hook_event_name: 'MessageDisplay', message_id: `m${i}`, index: 0, delta: `Answer ${i}. `.repeat(200) });
+  }
+  const f = fixture(t, 'active', observer);
+  await flush(); f.mediator.feed.flush(); await flush();
+  assert.equal(f.appends.length, 0);
+  const history = startupHistory(observer.observations);
+  assert.match(history.text, /Answer 199/); assert.doesNotMatch(history.text, /Answer 0\./);
+  assert.match(history.text, /earlier observations from this Claude session are omitted/);
+  f.hook({ hook_event_name: 'UserPromptSubmit', prompt: 'next' });
   await flush();
-  assert.match(initial.text, /first/);
-  assert.doesNotMatch(appends.map(e => e.content).join(''), /"prompt":"first"/);
-  assert.match(appends.map(e => e.content).join(''), /PostToolUse/);
-  assert.equal(JSON.parse(observer.observations[1].text).tool_response.stdout, 'x'.repeat(1000));
-  assert.ok(appends.every(e => e.kind === 'thinking'));
+  assert.match(content(f), /"prompt":"next"/);
+  assert.ok(f.appends.every(e => e.kind === 'thinking'));
 });
-
 
 test('a full burst of observations remains thinking after idle time; no progress is promoted to speech', async t => {
   t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'] });

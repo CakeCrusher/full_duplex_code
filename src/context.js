@@ -41,16 +41,37 @@ export function thinkingText(text) {
   return JSON.stringify(visit(data));
 }
 
-export function startupHistory(observations, maxBytes = 7000) {
-  // Live's startup input is available immediately (unlike timed appends).
-  // Leave room under its 8,192-token limit even with a conservative byte bound.
-  let text = ''; let count = 0;
-  for (const observation of observations) {
-    const next = `Claude Code observation (history):\n${thinkingText(observation.text)}\n`;
-    if (Buffer.byteLength(text) + Buffer.byteLength(next) > maxBytes) break;
-    text += next; count++;
+const OMISSION_RESERVE = 160;
+// Keep the start and end of an oversized record within a byte allowance.
+function headAndTail(text, maxBytes) {
+  if (Buffer.byteLength(text) <= maxBytes) return text;
+  const chars = Array.from(text);
+  const join = n => `${chars.slice(0, n).join('')} … [${chars.length} chars; full record in the local hook log] … ${chars.slice(-n).join('')}`;
+  let low = 0, high = Math.floor(chars.length / 2), best = '';
+  while (low <= high) {
+    const n = Math.floor((low + high) / 2), candidate = join(n);
+    if (Buffer.byteLength(candidate) <= maxBytes) { best = candidate; low = n + 1; } else high = n - 1;
   }
-  return { text, count };
+  return best;
+}
+
+export function startupHistory(observations, maxBytes = 7000, itemBytes = 2400) {
+  // A new voice connection starts from the most recent work. Live's startup
+  // input is available immediately (unlike timed appends); keep it under the
+  // 8,192-token limit with a conservative byte bound. Older observations stay
+  // in the local log and are never replayed as appends: a long session would
+  // otherwise bury the present under minutes of backlog.
+  const budget = maxBytes - OMISSION_RESERVE, entries = [];
+  let used = 0;
+  for (let i = observations.length - 1; i >= 0 && budget > 0; i--) {
+    const record = headAndTail(thinkingText(observations[i].text), Math.min(itemBytes, budget - 64));
+    const next = `Claude Code observation (history):\n${record}\n`;
+    if (!record || used + Buffer.byteLength(next) > budget) break;
+    entries.unshift(next); used += Buffer.byteLength(next);
+  }
+  const omitted = observations.length - entries.length;
+  const note = omitted && entries.length ? `[${omitted} earlier observations from this Claude session are omitted; only the most recent work follows.]\n` : '';
+  return { text: note + entries.join(''), count: entries.length, omitted };
 }
 
 export class ContextQueue {
@@ -91,7 +112,7 @@ export class ContextQueue {
       }).catch(error => {
         if (!this.stopped && this.live.state === 'active') {
           this.stop();
-          this.onError(new Error(`Claude context delivery failed; restart voice to replay its saved observations. ${error.message}`));
+          this.onError(new Error(`Claude context delivery failed; restart voice to reconnect.${error.message}`));
         }
       }).finally(() => { this.inFlight--; this.inFlightTokens -= tokens; this.running = this.inFlight > 0; });
     }

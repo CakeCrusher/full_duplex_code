@@ -302,7 +302,7 @@ export class Harness {
     this.audit?.close(); this.audit = null;
     this.live = live;
     this.mediator?.stop();
-    this.mediator = new Mediator({ live, observer: this.observer, initialObservationCount: history.count, speakingLevel: startupLevel, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
+    this.mediator = new Mediator({ live, observer: this.observer, speakingLevel: startupLevel, deliver: task => this.deliver(task), log: this.log, publish: event => this.publish(event), clean: this.clean });
     this.publish(this.status());
     live.on('fault', error => this.fault(error));
     live.on('answer', sdp => this.publish({ type: 'voice_answer', sdp }));
