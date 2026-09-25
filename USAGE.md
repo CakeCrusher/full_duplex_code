@@ -188,6 +188,7 @@ Add options after `npm start --`:
 | `--no-open` | Print the companion link without opening the browser. |
 | `--observe transcript` | Add saved-text/tool fallback observation if display hooks are unavailable. |
 | `--port 8123` | Choose the local port. The default is 8123, so the companion address and Chrome's microphone permission stay the same between launches. If 8123 is busy, for example with a second companion, the launcher uses a free port and says so. `--port 0` always chooses a free port. |
+| `--public-url https://…` | Also accept the companion page from this address, for use from a phone through a tunnel. See [Use it from your phone](#use-it-from-your-phone). |
 
 For example:
 
@@ -222,6 +223,34 @@ npm start -- --model opus "Explain this project"
 The first `--` tells npm to pass the arguments to the launcher. An additional `--` stops the launcher's option parsing and sends the remaining arguments directly to Claude. For example, `npm start -- -- --help` displays Claude's help instead of the companion's help. Put companion options and `--resume` / `--session-id` before this additional separator so the companion tracks the selected session. To pass a value that itself matches a companion flag, use this separator or Claude's `--option=value` form.
 
 These options are passed to the normal terminal process. Options that replace Claude's hooks or channel configuration also replace the companion connections they provide. See the [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) for flag behavior.
+
+## Use it from your phone
+
+You can talk to Claude from your phone while it keeps running on your computer. A tunnel gives the companion page a public `https://` address; the phone needs HTTPS for its microphone. Voice audio does not use the tunnel: it goes directly between the phone and OpenAI, as it does from a desktop browser.
+
+1. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) and start a tunnel to the companion's port:
+
+   ```sh
+   cloudflared tunnel --url http://127.0.0.1:8123
+   ```
+
+   It prints an address such as `https://example-words.trycloudflare.com`. A quick tunnel gets a new address each time; a named tunnel on your own domain keeps one. Leave `httpHostHeader` unset so the tunnel forwards the public host name.
+
+2. Start the companion with that address:
+
+   ```sh
+   npm start -- --cwd /path/to/your/project --public-url https://example-words.trycloudflare.com
+   ```
+
+   With `--public-url`, the launcher keeps port 8123 and stops if it is busy, rather than moving to a port the tunnel does not reach.
+
+3. Open the **From another device** link the terminal prints on your phone, in Chrome or another Chromium browser, and click **Start voice**.
+
+**Keep the link private and put a login in front of it.** Anyone with the link can direct Claude on your computer; with `--dangerously-skip-permissions`, that includes running any command. A quick tunnel's address is public. For regular use, use a named tunnel with [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) so the page asks you to sign in first.
+
+Only the page and its voice connection are accepted through the tunnel. Claude's hooks and channel connection are refused unless they come from this computer directly.
+
+Keep the companion page in the foreground on your phone: locking the screen or switching apps can pause the microphone, and voice ends after 5 seconds without microphone audio. Your computer must stay awake with the launcher and `cloudflared` running.
 
 ## Costs
 

@@ -21,8 +21,10 @@ async function body(req, maxBytes = 1024 * 1024) {
 }
 
 export class Harness {
-  constructor({ root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = 'hooks', port = 0, portFallback = false }) {
+  constructor({ root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = 'hooks', port = 0, portFallback = false, publicUrl }) {
     Object.assign(this, { root, runDir, cwd, sessionId, apiKey, voice, observation, port, portFallback });
+    // Optional public address of a tunnel (for example Cloudflare) that forwards to this bridge.
+    this.publicOrigin = publicUrl ? new URL(publicUrl).origin : null;
     this.speakingLevel = DEFAULT_SPEAKING_LEVEL;
     this.speakingUpdate = { state: 'next_session', level: this.speakingLevel };
     this.additionalInstructions = [];
@@ -47,6 +49,16 @@ export class Harness {
     if (this.browser?.readyState === WebSocket.OPEN) this.browser.send(JSON.stringify(event));
   }
   fault(error) { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: this.clean(error.message) }); }
+  // The page and /voice may arrive locally or through the tunnel. Hooks and the
+  // channel belong to processes on this machine, never to forwarded requests.
+  access(req) {
+    const { host, origin } = req.headers;
+    const forwarded = Boolean(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for']);
+    const local = host === new URL(this.baseUrl).host && !forwarded;
+    const tunnel = Boolean(this.publicOrigin) && host === new URL(this.publicOrigin).host;
+    const expectedOrigin = tunnel ? this.publicOrigin : this.baseUrl;
+    return { local, allowed: (local || tunnel) && (!origin || origin === expectedOrigin) };
+  }
   saveTimeline() { fs.writeFileSync(path.join(this.runDir, 'timeline.json'), this.clean(JSON.stringify(this.timeline.snapshot())), { mode: 0o600 }); }
   status() {
     const budget = this.budget.summary();
@@ -129,10 +141,10 @@ export class Harness {
     this.http.on('upgrade', (req, socket, head) => {
       const route = req.url;
       const token = req.headers.authorization?.replace(/^Bearer /, '') ?? req.headers['sec-websocket-protocol']?.split(',').map(s => s.trim())[1];
-      const validOrigin = !req.headers.origin || req.headers.origin === this.baseUrl;
+      const { local, allowed } = this.access(req);
       const auth = route === '/channel' ? equal(token, this.channelToken) : route === '/voice' && equal(token, this.browserToken);
       const occupied = route === '/channel' ? this.channel?.readyState === WebSocket.OPEN : this.browser?.readyState === WebSocket.OPEN;
-      if (!auth || !validOrigin || req.headers.host !== new URL(this.baseUrl).host || occupied || this.stopping) {
+      if (!auth || !allowed || (route === '/channel' && !local) || occupied || this.stopping) {
         socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); socket.destroy(); return;
       }
       this.wss.handleUpgrade(req, socket, head, ws => route === '/channel' ? this.attachChannel(ws) : this.attachBrowser(ws));
@@ -149,6 +161,7 @@ export class Harness {
     }
     this.baseUrl = `http://127.0.0.1:${this.http.address().port}`;
     this.browserUrl = `${this.baseUrl}/#${this.browserToken}`;
+    this.publicBrowserUrl = this.publicOrigin ? `${this.publicOrigin}/#${this.browserToken}` : null;
     this.config = makeClaudeConfig({ root: this.root, runDir: this.runDir, baseUrl: this.baseUrl, channelToken: this.channelToken });
     // This private descriptor permits repeatable local tests without exposing the API key.
     fs.writeFileSync(path.join(this.runDir, 'connection.json'), JSON.stringify({ baseUrl: this.baseUrl, browserToken: this.browserToken, sessionId: this.sessionId, cwd: this.cwd }, null, 2), { mode: 0o600 });
@@ -159,9 +172,10 @@ export class Harness {
   async handleHttp(req, res) {
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none'");
-    if (req.headers.host !== new URL(this.baseUrl).host || (req.headers.origin && req.headers.origin !== this.baseUrl)) { res.writeHead(403); return res.end(); }
+    const { local, allowed } = this.access(req);
+    if (!allowed) { res.writeHead(403); return res.end(); }
     if (req.url === '/hook' && req.method === 'POST') {
-      if (!equal(req.headers.authorization, `Bearer ${this.channelToken}`)) { res.writeHead(403); return res.end(); }
+      if (!local || !equal(req.headers.authorization, `Bearer ${this.channelToken}`)) { res.writeHead(403); return res.end(); }
       const event = await body(req, MAX_HOOK_BYTES);
       if (event.session_id !== this.sessionId) { res.writeHead(409); return res.end('{}'); }
       // Never wait for a model or a network append before returning to Claude.

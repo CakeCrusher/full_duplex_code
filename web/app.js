@@ -134,7 +134,7 @@ navigator.mediaDevices?.addEventListener('devicechange', listMicrophones);
 listMicrophones();
 function connect() {
   if (!token) { notice('Open the companion link printed by the launcher in your terminal.'); return; }
-  ws = new WebSocket(`${location.origin.replace('http:', 'ws:')}/voice`, ['fd-voice', token]); ws.binaryType = 'arraybuffer';
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/voice`, ['fd-voice', token]); ws.binaryType = 'arraybuffer';
   ws.onmessage = ({ data }) => { if (typeof data === 'string') handle(JSON.parse(data)); };
   ws.onclose = () => { releaseAudio(); showSpeakingUpdate({ state: 'disconnected' }); $('connection').textContent = 'Disconnected'; $('start').disabled = true; notice('The local companion disconnected. Reopen the launcher link to reconnect.'); };
   ws.onerror = () => notice('Unable to connect. Another companion tab may already be open.');
