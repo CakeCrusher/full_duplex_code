@@ -17,7 +17,6 @@ if (values.help) {
   --cwd /project        Folder where Claude works (default: current directory)
   --resume SESSION_ID   Resume a Claude conversation by its full UUID
   --session-id UUID     Choose the UUID for a new Claude conversation
-  --no-open             Print the companion link without opening the browser
   --voice marin         GPT Live voice
   --observe hooks       Live display hooks (default), or transcript file tail
   --port 8123           Local port (default 8123; 0 chooses a free port)
@@ -57,11 +56,8 @@ if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(sessionId)) throw new Er
 const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId.slice(0, 8)}`);
 const harness = await new Harness({ root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe }).start();
 if (harness.portFellBack) console.log(`\nPort ${DEFAULT_PORT} is in use, probably by another companion. This one uses ${new URL(harness.baseUrl).port}; Chrome may ask for microphone access again.`);
-console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nClaude will open here. Click Start voice in the browser when the channel is ready.\nLocal run: ${runDir}\n`);
-if (!values['no-open']) {
-  const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? null : 'xdg-open';
-  if (opener) spawn(opener, process.platform === 'darwin' ? ['-a', 'Google Chrome', harness.browserUrl] : [harness.browserUrl], { stdio: 'ignore' }).on('error', () => {});
-}
+// The launcher only prints the link; open it in Chrome or another Chromium browser.
+console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nOpen this link in Chrome, then click Start voice when the channel is ready. Claude will open here.\nLocal run: ${runDir}\n`);
 const childEnv = { ...process.env, FD_BRIDGE_TOKEN: harness.channelToken };
 delete childEnv.OPENAI_API_KEY;
 const child = spawn('claude', claudeArgs({ config: harness.config, sessionId, resume: Boolean(values.resume), extraArgs }), { cwd, env: childEnv, stdio: 'inherit' });

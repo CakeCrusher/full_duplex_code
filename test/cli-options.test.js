@@ -8,8 +8,8 @@ const config = { mcpFile: '/run/mcp.json', settingsFile: '/run/settings.json' };
 
 test('permission bypass is opt-in and reaches Claude after the companion configuration', () => {
   assert.deepEqual(parseLaunchArgs([]).extraArgs, []);
-  const { values, extraArgs } = parseLaunchArgs(['--cwd', '/my project', '--dangerously-skip-permissions', '--no-open']);
-  assert.equal(values.cwd, '/my project'); assert.equal(values['no-open'], true);
+  const { values, extraArgs } = parseLaunchArgs(['--cwd', '/my project', '--dangerously-skip-permissions', '--voice', 'cedar']);
+  assert.equal(values.cwd, '/my project'); assert.equal(values.voice, 'cedar');
   const args = claudeArgs({ config, sessionId, extraArgs });
   assert.equal(args.at(-1), '--dangerously-skip-permissions');
   assert.ok(args.includes(config.mcpFile)); assert.ok(args.includes(config.settingsFile));
@@ -67,5 +67,5 @@ test('companion options still validate values and keep last-value-wins behavior'
   assert.equal(parseLaunchArgs(['-h']).values.help, true);
   assert.throws(() => parseLaunchArgs(['--cwd']), /argument/i);
   assert.throws(() => parseLaunchArgs(['--voice', '--model', 'opus']), /ambiguous|argument/i);
-  assert.throws(() => parseLaunchArgs(['--no-open=false']), /argument/i);
+  assert.throws(() => parseLaunchArgs(['--help=false']), /argument/i);
 });

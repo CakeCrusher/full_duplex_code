@@ -49,9 +49,9 @@ npm start -- --cwd /path/to/your/project
 
 To work in the Full-Duplex Code repository itself, use `npm start`.
 
-Claude opens in the same terminal. Accept its development-channel notice and any workspace trust prompt. Chrome opens the companion page. Once the channel connects, click **Start voice**, allow microphone access, and wait for the greeting.
+Claude opens in the same terminal. Accept its development-channel notice and any workspace trust prompt. Open the companion link printed in the terminal in Chrome. Once the channel connects, click **Start voice**, allow microphone access, and wait for the greeting.
 
-If the browser does not open automatically, use the companion URL printed in the terminal. That link grants access to your local companion, so keep it private. Use one companion tab per running session.
+The launcher does not open a browser for you. That link grants access to your local companion, so keep it private. Use one companion tab per running session.
 
 A Claude process that was already running must be restarted through this launcher to attach the companion. Use the resume command below to keep an existing conversation.
 
@@ -185,14 +185,13 @@ Add options after `npm start --`:
 | `--cwd /path/to/project` | Choose the folder Claude works in. |
 | `--resume SESSION_ID` | Continue a specific Claude conversation. |
 | `--session-id UUID` | Choose the full UUID for a new conversation. Use either this or `--resume`. |
-| `--no-open` | Print the companion link without opening the browser. |
 | `--observe transcript` | Add saved-text/tool fallback observation if display hooks are unavailable. |
 | `--port 8123` | Choose the local port. The default is 8123, so the companion address and Chrome's microphone permission stay the same between launches. If 8123 is busy, for example with a second companion, the launcher uses a free port and says so. `--port 0` always chooses a free port. |
 
 For example:
 
 ```sh
-npm start -- --cwd /path/to/project --no-open
+npm start -- --cwd /path/to/project --voice marin
 ```
 
 Run `npm start -- --help` to see all options. Transcript observation depends on when Claude saves messages, so updates can arrive later than in the default mode.
@@ -243,7 +242,6 @@ Usage history stays in `.runs/budget.json`. Existing history is preserved; old s
 | --- | --- |
 | The launcher won't start | Run it in an interactive terminal and run `npm run doctor`. Check Node, Claude sign-in, and `.env`. |
 | Start voice stays disabled | Accept any pending channel notice or trust prompt in the Claude terminal. Check whether your organization permits channels. |
-| The browser didn't open | Open the companion URL printed by the launcher in Chrome. |
 | The companion can't hear you | Allow microphone access in Chrome and macOS. Check the **Microphone** selection beside the voice buttons and whether it is muted. |
 | OpenAI rejects the connection | Check the key, API account billing, and access to `gpt-live-1`. A successful doctor check alone does not verify these. |
 | Claude hooks | Every raw observation, including tool calls/results, file changes, displayed text, and lifecycle hooks, at bridge receipt time. The bounded Live view goes to thinking; originals remain here. |
