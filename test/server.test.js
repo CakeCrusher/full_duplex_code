@@ -315,3 +315,36 @@ test('the default port yields to a busy port only when fallback is allowed', asy
   await assert.rejects(new Harness({ ...options, runDir: path.join(dir, 'c'), port }).start(), { code: 'EADDRINUSE' });
   await second.close(); await first.close();
 });
+
+test('a tunnel public URL admits the page and /voice, but never hooks or the channel', async t => {
+  const http = await import('node:http');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-server-'));
+  // The repository root, so the real page files are served; nothing is written there.
+  const repo = fileURLToPath(new URL('..', import.meta.url));
+  const h = await new Harness({ root: repo, runDir: path.join(root, 'run'), cwd: root, sessionId: randomUUID(), apiKey: 'unused-test-key', publicUrl: 'https://voice.example.com' }).start();
+  t.after(async () => { await h.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  assert.equal(h.publicBrowserUrl, `https://voice.example.com/#${h.browserToken}`);
+  const port = new URL(h.baseUrl).port;
+  // Node's fetch cannot set Host, so send raw requests as the tunnel would.
+  const request = (pathName, headers, method = 'GET', body) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: pathName, method, headers }, res => { res.resume(); resolve(res.statusCode); });
+    req.on('error', reject); req.end(body);
+  });
+  const tunnel = { Host: 'voice.example.com', 'X-Forwarded-For': '203.0.113.9', 'Cf-Connecting-Ip': '203.0.113.9' };
+  assert.equal(await request('/', tunnel), 200, 'the page loads through the tunnel');
+  assert.equal(await request('/api/status', { ...tunnel, Origin: 'https://voice.example.com', Authorization: `Bearer ${h.browserToken}` }), 200);
+  assert.equal(await request('/api/status', { ...tunnel, Origin: 'https://evil.example', Authorization: `Bearer ${h.browserToken}` }), 403);
+  assert.equal(await request('/', { Host: 'other.example.com' }), 403, 'unknown hosts are still refused');
+  const hook = JSON.stringify({ session_id: h.sessionId, hook_event_name: 'Stop' });
+  const hookHeaders = { Authorization: `Bearer ${h.channelToken}`, 'Content-Type': 'application/json' };
+  assert.equal(await request('/hook', { ...tunnel, ...hookHeaders }, 'POST', hook), 403, 'hooks never arrive through the tunnel');
+  assert.equal(await request('/hook', { Host: new URL(h.baseUrl).host, 'X-Forwarded-For': '203.0.113.9', ...hookHeaders }, 'POST', hook), 403, 'even with a rewritten Host header');
+  assert.equal(await request('/hook', { Host: new URL(h.baseUrl).host, ...hookHeaders }, 'POST', hook), 200, 'the local command hook still works');
+  const open = (headers, route = '/voice', protocols = ['fd-voice', h.browserToken]) => new Promise(resolve => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}${route}`, protocols, { headers });
+    ws.on('open', () => { ws.terminate(); resolve('open'); }); ws.on('error', () => resolve('refused'));
+  });
+  assert.equal(await open({ ...tunnel, Origin: 'https://voice.example.com' }), 'open', 'the phone page reaches /voice');
+  assert.equal(await open({ ...tunnel, Origin: 'https://evil.example' }), 'refused');
+  assert.equal(await open({ ...tunnel, Authorization: `Bearer ${h.channelToken}` }, '/channel', []), 'refused', 'the channel is local only');
+});

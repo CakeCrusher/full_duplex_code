@@ -187,6 +187,7 @@ Add options after `npm start --`:
 | `--session-id UUID` | Choose the full UUID for a new conversation. Use either this or `--resume`. |
 | `--observe transcript` | Add saved-text/tool fallback observation if display hooks are unavailable. |
 | `--port 8123` | Choose the local port. The default is 8123, so the companion address and Chrome's microphone permission stay the same between launches. If 8123 is busy, for example with a second companion, the launcher uses a free port and says so. `--port 0` always chooses a free port. |
+| `--public` | Also reach the companion from a phone, through a temporary Cloudflare tunnel the launcher starts and stops. See [Use it from your phone](#use-it-from-your-phone). |
 
 For example:
 
@@ -221,6 +222,22 @@ npm start -- --model opus "Explain this project"
 The first `--` tells npm to pass the arguments to the launcher. An additional `--` stops the launcher's option parsing and sends the remaining arguments directly to Claude. For example, `npm start -- -- --help` displays Claude's help instead of the companion's help. Put companion options and `--resume` / `--session-id` before this additional separator so the companion tracks the selected session. To pass a value that itself matches a companion flag, use this separator or Claude's `--option=value` form.
 
 These options are passed to the normal terminal process. Options that replace Claude's hooks or channel configuration also replace the companion connections they provide. See the [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) for flag behavior.
+
+## Use it from your phone
+
+You can talk to Claude from your phone while it keeps running on your computer. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) once (for example `brew install cloudflared`), then add `--public`:
+
+```sh
+npm start -- --cwd /path/to/your/project --public
+```
+
+The launcher starts a temporary Cloudflare tunnel, waits until it is ready, and prints a **From your phone** link. Open it on your phone in Chrome or another Chromium browser and click **Start voice**. The tunnel stops when you exit Claude. Without `--public`, nothing is reachable from outside this computer.
+
+The tunnel gives the page the `https://` address a phone needs for its microphone. Voice audio does not use it: it goes directly between the phone and OpenAI, as it does from a desktop browser. Only the page and its voice connection are accepted through the tunnel; Claude's hooks and channel connection are refused unless they come from this computer directly.
+
+**Keep the link private.** The tunnel's address is new and random each run, but it is public, and the secret in the link is the only lock. Anyone with the link can direct Claude on your computer; with `--dangerously-skip-permissions`, that includes running any command.
+
+Keep the companion page in the foreground on your phone: locking the screen or switching apps can pause the microphone, and voice ends after 5 seconds without microphone audio. Your computer must stay awake while the launcher runs.
 
 ## Costs
 
