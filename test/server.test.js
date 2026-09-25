@@ -73,19 +73,22 @@ test('hook context keeps flowing during continuous microphone and speaker activi
     const response = await fetch(h.baseUrl + '/hook', { method: 'POST', headers: { Authorization: `Bearer ${h.channelToken}` }, body: JSON.stringify(hook) });
     assert.equal(response.status, 200);
   }
-  assert.ok(sent.length > 5, 'all hook fragments reach Live while audio is active and ACKs are pending');
+  assert.ok(sent.length >= 1, 'context reaches Live while audio is active and ACKs are pending');
   assert.equal(h.mediator.context.queue.length, 0);
   let fragment = 0;
-  while (pending.length) {
+  while (pending.length || h.mediator.feed.pending.length) {
     await audio(fragment++ % 2 ? 0 : .0016, .12);
-    pending.shift()();
+    pending.shift()?.();
     await new Promise(resolve => setImmediate(resolve));
+    h.mediator.feed.flush();
   }
   assert.equal(h.mediator.context.queue.length, 0, 'continuous audio cannot starve context');
   assert.equal(h.mediator.context.inFlight, 0);
   assert.ok(sent.every(e => e.kind === 'thinking'));
   const reconstructed = sent.map(e => e.content.replace(/^\[[^\n]+\]\n\[Claude [^\n]+\]\n/, '')).join('');
-  assert.equal(reconstructed, observations.map(e => `Claude Code observation:\n${JSON.stringify(e)}\n`).join(''), 'every normal field and fragment arrives intact and in order');
+  for (const hook of observations) assert.ok(reconstructed.includes(hook.hook_event_name));
+  assert.match(reconstructed, /future_field.*retained/);
+  assert.deepEqual(h.observer.observations.map(o => JSON.parse(o.text)), observations, 'all original observations stay intact locally');
 });
 
 test('speaking preference updates the active model through instructions and validates values', async t => {
@@ -194,7 +197,7 @@ test('the command hook preserves large structured results, new fields, and UTF-8
 
 test('preference status waits for the matching acknowledgment and reports failures and offline changes', async t => {
   const h = await fixture(t), pending = [];
-  assert.equal(h.speakingLevel, 2, 'Walkthrough is the default');
+  assert.equal(h.speakingLevel, 1, 'Milestones is the default');
   assert.equal(h.status().speakingUpdate.state, 'next_session');
   await h.setSpeakingLevel(0);
   assert.equal(h.status().speakingUpdate.level, 0);
@@ -207,14 +210,14 @@ test('preference status waits for the matching acknowledgment and reports failur
   const second = h.setSpeakingLevel(2);
   pending[0].resolve(); await first;
   assert.equal(h.status().speakingUpdate.state, 'pending', 'the earlier ACK cannot confirm the newest selection');
-  assert.equal(h.status().speakingUpdate.level, 2);
+  assert.equal(h.status().speakingUpdate.level, 1, 'legacy Walkthrough selection migrates to Milestones');
   pending[1].resolve(); await second;
   assert.equal(h.status().speakingUpdate.state, 'acknowledged');
-  assert.equal(h.status().speakingUpdate.confirmedLevel, 2);
+  assert.equal(h.status().speakingUpdate.confirmedLevel, 1);
   const failed = h.setSpeakingLevel(0);
   pending[2].reject(new Error('append timed out')); await failed;
   assert.equal(h.status().speakingUpdate.state, 'failed');
-  assert.equal(h.status().speakingUpdate.confirmedLevel, 2);
+  assert.equal(h.status().speakingUpdate.confirmedLevel, 1);
   assert.match(h.status().speakingUpdate.error, /timed out/);
   const late = h.setSpeakingLevel(1);
   await live.close();
@@ -278,6 +281,27 @@ test('additional instructions preserve the base, show exact text, and wait for a
   assert.match(h.instructions(),/Finish the explanation\./,'retained for the next connection');
   await assert.rejects(h.appendInstruction(' '),/Enter/);
   await assert.rejects(h.appendInstruction('x'.repeat(441)),/shorten/);
+});
+
+test('receiver diagnostics retain concealment over time and reject stale voice sessions', async t => {
+  const h = await fixture(t);
+  h.live = { id: 'current-voice', state: 'active', reservation: 'audit-run', close: async () => {} };
+  const ws = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/voice', { headers: { Authorization: `Bearer ${h.browserToken}` } });
+  t.after(() => ws.terminate());
+  await new Promise(resolve => ws.on('open', resolve));
+  const send = async (voiceSessionId, stats) => {
+    ws.send(JSON.stringify({ type: 'audio_transport', at: Date.now(), voiceSessionId, stats }));
+    await new Promise(resolve => { ws.once('pong', resolve); ws.ping(); });
+  };
+  await send('current-voice', { clockRate: 48000, packetsLost: 2, concealedSamples: 2400 });
+  await send('current-voice', { clockRate: 48000, packetsLost: 0, concealedSamples: 4800, jitter: 'invalid', unrelated: 'not retained' });
+  await send('old-voice', { concealedSamples: 999999 });
+  const events = fs.readFileSync(path.join(h.runDir, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(e => e.type === 'audio.transport');
+  assert.equal(events.length, 2);
+  assert.deepEqual(events.map(e => e.stats.packetsLost), [2, 0], 'late packets may reduce the final loss count');
+  assert.deepEqual(events.map(e => e.stats.concealedSamples), [2400, 4800], 'earlier audible repairs remain visible');
+  assert.deepEqual(events[1].stats, { clockRate: 48000, packetsLost: 0, concealedSamples: 4800 });
+  assert.ok(events.every(e => e.liveRun === 'audit-run' && e.voiceSessionId === 'current-voice'));
 });
 
 test('the default port yields to a busy port only when fallback is allowed', async () => {

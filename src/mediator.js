@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { ContextQueue, VoiceHistory, thinkingText } from './context.js';
+import { ContextQueue, VoiceHistory } from './context.js';
+import { HookFeed } from './hook-context.js';
+import { DEFAULT_SPEAKING_LEVEL } from './voice-policy.js';
 
 export class Mediator {
-  constructor({ live, observer, deliver, log, publish, clean, initialObservationCount = 0, speakingLevel = 2 }) {
+  constructor({ live, observer, deliver, log, publish, clean, initialObservationCount = 0, speakingLevel = DEFAULT_SPEAKING_LEVEL, coalesceMs }) {
     Object.assign(this, { live, observer, deliver, log, publish, clean });
     this.history = new VoiceHistory(); this.seenDelegations = new Set(); this.timers = new Set();
     this.context = new ContextQueue(live, error => {
@@ -10,6 +12,8 @@ export class Mediator {
       live.close('Claude context delivery failed');
     });
     this.context.setSpeakingLevel(speakingLevel);
+    this.feed = new HookFeed(this.context, log, { coalesceMs });
+    for (const observation of observer.observations.slice(0, initialObservationCount)) this.feed.projector.observe(observation);
     // Reopening voice restores all observations, including tools and anything
     // captured while voice was off. Historical assistant messages stay quiet.
     for (const observation of observer.observations.slice(initialObservationCount)) this.forward(observation, true);
@@ -18,11 +22,11 @@ export class Mediator {
     live.on('event', this.onLive); observer.on('observation', this.onObservation);
   }
   forward(event, historical = false) {
-    this.context.add('thinking', `Claude Code observation${historical ? ' (history)' : ''}:\n${thinkingText(event.text)}\n`, null, `Claude ${event.name ?? 'transcript'}${historical ? '; history' : ''}`);
+    this.feed.add(event, historical);
   }
   fault(error) { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: error.message }); }
   liveEvent(event) {
-    if (event.type === 'session.started') this.context.pump();
+    if (event.type === 'session.started') { this.feed.flush(); this.context.pump(); }
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
       const fragment = this.history.add(event);
       this.publish({ type: 'caption', ...fragment, voiceSessionId: this.live.id, voiceStartedAt: this.live.startedAt });
@@ -59,7 +63,7 @@ export class Mediator {
     }
   }
   stop() {
-    this.context.stop(); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();
+    this.feed.stop(); this.context.stop(); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();
     this.live.off('event', this.onLive); this.observer.off('observation', this.onObservation);
   }
 }

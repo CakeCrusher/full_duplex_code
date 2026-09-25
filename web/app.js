@@ -4,12 +4,12 @@ const $ = id => document.getElementById(id);
 const token = location.hash.slice(1) || sessionStorage.getItem('fd-voice-token');
 if (location.hash) { sessionStorage.setItem('fd-voice-token', token); history.replaceState(null, '', location.pathname); }
 let ws, context, stream, node, mic, active = false, starting = false, muted = false, currentStatus;
-let peer, remote, remoteAudio, microphoneDestination;
+let peer, remote, remoteAudio, microphoneDestination, transportTimer, voiceSessionId;
 let generation = 0;
 let instructionHistory = '';
 const timeline = new TimelineView();
-const speakingNames = ['Quiet', 'Milestones', 'Walkthrough'];
-const speakingDescriptions = ['Answer you and confirm sent requests. Observe Claude silently.', 'Only major changes, decisions you must make, and task completion. No running commentary.', 'Default: explain stages, choices, checks, and the final result in detail. Your spoken requests come first.'];
+const speakingNames = ['Quiet', 'Milestones'];
+const speakingDescriptions = ['Answer you and confirm sent requests. Observe Claude silently.', 'Default: meaningful outcomes, major changes, and decisions you must make. Complete thoughts, without running commentary. Your spoken requests come first.'];
 function showSpeaking(level) {
   $('speaking-level').value = level;
   $('speaking-level').setAttribute('aria-valuetext', speakingNames[level]);
@@ -61,10 +61,11 @@ function handle(event) {
       }
       $('instruction-append').disabled = ['new', 'connecting', 'closing'].includes(event.live) || additional.some(item => item.state === 'pending');
     }
-    if (document.activeElement !== $('speaking-level')) showSpeaking(event.speakingLevel ?? 2);
-    showSpeakingUpdate(event.speakingUpdate ?? { state: 'next_session', level: event.speakingLevel ?? 2 });
+    if (document.activeElement !== $('speaking-level')) showSpeaking(event.speakingLevel ?? 1);
+    showSpeakingUpdate(event.speakingUpdate ?? { state: 'next_session', level: event.speakingLevel ?? 1 });
     const delivery = event.contextDelivery ?? { waiting: 0, inFlight: 0 };
     $('context-delivery').textContent = event.live !== 'active' ? 'Claude observations stay saved while voice is off.'
+      : delivery.observationsWaiting ? `${delivery.observationsWaiting} hooks being combined · oldest ${(delivery.oldestObservationMs / 1000).toFixed(1)}s · estimated API backlog ${delivery.estimatedBacklogSeconds.toFixed(1)}s. Full observations remain saved.`
       : delivery.waiting ? `${delivery.waiting} context fragments waiting · sending in order, including during speech. All observations remain saved.`
       : delivery.inFlight ? `All context sent · ${delivery.inFlight} fragment${delivery.inFlight === 1 ? '' : 's'} awaiting Live’s acknowledgment.` : 'No context waiting to be sent.';
     $('connection').textContent = active ? muted ? 'Microphone muted' : 'Listening' : event.channel ? 'Agent connected' : 'Waiting for Claude';
@@ -82,6 +83,7 @@ function handle(event) {
     connection.setRemoteDescription({ type: 'answer', sdp: event.sdp }).catch(error => { if (peer === connection) { notice(error.message); stop(); } });
   }
   if (event.type === 'voice_started') {
+    voiceSessionId = event.sessionId;
     node?.port.postMessage({ type: 'audit_start', sessionId: event.sessionId });
     active = true; starting = false; notice('');
     $('mute').disabled = false; $('stop').disabled = false; $('audioState').textContent = 'Microphone on';
@@ -185,8 +187,34 @@ async function start() {
     microphoneDestination = context.createMediaStreamDestination();
     node.connect(microphoneDestination, 0, 0); node.connect(context.destination, 1, 0);
     const connection = peer = new RTCPeerConnection();
+    // Audit the receiver independently of captions and worklet playback.
+    // A final packetsLost count can be zero even when late packets caused
+    // audible concealment earlier, so retain the counters over time.
+    let samplingTransport = false;
+    transportTimer = setInterval(async () => {
+      if (!active || samplingTransport || peer !== connection) return;
+      samplingTransport = true;
+      try {
+        const report = await connection.getStats();
+        if (!active || peer !== connection || ws?.readyState !== WebSocket.OPEN) return;
+        for (const stat of report.values()) {
+          if (stat.type !== 'inbound-rtp' || stat.kind !== 'audio') continue;
+          const fields = ['packetsReceived', 'packetsLost', 'packetsDiscarded', 'jitter', 'concealedSamples', 'silentConcealedSamples',
+            'concealmentEvents', 'totalSamplesReceived', 'insertedSamplesForDeceleration', 'removedSamplesForAcceleration',
+            'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount'];
+          const stats = Object.fromEntries(fields.filter(key => Number.isFinite(stat[key])).map(key => [key, stat[key]]));
+          stats.clockRate = report.get(stat.codecId)?.clockRate;
+          stats.requestedJitterBufferMs = connection.getReceivers().find(receiver => receiver.track.kind === 'audio')?.jitterBufferTarget;
+          ws.send(JSON.stringify({ type: 'audio_transport', voiceSessionId, at: Date.now(), stats }));
+        }
+      } catch { /* Missing diagnostics must not interrupt audio. */ }
+      finally { samplingTransport = false; }
+    }, 1000);
     connection.ontrack = event => {
       if (peer !== connection || !context || !node) return;
+      // Give late network packets a small recovery window in the existing
+      // WebRTC receiver. Speech still streams continuously in both directions.
+      if ('jitterBufferTarget' in event.receiver) event.receiver.jitterBufferTarget = 200;
       const received = new MediaStream([event.track]);
       // Chrome starts the WebRTC receiver's playout clock through a media
       // element. Keep that element silent: the measured worklet is the only
@@ -222,6 +250,8 @@ async function start() {
   }
 }
 function releaseAudio() {
+  clearInterval(transportTimer); transportTimer = null;
+  voiceSessionId = null;
   if (node && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'audio_stopped' }));
   generation++;
   active = false; starting = false; stream?.getTracks().forEach(track => track.stop()); stream = null;
