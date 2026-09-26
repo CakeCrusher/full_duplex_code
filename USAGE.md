@@ -8,7 +8,7 @@ You can talk while Claude works, ask about its progress, and give corrections. Y
 
 You need:
 
-- Node.js 22 or newer and npm.
+- Node.js 22.18 or newer and npm. Node runs the TypeScript sources directly; there is no build step.
 - Claude Code installed and signed in. Confirm that running `claude` in a terminal works.
 - An OpenAI API key with access to `gpt-live-1`.
 - Chrome and a microphone. Headphones can help keep speaker audio out of your microphone.
@@ -111,7 +111,7 @@ All levels receive the same context. Your spoken requests take priority over the
 
 The status beneath Configurations shows **Applying** until Live acknowledges that change, then **Live acknowledged**. **Active from session start** means the preference was included when that connection opened. **Not confirmed** reports a failed update; select the mode again to retry. **Next session** means voice is disconnected and the preference will be used at the next start. Acknowledgment confirms delivery, not exactly when the model’s speech will reflect it. Changing a preference does not discard audio already generated.
 
-Open **GPT Live prompt** beneath the sliders to read the startup instructions. Before connecting, it previews the next session. During or after a connection, it preserves that session’s startup text and shows the selected speaking preference separately. The base prompt is `BASE_PROMPT` in `src/live.js`; `src/voice-policy.js` provides the speaking preferences. Workspace/history, the one-time welcome, and later context appends are supplied separately. The browser page is the **voice companion dashboard**, and its Gantt chart is the **live session timeline**.
+Open **GPT Live prompt** beneath the sliders to read the startup instructions. Before connecting, it previews the next session. During or after a connection, it preserves that session’s startup text and shows the selected speaking preference separately. The base prompt is `basePrompt` in `src/core/prompts.ts`, worded from the agent adapter's profile; `src/core/voice-policy.ts` provides the speaking preferences. Workspace/history, the one-time welcome, and later context appends are supplied separately. The browser page is the **voice companion dashboard**, and its Gantt chart is the **live session timeline**.
 
 **Microphone** chooses the input device. **Chrome default** follows Chrome's own microphone setting. Device names appear after Chrome first grants microphone access. The choice is remembered in this browser and applies the next time you click **Start voice**; it is locked while voice is connected, so use **End voice** before switching. If the saved device is unplugged, the list shows Chrome default until it returns.
 
@@ -275,6 +275,17 @@ Voice closes automatically if microphone streaming stops or the Claude channel r
 `.runs/` contains connection details, event logs, conversation text, and the usage ledger. `.env`, `.runs/`, `.cache/`, `.scratch/`, and `docs/` are ignored by Git. Each voice connection saves private 24 kHz mono WAV files under `.runs/<run>/audio/<voice-id>/`: `microphone.wav` (microphone before the noise gate, respecting mute), `input.wav` (microphone audio received by Live and reflected over its control connection; WebRTC encoding may alter the samples), `output.wav` (Live audio received, in order), and `playback.wav` (browser-rendered audio, including silent playback gaps). These are local recordings, not OpenAI stored sessions. They use about 11.5 MB per minute combined. `events.jsonl` includes sample offsets, audio levels, playback backlog, hook events, exact context appends and acknowledgments. `timeline.json` preserves the Gantt when voice ends, the browser disconnects, or the launcher exits. Browser crashes may lose their last in-flight playback packets; audit gaps and failures are logged. Old runs without these files cannot recover audio retrospectively. Delete a run’s directory to delete its recordings.
 
 Treat logs and companion links as private. When reporting a problem, share the error and reproduction steps after removing keys, connection tokens, and private project content.
+
+## How the code is organized
+
+The TypeScript sources run directly under Node; the bridge strips the page modules' types when it serves them. `npm run typecheck` checks everything with `tsc`.
+
+- `src/core/` is the part shared by every coding agent: the bridge and its endpoints, voice sessions, the mediator, the observation feed, the context queue, the delivery outbox, status and the event log, the timeline, the audio audit, the usage ledger and the command-hook relay.
+- `src/adapters/claude/` is everything specific to Claude Code: its hooks and launch flags (`launch.ts`), how its hooks become observations and turn state (`observer.ts`), the voice channel it is reached through (`delivery.ts`, `channel-server.ts`) and its wording (`profile.ts`).
+- `src/launcher/` holds the launcher's option parsing, Enter prompt and tunnel; `src/cli.ts` runs them.
+- `web/` is the page: audio I/O, page UI, bridge client, WebRTC peer, timeline view, sound cues and the audio worklet.
+
+The core reaches an agent only through the adapter contract in `src/core/adapter.ts`: a `profile` (names, the event that ends a turn, whether assistant text streams during the turn and whether a request can reach a running turn), `launch()`, `observations` in one shared format (kind, text, raw event, time, turn state), `deliver()`, which reports how far a request got, and `history()`. Prompts, context labels, the speaking preferences, the page and the timeline take the agent's names from its profile.
 
 ## Checking an installation
 

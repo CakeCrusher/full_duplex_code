@@ -12,7 +12,7 @@ You don't have to stay at your desk. Hand off a task, go do something else, and 
 
 ## Quick start
 
-You'll need Node.js 22+, Claude Code installed and signed in, Chrome, a microphone, and an OpenAI API key with GPT Live 1 access. Tested on macOS.
+You'll need Node.js 22.18+, Claude Code installed and signed in, Chrome, a microphone, and an OpenAI API key with GPT Live 1 access. Tested on macOS.
 
 ```sh
 git clone https://github.com/CakeCrusher/full_duplex_code.git
