@@ -18,7 +18,10 @@ You'll need Node.js 22.18+, Claude Code installed and signed in, Chrome, a micro
 git clone https://github.com/CakeCrusher/full_duplex_code.git
 cd full_duplex_code
 npm ci
+npm link
 ```
+
+`npm link` puts the `fdc` command on your PATH.
 
 Create a `.env` file in this folder with your key:
 
@@ -26,16 +29,17 @@ Create a `.env` file in this folder with your key:
 OPENAI_API_KEY=your-key-here
 ```
 
-Start from this folder, using the path to your project:
+In your project's folder, put `fdc` in front of the command you normally run:
 
 ```sh
-npm start -- --cwd /path/to/your/project
+cd /path/to/your/project
+fdc claude
 ```
 
-Claude Code flags work here too. To skip its tool permission prompts:
+Claude Code's own flags go after `claude`, unchanged. To skip its tool permission prompts:
 
 ```sh
-npm start -- --cwd /path/to/your/project --dangerously-skip-permissions
+fdc claude --dangerously-skip-permissions
 ```
 
 1. Open the companion link printed in the terminal in Chrome, then press Enter in the terminal to start Claude. Claude fills the terminal, which hides the link until you exit.
@@ -46,4 +50,4 @@ npm start -- --cwd /path/to/your/project --dangerously-skip-permissions
 
 To stop everything, type `/exit` in the Claude terminal and press Enter.
 
-For setup details, resuming a session, costs, and troubleshooting, read the [user guide](USAGE.md). Run `npm run doctor` to check your setup, or `npm run usage` to check spending.
+For setup details, resuming a session, costs, and troubleshooting, read the [user guide](USAGE.md). Run `fdc doctor` to check your setup, or `fdc usage` to check spending.

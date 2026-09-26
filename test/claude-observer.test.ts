@@ -98,3 +98,11 @@ test('channel-delivered prompts remain part of resumed history even though Claud
   observer.record({ type: 'user', uuid: 'voice', isMeta: true, origin: { kind: 'channel', server: 'voice' }, message: { content: '<channel source="voice">Build a clock</channel>' } }, { emit: false });
   assert.deepEqual(JSON.parse(observer.conversationContext()), [{ role: 'input', text: '<channel source="voice">Build a clock</channel>' }]);
 });
+
+test('without a session ID, the first hook names the session and later foreign hooks are refused', t => {
+  const observer = new ClaudeObserver({}); t.after(() => observer.close());
+  const named: string[] = []; observer.on('session', id => named.push(id));
+  assert.equal(observer.hook({ session_id: 'picked', hook_event_name: 'SessionStart' }), true);
+  assert.equal(observer.hook({ session_id: 'other', hook_event_name: 'UserPromptSubmit', prompt: 'x' }), false);
+  assert.deepEqual(named, ['picked']); assert.equal(observer.sessionId, 'picked'); assert.equal(observer.state, 'idle');
+});

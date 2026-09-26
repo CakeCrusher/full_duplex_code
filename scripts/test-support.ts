@@ -17,13 +17,13 @@ export async function until<T>(check: () => T, { timeout = 45000, label = 'condi
   while (Date.now() - start < timeout) { const value = check(); if (value) return value as NonNullable<T>; await delay(100); }
   throw new Error(`Timed out waiting for ${label}`);
 }
-export async function startTestHarness(label: string, options: Partial<HarnessOptions> = {}) {
+export async function startTestHarness(label: string, { resume = false, ...options }: Partial<HarnessOptions> & { resume?: boolean } = {}) {
   const sessionId = options.sessionId ?? randomUUID(); const runDir = path.join(root, '.runs', `${label}-${Date.now()}`);
   const cwd = options.cwd ?? path.join(runDir, 'workspace'); fs.mkdirSync(cwd, { recursive: true });
   spawnSync('git', ['init', '--quiet'], { cwd });
   // The test agent only needs local file work and Node test commands. The headed
   // production launcher retains the operator's ordinary Claude permissions.
-  const agentArgs = ['--setting-sources', '', '--strict-mcp-config', '--no-chrome', '--debug-file', path.join(runDir, 'debug.log'), '--permission-mode', 'acceptEdits', '--allowedTools', 'Read,Write,Edit,Bash', '--append-system-prompt', `This is an isolated local voice-harness test workspace. The working directory is exactly ${cwd}. Use relative paths for commands and keep files here; do not infer paths from the scratchpad directory name. There is no need to inspect parent directories. Complete the requested tiny programs and tests without asking about routine implementation choices.`];
+  const agentArgs = [...(resume ? ['--resume', sessionId] : []), '--setting-sources', '', '--strict-mcp-config', '--no-chrome', '--debug-file', path.join(runDir, 'debug.log'), '--permission-mode', 'acceptEdits', '--allowedTools', 'Read,Write,Edit,Bash', '--append-system-prompt', `This is an isolated local voice-harness test workspace. The working directory is exactly ${cwd}. Use relative paths for commands and keep files here; do not infer paths from the scratchpad directory name. There is no need to inspect parent directories. Complete the requested tiny programs and tests without asking about routine implementation choices.`];
   const harness = await new Harness({ agent: claude, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, agentArgs, ...options }).start();
   const launch = harness.agentLaunch!;
   const env: Record<string, string> = { ...process.env as Record<string, string>, ...launch.env, TERM: 'xterm-256color' }; delete env.OPENAI_API_KEY;

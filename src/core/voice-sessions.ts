@@ -97,7 +97,7 @@ export class VoiceSessions {
     if (history.text) input.push({ type: 'message', role: 'user', content: [{ type: 'input_text', text: historyIntro(agent) + history.text }] });
     const startupLevel = this.speakingLevel;
     const startupInstructions = [...this.additionalInstructions];
-    const live: LiveSession = new LiveSession({ apiKey: bridge.apiKey, budget: bridge.ledger, voice: bridge.voice, instructions: this.instructions(), label: `${name} ${bridge.sessionId}`, input, log: event => log({ liveRun: live.reservation, ...event }) });
+    const live: LiveSession = new LiveSession({ apiKey: bridge.apiKey, budget: bridge.ledger, voice: bridge.voice, instructions: this.instructions(), label: `${name} ${bridge.sessionId ?? 'session'}`, input, log: event => log({ liveRun: live.reservation, ...event }) });
     let preferenceReady: Promise<void> | undefined;
     this.speakingUpdate = { state: 'starting', level: startupLevel };
     this.audit?.close(); this.audit = null;

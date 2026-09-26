@@ -21,7 +21,10 @@ The tested setup is macOS with Chrome. Other operating systems have not been val
 git clone https://github.com/CakeCrusher/full_duplex_code.git
 cd full_duplex_code
 npm ci
+npm link
 ```
+
+`npm link` puts the `fdc` command on your PATH. Without it, run `npm --prefix /path/to/full_duplex_code start -- <agent> …` from your project's folder instead of `fdc <agent> …`.
 
 Create `.env` in the cloned repository and add your OpenAI key:
 
@@ -34,20 +37,21 @@ If `.env` already exists, edit it instead of replacing it. You can alternatively
 Check the setup without starting a paid voice session:
 
 ```sh
-npm run doctor
+fdc doctor
 ```
 
 The output reports whether Claude is installed and signed in, whether the key is present, and recorded local usage. It checks key presence, not whether OpenAI will accept it or grant model access.
 
 ## Start a coding session
 
-Run the launcher from the Full-Duplex Code repository. Replace the example path with an existing project folder:
+In your project's folder, put `fdc` in front of the command you normally use to start Claude Code:
 
 ```sh
-npm start -- --cwd /path/to/your/project
+cd /path/to/your/project
+fdc claude
 ```
 
-To work in the Full-Duplex Code repository itself, use `npm start`.
+Claude works in the folder you run `fdc` from. Everything after `claude` is Claude's own command line, passed through unchanged; see [Pass arguments to Claude Code](#pass-arguments-to-claude-code).
 
 The launcher prints the companion link and waits. Open the link in Chrome, then press Enter to start Claude, or Ctrl-C to quit. Claude fills the terminal once it starts, which hides the link until you exit. Accept Claude's development-channel notice and any workspace trust prompt. Once the channel connects, click **Start voice**, allow microphone access, and wait for the greeting.
 
@@ -160,13 +164,13 @@ Closing the companion tab also closes its voice connection. A disconnected voice
 
 ## Resume a conversation
 
-Use the same project path and the Claude session ID:
+Use Claude's own resume options, in the same project folder:
 
 ```sh
-npm start -- --cwd /path/to/your/project --resume CLAUDE_SESSION_ID
+fdc claude --resume CLAUDE_SESSION_ID
 ```
 
-For a session launched by Full-Duplex Code, the terminal prints a **Local run** folder at startup. Open `connection.json` in that folder and copy its `sessionId` value. Use the complete ID; do not use the short suffix of the folder name. Keep the rest of that file private because it also contains connection credentials.
+`fdc claude --continue` and `fdc claude --resume` (Claude's picker) work too; the companion learns the session's ID from Claude's first hook. For a session launched by Full-Duplex Code, the terminal prints a **Local run** folder at startup. Open `connection.json` in that folder and copy its `sessionId` value. Use the complete ID; do not use the short suffix of the folder name. Keep the rest of that file private because it also contains connection credentials.
 
 Accept the channel notice, open the new companion link, and click **Start voice**. The companion reads saved prompts, assistant text, tool calls, and tool results from that Claude session's transcript. Like any new voice connection, it starts with only the most recent of these; the rest stays in the transcript. Transcript records supply the history; newly arriving hooks supply live observations. Private thinking is not imported. Old voice conversations are not restored independently of Claude's saved history, and the voice model has a finite context capacity.
 
@@ -178,13 +182,11 @@ Instructions added before voice starts are marked **Saved for next voice session
 
 ## Useful launch options
 
-Add options after `npm start --`:
+The companion's own options go between `fdc` and the agent's name: `fdc [options] <agent> [the agent's own arguments]`. An option the launcher does not know stops it before anything starts.
 
 | Option | Purpose |
 | --- | --- |
-| `--cwd /path/to/project` | Choose the folder Claude works in. |
-| `--resume SESSION_ID` | Continue a specific Claude conversation. |
-| `--session-id UUID` | Choose the full UUID for a new conversation. Use either this or `--resume`. |
+| `--voice marin` | Choose the GPT Live voice. |
 | `--observe transcript` | Add saved-text/tool fallback observation if display hooks are unavailable. |
 | `--port 8123` | Choose the local port. The default is 8123, so the companion address and Chrome's microphone permission stay the same between launches. If 8123 is busy, for example with a second companion, the launcher uses a free port and says so. `--port 0` always chooses a free port. |
 | `--public` | Also reach the companion from a phone, through a temporary Cloudflare tunnel the launcher starts and stops. See [Use it from your phone](#use-it-from-your-phone). |
@@ -192,43 +194,43 @@ Add options after `npm start --`:
 For example:
 
 ```sh
-npm start -- --cwd /path/to/project --voice marin
+fdc --voice marin claude
 ```
 
-Run `npm start -- --help` to see all options. Transcript observation depends on when Claude saves messages, so updates can arrive later than in the default mode.
+Run `fdc --help` to see all options. Transcript observation depends on when Claude saves messages, so updates can arrive later than in the default mode.
 
 ### Pass arguments to Claude Code
 
-The launcher handles the companion options listed above, plus `--voice` and `--help`. It forwards every other argument to Claude Code, in the order you supplied it, after the generated Claude options. Claude applies its normal override and merge rules; for example, you can choose its model or permission mode. Quoted prompts and option values are passed as arguments, without shell evaluation.
+Everything after `claude` is Claude Code's own command line. The launcher passes it unchanged, in the order you gave it, after the options it adds for the companion (its MCP configuration, the voice channel, its hook settings and, for a new conversation, a session ID). Claude applies its normal override and merge rules; for example, you can choose its model or permission mode. Quoted prompts and option values are passed as arguments, without shell evaluation.
 
 Start with Claude's permission checks disabled:
 
 ```sh
-npm start -- --dangerously-skip-permissions
+fdc claude --dangerously-skip-permissions
 ```
 
-Or combine Claude flags with a project path and an existing conversation:
+Or combine Claude flags with an existing conversation:
 
 ```sh
-npm start -- --cwd /path/to/project --resume CLAUDE_SESSION_ID --dangerously-skip-permissions --model opus
+fdc claude --resume CLAUDE_SESSION_ID --dangerously-skip-permissions --model opus
 ```
 
 You can also pass an initial prompt:
 
 ```sh
-npm start -- --model opus "Explain this project"
+fdc claude --model opus "Explain this project"
 ```
 
-The first `--` tells npm to pass the arguments to the launcher. An additional `--` stops the launcher's option parsing and sends the remaining arguments directly to Claude. For example, `npm start -- -- --help` displays Claude's help instead of the companion's help. Put companion options and `--resume` / `--session-id` before this additional separator so the companion tracks the selected session. To pass a value that itself matches a companion flag, use this separator or Claude's `--option=value` form.
+`fdc claude --help`, `fdc claude --version` and Claude's subcommands, such as `fdc claude mcp list`, run Claude directly, without the companion.
 
-These options are passed to the normal terminal process. Options that replace Claude's hooks or channel configuration also replace the companion connections they provide. See the [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) for flag behavior.
+The launcher refuses Claude options that would hide Claude from the companion, and says why: `--settings` (Claude keeps only the last one, so yours would replace the companion's hooks; put those settings in `.claude/settings.local.json` or `~/.claude/settings.json` instead), `--bare` and `--safe-mode` (they turn off hooks), `-p` / `--print` (Claude answers once and exits), `--bg`, `--cloud` and `--environment` (the session runs elsewhere), `--tmux`, and an `--mcp-config` that defines a server named `voice`. Your own MCP servers and channels load beside the companion's. See the [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) for flag behavior.
 
 ## Use it from your phone
 
 You can talk to Claude from your phone while it keeps running on your computer. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) once (for example `brew install cloudflared`), then add `--public`:
 
 ```sh
-npm start -- --cwd /path/to/your/project --public
+fdc --public claude
 ```
 
 The launcher starts a temporary Cloudflare tunnel, waits until it is ready, and prints a **From your phone** link with a QR code. Scan it with your phone's camera, open it in Chrome or another Chromium browser, and click **Start voice**. Then press Enter in the terminal to start Claude. When Claude ends for any reason, including Ctrl-C at the prompt or closing the terminal, the launcher closes the voice session and stops the tunnel. Without `--public`, nothing is reachable from outside this computer.
@@ -244,7 +246,7 @@ Keep the companion page in the foreground on your phone: locking the screen or s
 OpenAI bills the connected voice session, including time spent listening or muted. Claude usage remains on your existing Claude account. Use **End voice** when you are done.
 
 ```sh
-npm run usage
+fdc usage
 ```
 
 The application estimates voice cost at $0.05 per minute and tracks cumulative usage without a local spending cap. Voice stays connected until you end it, close the companion, or the connection ends; there is no local duration limit. Check [OpenAI's model page](https://developers.openai.com/api/docs/models/gpt-live-1) for current service pricing and availability.
@@ -257,7 +259,7 @@ Usage history stays in `.runs/budget.json`. Existing history is preserved; old s
 
 | Problem | What to check |
 | --- | --- |
-| The launcher won't start | Run it in an interactive terminal and run `npm run doctor`. Check Node, Claude sign-in, and `.env`. |
+| The launcher won't start | Run it in an interactive terminal and run `fdc doctor`. Check Node, Claude sign-in, and `.env`. |
 | Start voice stays disabled | Accept any pending channel notice or trust prompt in the Claude terminal. Check whether your organization permits channels. |
 | The companion can't hear you | Allow microphone access in Chrome and macOS. Check the **Microphone** selection beside the voice buttons and whether it is muted. |
 | OpenAI rejects the connection | Check the key, API account billing, and access to `gpt-live-1`. A successful doctor check alone does not verify these. |

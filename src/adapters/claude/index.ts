@@ -7,6 +7,7 @@ import { ClaudeObserver } from './observer.ts';
 import { ChannelDelivery } from './delivery.ts';
 import { channelNotification, receivedRequest } from './channel-message.ts';
 import { claudeArgs, makeClaudeConfig } from './launch.ts';
+import { readClaudeArgs } from './arguments.ts';
 
 // Claude Code: observed through command hooks (and its transcript on resume),
 // reached through the voice channel MCP server.
@@ -20,14 +21,17 @@ export class ClaudeAdapter extends EventEmitter implements AgentAdapter {
     super();
     this.session = session;
     this.observations = new ClaudeObserver({ sessionId: session.sessionId, observation: session.observation, clean: session.clean, log: session.log });
+    this.observations.on('session', id => this.emit('session', id));
     this.delivery = new ChannelDelivery(session.log);
     for (const name of ['connection', 'delivery', 'update', 'fault']) this.delivery.on(name, value => this.emit(name, value));
     this.sockets = { '/channel': this.delivery };
   }
   launch({ baseUrl, token }: { baseUrl: string; token: string }): AgentLaunch {
-    const { root, runDir, sessionId, resume, agentArgs } = this.session;
+    const { root, runDir, sessionId, agentArgs } = this.session;
     const config = makeClaudeConfig({ root, runDir, baseUrl, channelToken: token });
-    return { command: 'claude', args: claudeArgs({ config, sessionId, resume, extraArgs: agentArgs }), env: { FD_BRIDGE_TOKEN: token }, files: { ...config } };
+    // A new conversation gets the launcher's session ID; otherwise Claude's own arguments choose it.
+    const assigned = readClaudeArgs(agentArgs).assignSession ? sessionId : undefined;
+    return { command: 'claude', args: claudeArgs({ config, sessionId: assigned, extraArgs: agentArgs }), env: { FD_BRIDGE_TOKEN: token }, files: { ...config } };
   }
   deliver(request: VoiceRequest) { return this.delivery.deliver(request); }
   history() { return this.observations.observations; }
@@ -44,14 +48,16 @@ export function doctor() {
 export const claude: AgentDefinition = {
   profile: claudeProfile,
   context: claudeContext,
+  readArgs: readClaudeArgs,
+  observationModes: ['hooks', 'transcript'],
   receivedRequest,
   wire: (request: VoiceRequest) => channelNotification(request),
   create: session => new ClaudeAdapter(session),
   doctor,
   usage: {
-    examples: ['--dangerously-skip-permissions', '--cwd /project --resume UUID --model opus --permission-mode plan'],
-    afterStart: `Claude opens in your terminal. Open the companion URL and click Start voice once
-to enable the microphone and speaker. Claude's permission mode controls tool
-approvals. End voice stops API billing while leaving Claude available.`,
+    examples: ['claude', 'claude --dangerously-skip-permissions', '--public claude --resume SESSION_ID --model opus'],
+    notes: `claude: Claude's permission mode controls tool approvals. --resume, --continue and
+  --session-id choose the conversation as usual. --settings, --bare, --safe-mode,
+  --print, --bg, --cloud and --tmux are refused: they would hide Claude from the companion.`,
   },
 };

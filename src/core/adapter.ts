@@ -92,10 +92,26 @@ export interface ReceivedRequest {
   content?: string;
 }
 
+/** What the agent's own command line says about the session it opens. */
+export interface AgentArguments {
+  /** Not a session (help, version, a subcommand): run the command without the companion. */
+  direct: boolean;
+  /** The session's ID, when the command names it. */
+  sessionId?: string;
+  /** The command continues an earlier conversation. */
+  resume: boolean;
+  /** Nothing in the command selects a session: the launcher assigns a new session ID. */
+  assignSession: boolean;
+}
+
 /** Everything the core knows about one kind of agent before a session exists. */
 export interface AgentDefinition {
   profile: AgentProfile;
   context: ContextRules;
+  /** Reads the agent's own arguments. Throws, with the reason, when one would stop the companion from working. */
+  readArgs(args: readonly string[]): AgentArguments;
+  /** Ways to observe assistant text that `--observe` can choose, default first; none if there is no choice. */
+  observationModes: readonly string[];
   /** Finds the voice request inside a prompt the agent received, if there is one. */
   receivedRequest(prompt: string): ReceivedRequest | undefined;
   /** The exact message deliver() sends for a request, shown in the request inspector. */
@@ -103,8 +119,8 @@ export interface AgentDefinition {
   create(session: AgentSession): AgentAdapter;
   /** Checks the agent's local prerequisites for `npm run doctor`, without API spending. */
   doctor(): { report: Record<string, unknown>; ok: boolean };
-  /** For the launcher's help: example arguments, and what happens once the agent starts. */
-  usage: { examples: string[]; afterStart: string };
+  /** For the launcher's help: example command lines after `fdc`, and a note on running this agent. */
+  usage: { examples: string[]; notes: string };
 }
 
 /** What the bridge gives an adapter for one agent session. */
@@ -112,12 +128,12 @@ export interface AgentSession {
   root: string;
   runDir: string;
   cwd: string;
-  sessionId: string;
+  /** The session's ID; when unknown, the adapter learns it from the agent's first event. */
+  sessionId?: string;
   /** How assistant text is observed, for agents that offer a choice. */
   observation: string;
   /** The agent's own command-line arguments, passed through unchanged. */
   agentArgs: string[];
-  resume: boolean;
   clean: (text: string) => string;
   log: (event: Record<string, unknown>) => void;
 }
@@ -139,6 +155,7 @@ export interface AgentSocket {
 
 /**
  * One agent session, as the core uses it. Emits:
+ * - `session` (id) when an unknown session ID is learned from the agent;
  * - `connection` (ready: boolean) when requests can, or can no longer, be delivered;
  * - `delivery` ({ id, state }) when a request reported uncertain is confirmed later;
  * - `update` after any change the status display should reflect;

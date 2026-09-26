@@ -40,11 +40,11 @@ export function nextTurnState(state: TurnState, data: Record<string, any>): Turn
 // Translates Claude's command hooks, and its transcript records on resume,
 // into shared Observations, conversation and state.
 export class ClaudeObserver extends AgentObserver {
-  sessionId: string; observation: string;
+  sessionId?: string; observation: string;
   seen = new Set<string>(); hookBatches = new Set<string>();
   turn: TurnState = 'unknown';
   transcriptPath?: string; tail?: TranscriptTail; stopTimer?: NodeJS.Timeout;
-  constructor({ sessionId, observation = 'hooks', clean = String, log = () => {} }: { sessionId: string; observation?: string; clean?: (text: string) => string; log?: Logger }) {
+  constructor({ sessionId, observation = 'hooks', clean = String, log = () => {} }: { sessionId?: string; observation?: string; clean?: (text: string) => string; log?: Logger }) {
     super({ agent: { profile: claudeProfile, context: claudeContext }, clean, log });
     this.sessionId = sessionId; this.observation = observation;
   }
@@ -93,6 +93,11 @@ export class ClaudeObserver extends AgentObserver {
     }
   }
   override hook(event: Record<string, any>): boolean {
+    // Resuming by picker, --continue or a fork: Claude chooses the ID. Only this
+    // Claude process runs the run's hooks, so its first event names the session.
+    if (this.sessionId === undefined && typeof event.session_id === 'string' && event.session_id) {
+      this.sessionId = event.session_id; this.log({ type: 'agent.session', sessionId: this.sessionId }); this.emit('session', this.sessionId);
+    }
     if (event.session_id !== this.sessionId) return false;
     event = JSON.parse(this.clean(JSON.stringify(event)));
     const name = event.hook_event_name;

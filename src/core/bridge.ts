@@ -15,17 +15,19 @@ import { Endpoints } from './endpoints.ts';
 export interface HarnessOptions {
   /** The coding agent, from src/adapters. */
   agent: AgentDefinition;
-  root: string; runDir: string; cwd: string; sessionId: string; apiKey: string;
+  root: string; runDir: string; cwd: string; apiKey: string;
+  /** The agent session's ID; when unknown, it is learned from the agent's first event. */
+  sessionId?: string;
   voice?: string; observation?: string; port?: number; portFallback?: boolean; publicUrl?: string;
-  /** The agent's own command-line arguments, and whether it resumes a session. */
-  agentArgs?: string[]; resume?: boolean;
+  /** The agent's own command-line arguments. */
+  agentArgs?: string[];
 }
 
 // The bridge: one local process between the page, GPT Live and the agent.
 // It owns the shared state; each concern lives in its own module.
 export class Harness {
   agent: AgentDefinition; adapter: AgentAdapter; observer: AgentObserver;
-  root: string; runDir: string; cwd: string; sessionId: string; apiKey: string;
+  root: string; runDir: string; cwd: string; sessionId?: string; apiKey: string;
   voice: string; observation: string; port: number; portFallback: boolean;
   browserToken = randomBytes(32).toString('hex');
   // Authenticates the agent's side: hooks and adapter sockets.
@@ -39,7 +41,7 @@ export class Harness {
   statusLog: StatusLog; log: (event: BridgeEvent) => void; publish: (event: BridgeEvent) => void; fault: (error: Error) => void;
   ledger: UsageLedger; timeline: Timeline; outbox: Outbox; voiceSessions: VoiceSessions; endpoints: Endpoints;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
-  constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = 'hooks', port = 0, portFallback = false, publicUrl, agentArgs = [], resume = false }: HarnessOptions) {
+  constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [] }: HarnessOptions) {
     this.agent = agent; this.root = root; this.runDir = runDir; this.cwd = cwd; this.sessionId = sessionId; this.apiKey = apiKey;
     this.voice = voice; this.observation = observation; this.port = port; this.portFallback = portFallback;
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
@@ -52,7 +54,7 @@ export class Harness {
     this.voiceSessions = new VoiceSessions(this);
     this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,
       publish: event => this.publish(event), fault: error => this.fault(error), onSent: entry => this.voiceSessions.confirmDelivery(entry) });
-    this.adapter = agent.create({ root, runDir, cwd, sessionId, observation, agentArgs, resume, clean: this.clean, log: this.log });
+    this.adapter = agent.create({ root, runDir, cwd, sessionId, observation, agentArgs, clean: this.clean, log: this.log });
     const observer = this.observer = this.adapter.observations;
     observer.on('input', event => { this.log({ type: 'agent.input', ...event }); this.publish({ type: 'agent_input', ...event }); });
     observer.on('text', event => { this.log({ type: 'agent.text', ...event }); this.publish({ type: 'agent_text', ...event }); });
@@ -67,6 +69,7 @@ export class Harness {
       this.publish(this.status());
     });
     this.adapter.on('delivery', ({ id }) => this.outbox.confirm(id));
+    this.adapter.on('session', id => { this.sessionId = id; if (this.baseUrl) this.writeConnection(); this.publish(this.status()); });
     this.adapter.on('update', () => this.publish(this.status()));
     this.adapter.on('fault', error => this.fault(error));
     this.endpoints = new Endpoints(this);
@@ -100,11 +103,14 @@ export class Harness {
     this.baseUrl = `http://127.0.0.1:${port}`;
     this.browserUrl = `${this.baseUrl}/#${this.browserToken}`;
     this.agentLaunch = this.adapter.launch({ baseUrl: this.baseUrl, token: this.agentToken });
-    // This private descriptor permits repeatable local tests without exposing the API key.
-    fs.writeFileSync(path.join(this.runDir, 'connection.json'), JSON.stringify({ baseUrl: this.baseUrl, browserToken: this.browserToken, sessionId: this.sessionId, cwd: this.cwd }, null, 2), { mode: 0o600 });
+    this.writeConnection();
     this.statusTimer = setInterval(() => this.publish(this.status()), 1000);
     this.log({ type: 'bridge.started', sessionId: this.sessionId, cwd: this.cwd, baseUrl: this.baseUrl });
     return this;
+  }
+  // This private descriptor permits repeatable local tests without exposing the API key.
+  writeConnection() {
+    fs.writeFileSync(path.join(this.runDir, 'connection.json'), JSON.stringify({ baseUrl: this.baseUrl, browserToken: this.browserToken, sessionId: this.sessionId, cwd: this.cwd }, null, 2), { mode: 0o600 });
   }
   async close() {
     if (this.stopping) return; this.stopping = true;

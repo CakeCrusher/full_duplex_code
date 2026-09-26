@@ -32,11 +32,15 @@ export function makeClaudeConfig({ root, runDir, baseUrl, channelToken }: { root
   return { mcpFile, settingsFile };
 }
 
-export function claudeArgs({ config, sessionId, resume = false, extraArgs = [] }: { config: ClaudeConfig; sessionId: string; resume?: boolean; extraArgs?: string[] }): string[] {
+// The companion's options go first, the operator's own arguments after them,
+// unchanged. --settings is last: a single-value option, so the variadic channel
+// option before it can never take the operator's prompt as a server name.
+export function claudeArgs({ config, sessionId, extraArgs = [] }: { config: ClaudeConfig; sessionId?: string; extraArgs?: readonly string[] }): string[] {
   return [
-    '--mcp-config', config.mcpFile, '--settings', config.settingsFile,
+    '--mcp-config', config.mcpFile,
     '--dangerously-load-development-channels', 'server:voice',
-    resume ? '--resume' : '--session-id', sessionId,
+    ...(sessionId ? ['--session-id', sessionId] : []),
+    '--settings', config.settingsFile,
     ...extraArgs,
   ];
 }
