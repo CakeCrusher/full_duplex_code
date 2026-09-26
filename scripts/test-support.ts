@@ -8,6 +8,7 @@ import * as pty from 'node-pty';
 import WebSocket from 'ws';
 import { Harness, type HarnessOptions } from '../src/core/bridge.ts';
 import { claude } from '../src/adapters/claude/index.ts';
+import { codex } from '../src/adapters/codex/index.ts';
 
 export const root = fileURLToPath(new URL('..', import.meta.url));
 try { process.loadEnvFile(path.join(root, '.env')); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
@@ -55,6 +56,35 @@ export async function startTestHarness(label: string, { resume = false, ...optio
   catch (error) { terminal.kill(); await harness.close(); throw error; }
   return { harness, terminal, runDir, cwd, isAlive: () => !exited, async close() {
     await harness.close(); if (!exited) terminal.kill('SIGTERM'); await delay(500);
+  } };
+}
+
+// Real Codex in a terminal, attached to the companion's app server. The first
+// message comes from the command line, so Codex starts its session at once.
+export async function startCodexTestHarness(label: string, prompt: string) {
+  const runDir = path.join(root, '.runs', `${label}-${Date.now()}`), cwd = path.join(runDir, 'workspace');
+  fs.mkdirSync(cwd, { recursive: true }); spawnSync('git', ['init', '--quiet'], { cwd });
+  const agentArgs = ['--no-alt-screen', '-s', 'workspace-write', '-a', 'never', prompt];
+  const harness = await new Harness({ agent: codex, root, runDir, cwd, apiKey: process.env.OPENAI_API_KEY!, agentArgs }).start();
+  const launch = harness.agentLaunch!;
+  const env: Record<string, string> = { ...process.env as Record<string, string>, ...launch.env, TERM: 'xterm-256color' }; delete env.OPENAI_API_KEY;
+  const helper = path.join(root, 'node_modules/node-pty/prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper');
+  if (fs.existsSync(helper)) fs.chmodSync(helper, fs.statSync(helper).mode | 0o111);
+  const terminal = pty.spawn(launch.command, launch.args, { name: 'xterm-256color', cols: 140, rows: 45, cwd, env });
+  let raw = '', trust = false, exited = false;
+  terminal.onData(data => {
+    fs.appendFileSync(path.join(runDir, 'terminal.log'), data);
+    raw = (raw + stripVTControlCharacters(data)).slice(-24000);
+    if (!trust && /trustthecontents|Doyoutrust/i.test(raw.replace(/\s/g, ''))) { trust = true; setTimeout(() => { if (!exited) terminal.write('\r'); }, 300); }
+  });
+  terminal.onExit(() => { exited = true; });
+  console.log('Run:', runDir);
+  try { await until(() => harness.agentReady, { label: 'Codex session attached', timeout: 90000 }); }
+  catch (error) { terminal.kill(); await harness.close(); throw error; }
+  return { harness, terminal, runDir, cwd, isAlive: () => !exited, async close() {
+    if (!exited) { terminal.write('\x03'); await delay(400); terminal.write('\x03'); await delay(800); }
+    if (!exited) terminal.kill('SIGTERM');
+    await harness.close(); await delay(300);
   } };
 }
 

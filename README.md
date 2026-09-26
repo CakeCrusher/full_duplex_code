@@ -1,6 +1,6 @@
 # Full-Duplex Code
 
-Talk to Claude Code while it works. A voice companion powered by GPT Live 1 listens, speaks, and follows your coding session. Keep using the normal Claude terminal, including typing directly into it.
+Talk to Claude Code, or Codex, while it works. A voice companion powered by GPT Live 1 listens, speaks, and follows your coding session. Keep using the normal terminal, including typing directly into it.
 
 ![Full-Duplex Code: talk to the voice companion while Claude Code keeps working](assets/full-duplex-code.gif)
 
@@ -12,7 +12,7 @@ You don't have to stay at your desk. Hand off a task, go do something else, and 
 
 ## Quick start
 
-You'll need Node.js 22.18+, Claude Code installed and signed in, Chrome, a microphone, and an OpenAI API key with GPT Live 1 access. Tested on macOS.
+You'll need Node.js 22.18+, Claude Code or Codex (0.155 or newer) installed and signed in, Chrome, a microphone, and an OpenAI API key with GPT Live 1 access. Tested on macOS.
 
 ```sh
 git clone https://github.com/CakeCrusher/full_duplex_code.git
@@ -41,6 +41,8 @@ Claude Code's own flags go after `claude`, unchanged. To skip its tool permissio
 ```sh
 fdc claude --dangerously-skip-permissions
 ```
+
+Codex works the same way: `fdc codex`, followed by Codex's own options. Requests you speak steer its running turn.
 
 1. Open the companion link printed in the terminal in Chrome, then press Enter in the terminal to start Claude. Claude fills the terminal, which hides the link until you exit.
 2. Accept Claude's development-channel notice and any workspace trust prompt, then click **Start voice** in the companion and allow microphone access.

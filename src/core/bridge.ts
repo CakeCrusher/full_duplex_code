@@ -102,7 +102,8 @@ export class Harness {
     const port = await this.endpoints.listen(this.port, this.portFallback);
     this.baseUrl = `http://127.0.0.1:${port}`;
     this.browserUrl = `${this.baseUrl}/#${this.browserToken}`;
-    this.agentLaunch = this.adapter.launch({ baseUrl: this.baseUrl, token: this.agentToken });
+    try { this.agentLaunch = await this.adapter.launch({ baseUrl: this.baseUrl, token: this.agentToken }); }
+    catch (error) { await this.close(); throw error; }
     this.writeConnection();
     this.statusTimer = setInterval(() => this.publish(this.status()), 1000);
     this.log({ type: 'bridge.started', sessionId: this.sessionId, cwd: this.cwd, baseUrl: this.baseUrl });
@@ -114,11 +115,12 @@ export class Harness {
   }
   async close() {
     if (this.stopping) return; this.stopping = true;
-    this.adapter.close();
+    const agentClosed = this.adapter.close();
     clearInterval(this.statusTimer); clearInterval(this.voiceSessions.audioWatchdog); clearTimeout(this.agentLostTimer);
     if (this.live) await this.live.close('harness stopped');
     this.mediator?.stop();
     this.audit?.close(); this.saveTimeline();
     await this.endpoints.close();
+    await agentClosed;
   }
 }

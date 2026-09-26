@@ -96,8 +96,10 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
   // A new conversation gets its ID here. A resumed one names its own, or the
   // agent's first event does.
   const sessionId = session.sessionId ?? (session.assignSession ? randomUUID() : undefined);
-  const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId?.slice(0, 8) ?? 'resumed'}`);
-  const harness = await new Harness({ agent, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe, agentArgs }).start();
+  const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId?.slice(0, 8) ?? (session.resume ? 'resumed' : agent.profile.id)}`);
+  let harness: Harness;
+  try { harness = await new Harness({ agent, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe, agentArgs }).start(); }
+  catch (error) { console.error(`fdc: ${(error as Error).message}`); process.exit(1); }
   if (harness.portFellBack) console.log(`\nPort ${DEFAULT_PORT} is in use, probably by another companion. This one uses ${new URL(harness.baseUrl).port}; Chrome may ask for microphone access again.`);
   let tunnel: Tunnel | undefined, child: ChildProcess | undefined, stopping = false;
   // One ordered teardown for every way the launcher can end: the agent exiting or
@@ -132,7 +134,8 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
     console.log(`Anyone with this link can direct ${name} on this computer. Don't share it. The tunnel closes when you exit ${name}.`);
   }
   // The launcher only prints the link; open it in Chrome or another Chromium browser.
-  console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nOpen this link in Chrome, then click Start voice when the ${transport} is ready.\nLocal run: ${runDir}\n`);
+  const when = agent.profile.readyHint ? `. ${agent.profile.readyHint}` : `, then click Start voice when the ${transport} is ready.`;
+  console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nOpen this link in Chrome${when}\nLocal run: ${runDir}\n`);
   if (!(await confirmStart({ profile: agent.profile }))) await exit(`quit before ${name} started`, 0);
   const launch = harness.agentLaunch!;
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...launch.env };

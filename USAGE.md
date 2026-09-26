@@ -1,6 +1,6 @@
 # Using Full-Duplex Code
 
-Full-Duplex Code adds a voice companion to your normal Claude Code terminal. GPT Live 1 handles the conversation with you; Claude Code remains the coding agent that reads files, runs commands, and makes changes.
+Full-Duplex Code adds a voice companion to your normal Claude Code terminal, or to Codex (see [Use Codex](#use-codex)). This guide describes Claude Code first. GPT Live 1 handles the conversation with you; Claude Code remains the coding agent that reads files, runs commands, and makes changes.
 
 You can talk while Claude works, ask about its progress, and give corrections. You can also type directly into Claude. The companion receives hook observations from that same session: submitted prompts, assistant messages, tool arguments and results, file edits, errors, and lifecycle updates.
 
@@ -225,6 +225,30 @@ fdc claude --model opus "Explain this project"
 
 The launcher refuses Claude options that would hide Claude from the companion, and says why: `--settings` (Claude keeps only the last one, so yours would replace the companion's hooks; put those settings in `.claude/settings.local.json` or `~/.claude/settings.json` instead), `--bare` and `--safe-mode` (they turn off hooks), `-p` / `--print` (Claude answers once and exits), `--bg`, `--cloud` and `--environment` (the session runs elsewhere), `--tmux`, and an `--mcp-config` that defines a server named `voice`. Your own MCP servers and channels load beside the companion's. See the [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) for flag behavior.
 
+## Use Codex
+
+Put `fdc` in front of your usual Codex command, in your project's folder. Codex's own options and its `resume` and `fork` subcommands work as usual:
+
+```sh
+fdc codex
+fdc codex --model gpt-5.5 --search
+fdc --public codex resume SESSION_ID
+```
+
+You need Codex 0.155 or newer, signed in with `codex login`. The companion does not pass its OpenAI key to Codex, so a Codex that relies on `OPENAI_API_KEY` in the environment should sign in with `codex login --with-api-key` instead.
+
+How it connects:
+
+- The launcher starts its own Codex app server on this computer, protected by a random token, and runs your Codex command attached to it (`--remote`). Nothing is written to your project or to `~/.codex`: the companion's hooks are given to that app server as command-line settings.
+- Those hooks are new to Codex, so the terminal runs with `--dangerously-bypass-hook-trust`. That flag would also run any other hook you have not reviewed yet, so the launcher first asks Codex for its hooks and refuses to start while any other hook awaits review; review those with `/hooks` in Codex.
+- Codex creates its session with the first message. Send it a message in the terminal, or give a prompt on the command line, before you click **Start voice**.
+- A spoken request steers Codex's running turn (`turn/steer`); when Codex is idle, or the turn ends first, it starts a new turn. Codex sees the request labeled `[Voice request …]`. Approval prompts still appear in the Codex terminal.
+- The companion observes Codex's hooks (prompts, tools, approvals, turn ends) and follows its transcript for assistant messages and steered requests. The final message of a turn is observed once.
+
+Refused, with the reason: `codex exec` and `codex review` (no interactive terminal), `--remote` (the companion attaches Codex to its own app server), and turning hooks off. `fdc codex --help` and subcommands such as `fdc codex login` run Codex directly.
+
+When many events arrive while you speak, GPT Live sometimes answers without passing the request on: in a check, it delegated 3 of 5 requests while context arrived every 1.5 seconds, and 4 of 4 without. This affects Claude Code the same way. If a request does not show up in the timeline, say it again.
+
 ## Use it from your phone
 
 You can talk to Claude from your phone while it keeps running on your computer. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) once (for example `brew install cloudflared`), then add `--public`:
@@ -284,6 +308,7 @@ The TypeScript sources run directly under Node; the bridge strips the page modul
 
 - `src/core/` is the part shared by every coding agent: the bridge and its endpoints, voice sessions, the mediator, the observation feed, the context queue, the delivery outbox, status and the event log, the timeline, the audio audit, the usage ledger and the command-hook relay.
 - `src/adapters/claude/` is everything specific to Claude Code: its hooks and launch flags (`launch.ts`), how its hooks become observations and turn state (`observer.ts`), the voice channel it is reached through (`delivery.ts`, `channel-server.ts`) and its wording (`profile.ts`).
+- `src/adapters/codex/` is the same for Codex: its app server and hooks (`app-server.ts`), its command (`launch.ts`), hooks and transcript as observations (`observer.ts`), and delivery by `turn/steer` or a new turn (`delivery.ts`). Both adapters read their agent's own arguments (`arguments.ts`).
 - `src/launcher/` holds the launcher's option parsing, Enter prompt and tunnel; `src/cli.ts` runs them.
 - `web/` is the page: audio I/O, page UI, bridge client, WebRTC peer, timeline view, sound cues and the audio worklet.
 
@@ -293,7 +318,7 @@ The core reaches an agent only through the adapter contract in `src/core/adapter
 
 `npm test` runs offline checks without OpenAI spending. `npm run test:ui` checks the live timeline, hover details, navigation, reload, and real browser audio capture/playback between two local WebRTC peers, with a virtual microphone and no paid API connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session. `npm run test:updates` checks a rapid seven-step Claude task, complete thinking delivery without progress speech cues, and status recall with real voice.
 
-The other integration commands in `package.json` start real Claude and OpenAI voice sessions. They require macOS `say`, `ffmpeg`, and the relevant browser setup; they consume API credits. Ordinary use does not require these test tools.
+`npm run test:codex` runs one real Codex session with real voice: a spoken request steers Codex's running turn, and Codex acts on it in that turn. The other integration commands in `package.json` start real Claude and OpenAI voice sessions. They require macOS `say`, `ffmpeg`, and the relevant browser setup; they consume API credits. Ordinary use does not require these test tools.
 
 ## License
 

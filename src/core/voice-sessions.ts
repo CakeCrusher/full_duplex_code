@@ -89,7 +89,7 @@ export class VoiceSessions {
     const bridge = this.bridge, { agent, observer, log, publish, fault, clean } = bridge, { name } = agent.profile;
     if (sdp !== undefined && (typeof sdp !== 'string' || !sdp.trim() || Buffer.byteLength(sdp) > 65536)) throw new Error('Invalid voice connection offer.');
     if (this.live && this.live.state !== 'closed') return;
-    if (!bridge.agentReady) throw new Error(`Wait for the voice ${agent.profile.transport} to connect in the ${name} terminal.`);
+    if (!bridge.agentReady) throw new Error(agent.profile.readyHint ?? `Wait for the voice ${agent.profile.transport} to connect in the ${name} terminal.`);
     if (observer.state === 'exited') throw new Error(`The ${name} session has exited.`);
     const startup = attachment(agent, bridge.cwd, observer.state);
     const history = startupHistory(agent, bridge.adapter.history(), Math.max(0, 7600 - Buffer.byteLength(startup)));

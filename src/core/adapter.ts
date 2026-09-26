@@ -27,6 +27,8 @@ export interface AgentProfile {
   transport: string;
   /** The message a request becomes on the way: "<Wire> JSON" in the request inspector. */
   wire: string;
+  /** What the operator does before voice can start, when not waiting for the voice <transport> to connect in the <name> terminal. */
+  readyHint?: string;
 }
 
 /** What an observation is, in terms every agent shares. The feed decides by kind. */
@@ -163,8 +165,8 @@ export interface AgentSocket {
  */
 export interface AgentAdapter extends EventEmitter {
   readonly profile: AgentProfile;
-  /** Writes the agent's configuration and returns its command. */
-  launch(connection: { baseUrl: string; token: string }): AgentLaunch;
+  /** Prepares what the agent needs (configuration, helper processes) and returns its command. Throws, with the reason, when the agent cannot run with the companion. */
+  launch(connection: { baseUrl: string; token: string }): AgentLaunch | Promise<AgentLaunch>;
   /** The observer: every agent event as a shared Observation, plus conversation and state. */
   readonly observations: AgentObserver;
   /** Sends one request and resolves with how far it got. */
@@ -172,5 +174,6 @@ export interface AgentAdapter extends EventEmitter {
   /** Observations so far, oldest first, including any restored from a resumed session. */
   history(): readonly Observation[];
   readonly sockets: Readonly<Record<string, AgentSocket>>;
-  close(): void;
+  /** Stops delivering and observing, and anything launch() started. */
+  close(): void | Promise<void>;
 }

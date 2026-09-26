@@ -10,8 +10,9 @@ export class TranscriptTail {
   inode: number | null = null;
   reader: LineReader;
   timer?: NodeJS.Timeout;
-  constructor(file: string, onRecord: (record: any) => void, onError: (error: Error) => void = () => {}) {
-    this.file = file; this.onRecord = onRecord; this.onError = onError;
+  intervalMs: number;
+  constructor(file: string, onRecord: (record: any) => void, onError: (error: Error) => void = () => {}, { intervalMs = 250 } = {}) {
+    this.file = file; this.onRecord = onRecord; this.onError = onError; this.intervalMs = intervalMs;
     this.reader = new LineReader(onRecord, onError);
   }
   poll() {
@@ -28,6 +29,10 @@ export class TranscriptTail {
       } finally { fs.closeSync(fd); }
     } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') this.onError(err as Error); }
   }
-  start() { this.poll(); this.timer = setInterval(() => this.poll(), 250); }
+  /** Follows the file from its start, or only lines added from now on. */
+  start({ fromEnd = false } = {}) {
+    if (fromEnd) { try { const stat = fs.statSync(this.file); this.offset = stat.size; this.inode = stat.ino; } catch {} }
+    this.poll(); this.timer = setInterval(() => this.poll(), this.intervalMs);
+  }
   stop() { clearInterval(this.timer); }
 }

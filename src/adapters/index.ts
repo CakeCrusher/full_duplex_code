@@ -1,7 +1,6 @@
 import type { AgentDefinition } from '../core/adapter.ts';
 import { claude } from './claude/index.ts';
+import { codex } from './codex/index.ts';
 
 // Every agent the launcher can start, by command name.
-export const agents: Readonly<Record<string, AgentDefinition>> = { claude };
-/** The agent `npm start` launches. */
-export const defaultAgent = 'claude';
+export const agents: Readonly<Record<string, AgentDefinition>> = { claude, codex };
