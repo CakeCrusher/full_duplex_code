@@ -28,6 +28,9 @@ export async function startTestHarness(label: string, { resume = false, ...optio
   const harness = await new Harness({ agent: claude, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, agentArgs, ...options }).start();
   const launch = harness.agentLaunch!;
   const env: Record<string, string> = { ...process.env as Record<string, string>, ...launch.env, TERM: 'xterm-256color' }; delete env.OPENAI_API_KEY;
+  // Run inside Claude Code, the tests would otherwise start a child of that
+  // session, which never saves its own transcript (so --resume finds nothing).
+  for (const name of Object.keys(env)) if (/^CLAUDE(CODE$|_CODE_|_PID$|_EFFORT$)/.test(name)) delete env[name];
   const args = launch.args;
   // node-pty's macOS prebuild currently ships spawn-helper without its executable
   // bit. Repair only this installed test dependency, when needed.
@@ -36,19 +39,27 @@ export async function startTestHarness(label: string, { resume = false, ...optio
   let terminal: pty.IPty;
   try { terminal = pty.spawn(launch.command, args, { name: 'xterm-256color', cols: 120, rows: 35, cwd, env }); }
   catch (error) { await harness.close(); throw error; }
-  let raw = ''; let trust = false; let development = false; let exited = false;
+  let raw = ''; let trust = false; let development = false; let exited = false; let confirming: NodeJS.Timeout | undefined;
   terminal.onData(data => {
     fs.appendFileSync(path.join(runDir, 'terminal.log'), data);
-    raw = (raw + stripVTControlCharacters(data)).slice(-24000);
-    const compact = raw.replace(/[^A-Za-z]/g, '');
+    // Strip the accumulated output: an escape sequence split across two chunks
+    // would otherwise leave stray letters inside the prompt text we look for.
+    raw = (raw + data).slice(-48000);
+    const compact = stripVTControlCharacters(raw).replace(/[^A-Za-z]/g, '');
     if (!trust && compact.includes('YesItrustthisfolder')) {
       trust = true;
       setTimeout(() => { if (!exited) { terminal.write('\x1b[B'); setTimeout(() => { if (!exited) terminal.write('\r'); }, 200); } }, 300);
     } else if (!development && compact.includes('WARNINGLoadingdevelopmentchannels') && compact.includes('Iamusingthisforlocaldevelopment')) {
-      development = true; setTimeout(() => { if (!exited) terminal.write('\r'); }, 300);
+      // Choose "1. I am using this for local development". Claude can draw the
+      // menu before it accepts keys, so confirm until its first hook arrives.
+      development = true; let attempts = 0;
+      confirming = setInterval(() => {
+        if (exited || harness.observer.state !== 'starting' || ++attempts > 8) { clearInterval(confirming); return; }
+        terminal.write('\r');
+      }, 1000);
     }
   });
-  terminal.onExit(() => { exited = true; });
+  terminal.onExit(() => { exited = true; clearInterval(confirming); });
   console.log('Run:', runDir);
   // A resumed session can start processing recovered work before its channel
   // connects. Working is a healthy ready state; requiring idle loses that case.
@@ -74,8 +85,8 @@ export async function startCodexTestHarness(label: string, prompt: string) {
   let raw = '', trust = false, exited = false;
   terminal.onData(data => {
     fs.appendFileSync(path.join(runDir, 'terminal.log'), data);
-    raw = (raw + stripVTControlCharacters(data)).slice(-24000);
-    if (!trust && /trustthecontents|Doyoutrust/i.test(raw.replace(/\s/g, ''))) { trust = true; setTimeout(() => { if (!exited) terminal.write('\r'); }, 300); }
+    raw = (raw + data).slice(-48000);
+    if (!trust && /trustthecontents|Doyoutrust/i.test(stripVTControlCharacters(raw).replace(/\s/g, ''))) { trust = true; setTimeout(() => { if (!exited) terminal.write('\r'); }, 300); }
   });
   terminal.onExit(() => { exited = true; });
   console.log('Run:', runDir);

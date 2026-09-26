@@ -284,6 +284,7 @@ Usage history stays in `.runs/budget.json`. Existing history is preserved; old s
 | Problem | What to check |
 | --- | --- |
 | The launcher won't start | Run it in an interactive terminal and run `fdc doctor`. Check Node, Claude sign-in, and `.env`. |
+| A resumed conversation isn't found | Start `fdc` from a normal terminal, not from inside another Claude Code session: there, Claude starts as that session's child and does not save its conversation. |
 | Start voice stays disabled | Accept any pending channel notice or trust prompt in the Claude terminal. Check whether your organization permits channels. |
 | The companion can't hear you | Allow microphone access in Chrome and macOS. Check the **Microphone** selection beside the voice buttons and whether it is muted. |
 | OpenAI rejects the connection | Check the key, API account billing, and access to `gpt-live-1`. A successful doctor check alone does not verify these. |
