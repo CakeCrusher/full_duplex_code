@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="web/icon.svg" width="96" height="96" alt="Full-Duplex Code logo">
+  <img src="web/icon.svg" width="48" height="48" alt="Full-Duplex Code logo">
 </p>
 
 <h1 align="center">Full-Duplex Code</h1>
