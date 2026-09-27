@@ -23,7 +23,8 @@
     "test:ui": "node scripts/test-ui-context.ts",
     "test:browser": "node scripts/test-browser.ts",
     "test:correction": "node scripts/test-correction.ts",
-    "test:codex": "node scripts/test-codex.ts"
+    "test:codex": "node scripts/test-codex.ts",
+    "test:codex-start": "node scripts/test-codex-start.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

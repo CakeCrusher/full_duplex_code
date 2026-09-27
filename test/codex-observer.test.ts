@@ -46,6 +46,17 @@ test('the first hook names the session; hooks become observations, turn state an
   });
 });
 
+test('a session Codex announced before any hook takes that session\'s hooks, and no other', t => {
+  const { observer, hook } = fixture(t);
+  const named: string[] = []; observer.on('session', id => named.push(id));
+  observer.adopt(session); observer.adopt('other');
+  assert.deepEqual(named, [session]);
+  hook('SessionStart', { source: 'startup' });
+  assert.deepEqual(named, [session], 'the first hook does not name it again');
+  assert.equal(observer.hook({ session_id: 'other', hook_event_name: 'Stop' }), false, 'another session is refused');
+  assert.equal(observer.observations.length, 1);
+});
+
 test('assistant messages and steered input come from the transcript; typed prompts are not repeated', async t => {
   const { observer, hook, append } = fixture(t);
   const inputs: string[] = [], texts: string[] = [];

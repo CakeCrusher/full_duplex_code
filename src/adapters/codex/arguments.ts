@@ -34,6 +34,6 @@ export function readCodexArgs(args: readonly string[]): AgentArguments {
       throw new ArgumentConflict('turning hooks off hides Codex from the companion, which observes it through hooks.');
     }
   }
-  // Codex chooses session IDs itself: its first hook names the session.
+  // Codex chooses session IDs itself and names the session once it starts.
   return { direct: false, resume, sessionId: undefined, assignSession: false };
 }

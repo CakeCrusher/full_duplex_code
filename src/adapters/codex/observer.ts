@@ -99,12 +99,16 @@ export class CodexObserver extends AgentObserver {
       this.input(text, { source: 'transcript' }, emit);
     }
   }
+  /** Takes the session Codex named, unless one is known already. */
+  adopt(id: string) {
+    if (this.sessionId !== undefined) return;
+    this.sessionId = id; this.log({ type: 'agent.session', sessionId: id }); this.emit('session', id);
+  }
   override hook(event: Record<string, any>): boolean {
-    // Codex chooses the session ID: its first hook names the session. Only
-    // this Codex process runs the companion's hooks.
-    if (this.sessionId === undefined && typeof event.session_id === 'string' && event.session_id) {
-      this.sessionId = event.session_id; this.log({ type: 'agent.session', sessionId: this.sessionId }); this.emit('session', this.sessionId);
-    }
+    // Codex chooses the session ID. The adapter usually learns it as the
+    // terminal loads its thread; if not (a new session in Codex 0.155), the
+    // first hook names it. Only this Codex process runs the companion's hooks.
+    if (typeof event.session_id === 'string' && event.session_id) this.adopt(event.session_id);
     if (event.session_id !== this.sessionId) return false;
     event = JSON.parse(this.clean(JSON.stringify(event)));
     const name = event.hook_event_name;

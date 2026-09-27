@@ -27,8 +27,6 @@ export interface AgentProfile {
   transport: string;
   /** The message a request becomes on the way: "<Wire> JSON" in the request inspector. */
   wire: string;
-  /** What the operator does before voice can start, when not waiting for the voice <transport> to connect in the <name> terminal. */
-  readyHint?: string;
 }
 
 /** What an observation is, in terms every agent shares. The feed decides by kind. */

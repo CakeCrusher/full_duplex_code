@@ -240,12 +240,15 @@ You need Codex 0.155 or newer, signed in with `codex login`. The companion does 
 How it connects:
 
 - The launcher starts its own Codex app server on this computer, protected by a random token, and runs your Codex command attached to it (`--remote`). Nothing is written to your project or to `~/.codex`: the companion's hooks are given to that app server as command-line settings.
-- Those hooks are new to Codex, so the terminal runs with `--dangerously-bypass-hook-trust`. That flag would also run any other hook you have not reviewed yet, so the launcher first asks Codex for its hooks and refuses to start while any other hook awaits review; review those with `/hooks` in Codex.
-- Codex creates its session with the first message. Send it a message in the terminal, or give a prompt on the command line, before you click **Start voice**.
+- Codex runs a hook only once you have trusted it, and the companion's hooks are new to it. The launcher asks Codex for the name and hash of each of them and trusts exactly those, for this run only, as command-line settings too (`hooks.state`). Your own hooks keep the review status you gave them, and Codex asks about any you have not reviewed, as usual. If Codex would not run all of the companion's hooks, for example because hooks are turned off in your Codex configuration, the launcher stops and says so.
+- The companion takes the terminal's thread as soon as Codex loads it, so you can click **Start voice** before you type anything, and a request can be the session's first message. That is a new session's thread as the terminal starts, a forked thread, or the one you resume. A resumed conversation is context for GPT Live from the start; a fork's earlier messages are not, because Codex keeps them with the original session. Codex 0.155 creates a new session's thread only with its first message, so there voice can start once you have sent one.
+- With `resume` and `fork`, Codex refuses permission options such as `-a` and `-s` when it runs attached to an app server ("Permission overrides are not supported when resuming a remote task"). The resumed session may not keep the permissions it had: in a check, a session started with `-s workspace-write` resumed as `read-only`. Change them inside Codex with `/permissions`.
 - A spoken request steers Codex's running turn (`turn/steer`); when Codex is idle, or the turn ends first, it starts a new turn. Codex sees the request labeled `[Voice request …]`. Approval prompts still appear in the Codex terminal.
 - The companion observes Codex's hooks (prompts, tools, approvals, turn ends) and follows its transcript for assistant messages and steered requests. The final message of a turn is observed once.
 
 Refused, with the reason: `codex exec` and `codex review` (no interactive terminal), `--remote` (the companion attaches Codex to its own app server), and turning hooks off. `fdc codex --help` and subcommands such as `fdc codex login` run Codex directly.
+
+To resume a Codex session, use Codex's own `resume` in the same project folder: `fdc codex resume SESSION_ID`, `fdc codex resume --last`, or `fdc codex resume` for Codex's picker. The session ID is in `connection.json` in the run folder, as for Claude, and in Codex's own session list.
 
 When many events arrive while you speak, GPT Live sometimes answers without passing the request on: in a check, it delegated 3 of 5 requests while context arrived every 1.5 seconds, and 4 of 4 without. This affects Claude Code the same way. If a request does not show up in the timeline, say it again.
 
@@ -319,7 +322,7 @@ The core reaches an agent only through the adapter contract in `src/core/adapter
 
 `npm test` runs offline checks without OpenAI spending. `npm run test:ui` checks the live timeline, hover details, navigation, reload, and real browser audio capture/playback between two local WebRTC peers, with a virtual microphone and no paid API connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session. `npm run test:updates` checks a rapid seven-step Claude task, complete thinking delivery without progress speech cues, and status recall with real voice.
 
-`npm run test:codex` runs one real Codex session with real voice: a spoken request steers Codex's running turn, and Codex acts on it in that turn. The other integration commands in `package.json` start real Claude and OpenAI voice sessions. They require macOS `say`, `ffmpeg`, and the relevant browser setup; they consume API credits. Ordinary use does not require these test tools.
+`npm run test:codex` runs one real Codex session with real voice: a spoken request steers Codex's running turn, and Codex acts on it in that turn. `npm run test:codex-start` starts real Codex without a first message, then resumes and forks that session; each time a request delivered before anything is typed becomes the session's first message. It uses a little Codex usage and no voice. The other integration commands in `package.json` start real Claude and OpenAI voice sessions. They require macOS `say`, `ffmpeg`, and the relevant browser setup; they consume API credits. Ordinary use does not require these test tools.
 
 ## License
 

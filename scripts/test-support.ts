@@ -70,12 +70,12 @@ export async function startTestHarness(label: string, { resume = false, ...optio
   } };
 }
 
-// Real Codex in a terminal, attached to the companion's app server. The first
-// message comes from the command line, so Codex starts its session at once.
-export async function startCodexTestHarness(label: string, prompt: string) {
-  const runDir = path.join(root, '.runs', `${label}-${Date.now()}`), cwd = path.join(runDir, 'workspace');
-  fs.mkdirSync(cwd, { recursive: true }); spawnSync('git', ['init', '--quiet'], { cwd });
-  const agentArgs = ['--no-alt-screen', '-s', 'workspace-write', '-a', 'never', prompt];
+// Real Codex in a terminal, attached to the companion's app server: by default
+// a new session that needs no approvals, with a first message or none.
+export async function startCodexTestHarness(label: string, { prompt, args, cwd }: { prompt?: string; args?: string[]; cwd?: string } = {}) {
+  const runDir = path.join(root, '.runs', `${label}-${Date.now()}`);
+  if (!cwd) { cwd = path.join(runDir, 'workspace'); fs.mkdirSync(cwd, { recursive: true }); spawnSync('git', ['init', '--quiet'], { cwd }); }
+  const agentArgs = args ?? ['--no-alt-screen', '-s', 'workspace-write', '-a', 'never', ...(prompt === undefined ? [] : [prompt])];
   const harness = await new Harness({ agent: codex, root, runDir, cwd, apiKey: process.env.OPENAI_API_KEY!, agentArgs }).start();
   const launch = harness.agentLaunch!;
   const env: Record<string, string> = { ...process.env as Record<string, string>, ...launch.env, TERM: 'xterm-256color' }; delete env.OPENAI_API_KEY;

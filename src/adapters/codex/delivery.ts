@@ -15,13 +15,19 @@ interface Response { id: number; result?: any; error?: { code: number; message: 
 
 // Delivers requests through Codex's app server, as a second client beside the
 // terminal: turn/steer while a turn runs, and a new turn otherwise or when the
-// steer is refused. Emits `connection`, `update` and `fault` for the adapter.
+// steer is refused. Emits `thread` (the terminal's thread, once loaded),
+// `connection`, `update` and `fault` for the adapter.
 export class CodexDelivery extends EventEmitter {
   log: (event: Record<string, unknown>) => void;
   /** The running turn as the hooks report it, when the app server has not said. */
   turnHint: () => string | null;
   ws?: WebSocket; threadId?: string;
   ready = false; stopping = false;
+  /** Threads already read to find the terminal's. */
+  examined = new Set<string>();
+  // Whether this client receives the thread's turn notifications. A new thread
+  // can be subscribed to only once its first message is saved.
+  subscription: 'waiting' | 'pending' | 'done' | 'failed' = 'waiting';
   // The running turn, from the app server's own turn notifications.
   activeTurn: string | null = null; turnKnown = false;
   nextId = 1; pending = new Map<number, (response: Response) => void>();
@@ -57,17 +63,48 @@ export class CodexDelivery extends EventEmitter {
     // A request from the app server, such as an approval: the terminal answers it.
     if (message.id !== undefined && message.method) { this.log({ type: 'codex.server_request', method: message.method, threadId: message.params?.threadId }); return; }
     const params = message.params ?? {};
+    // The terminal announces a new or forked thread as it starts, before any
+    // message (Codex 0.157). A resumed one is not announced, but every client
+    // hears its status change as the terminal loads it.
+    if (message.method === 'thread/started') { this.consider(params.thread, Boolean(params.thread?.forkedFromId)); return; }
+    if (message.method === 'thread/status/changed' && this.threadId === undefined && typeof params.threadId === 'string') { this.identify(params.threadId); return; }
     if (params.threadId !== this.threadId) return;
+    // Every client hears status changes, such as the first turn starting.
+    if (message.method === 'thread/status/changed') this.subscribe();
     if (message.method === 'turn/started') { this.activeTurn = params.turn?.id ?? null; this.turnKnown = true; this.emit('update'); }
     if (message.method === 'turn/completed') { if (this.activeTurn === params.turn?.id) this.activeTurn = null; this.turnKnown = true; this.emit('update'); }
   }
-  /** Subscribes to the terminal's thread once Codex has named it. */
+  /** Offers a thread that appeared as the terminal's, unless it is a title or subagent thread, or one is taken. */
+  consider(thread: any, history: boolean) {
+    if (this.threadId !== undefined || typeof thread?.id !== 'string' || thread.ephemeral || thread.parentThreadId) return;
+    this.emit('thread', { id: thread.id, path: thread.path ?? undefined, history });
+  }
+  /** Reads a thread whose status changed before any was taken: a resumed one, with its history. */
+  async identify(threadId: string) {
+    if (this.examined.has(threadId)) return; this.examined.add(threadId);
+    const read = await this.call('thread/read', { threadId });
+    this.consider(read.result?.thread, true);
+  }
+  /** Reaches the terminal's thread once Codex has named it. */
   async attach(threadId: string) {
     this.threadId = threadId;
-    const resumed = await this.call('thread/resume', { threadId, excludeTurns: true });
-    if (resumed.error) { this.emit('fault', new Error(`Codex app server: ${resumed.error.message}`)); return; }
     this.log({ type: 'codex.attached', threadId });
+    // A running thread takes turns from any client, even before its first message.
     this.ready = true; this.emit('connection', true);
+    await this.subscribe();
+  }
+  /** Subscribes to the thread's turn notifications; until then, the hooks tell which turn runs. */
+  async subscribe() {
+    if (this.subscription !== 'waiting' || !this.threadId) return;
+    this.subscription = 'pending';
+    const resumed = await this.call('thread/resume', { threadId: this.threadId, excludeTurns: true });
+    if (this.stopping) return;
+    if (!resumed.error) { this.subscription = 'done'; this.log({ type: 'codex.subscribed', threadId: this.threadId }); return; }
+    this.log({ type: 'codex.subscribe_failed', threadId: this.threadId, error: resumed.error.message });
+    // Not saved yet: try again when the thread's status next changes.
+    if (/no rollout found/i.test(resumed.error.message)) { this.subscription = 'waiting'; return; }
+    this.subscription = 'failed';
+    this.emit('fault', new Error(`Codex app server: ${resumed.error.message}`));
   }
   runningTurn() { return this.turnKnown ? this.activeTurn : this.turnHint(); }
   async deliver(request: VoiceRequest): Promise<DeliveryResult> {

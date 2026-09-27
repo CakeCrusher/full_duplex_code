@@ -134,8 +134,7 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
     console.log(`Anyone with this link can direct ${name} on this computer. Don't share it. The tunnel closes when you exit ${name}.`);
   }
   // The launcher only prints the link; open it in Chrome or another Chromium browser.
-  const when = agent.profile.readyHint ? `. ${agent.profile.readyHint}` : `, then click Start voice when the ${transport} is ready.`;
-  console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nOpen this link in Chrome${when}\nLocal run: ${runDir}\n`);
+  console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nOpen this link in Chrome, then click Start voice when the ${transport} is ready.\nLocal run: ${runDir}\n`);
   if (!(await confirmStart({ profile: agent.profile }))) await exit(`quit before ${name} started`, 0);
   const launch = harness.agentLaunch!;
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...launch.env };

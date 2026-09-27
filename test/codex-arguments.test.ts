@@ -41,7 +41,7 @@ test('option values and prompts are never mistaken for options', () => {
 });
 
 test('the terminal attaches to the companion\'s app server; the operator\'s arguments follow unchanged', () => {
-  const url = 'ws://127.0.0.1:4567', ours = ['--remote', url, '--remote-auth-token-env', TOKEN_VARIABLE, '--dangerously-bypass-hook-trust'];
+  const url = 'ws://127.0.0.1:4567', ours = ['--remote', url, '--remote-auth-token-env', TOKEN_VARIABLE];
   assert.deepEqual(codexArgs(url, ['--model', 'gpt-5.5', 'Build it']), [...ours, '--model', 'gpt-5.5', 'Build it']);
   assert.deepEqual(codexArgs(url, ['resume', '--last', 'continue']), ['resume', ...ours, '--last', 'continue']);
   assert.deepEqual(codexArgs(url, ['fork', 'abc']), ['fork', ...ours, 'abc']);

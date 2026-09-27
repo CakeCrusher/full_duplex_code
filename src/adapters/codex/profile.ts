@@ -8,6 +8,4 @@ export const codexProfile: AgentProfile = {
   streamsMessages: true, canSteer: true,
   eventWord: 'event', eventsWord: 'events',
   transport: 'app server', wire: 'turn input',
-  // Codex creates its thread with the first message, typed or given on the command line.
-  readyHint: 'Send Codex a first message in its terminal to start its session, then start voice.',
 };

@@ -7,7 +7,7 @@ import { codexContext } from './context.ts';
 import { readCodexArgs } from './arguments.ts';
 import { CodexObserver } from './observer.ts';
 import { CodexDelivery, receivedRequest, turnInput } from './delivery.ts';
-import { startAppServer, type AppServer } from './app-server.ts';
+import { CODEX_HOOKS, startAppServer, type AppServer, type ListedHook } from './app-server.ts';
 import { codexArgs, TOKEN_VARIABLE } from './launch.ts';
 
 const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
@@ -27,7 +27,15 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     this.observations = new CodexObserver({ sessionId: session.sessionId, clean: session.clean, log: session.log });
     this.delivery = new CodexDelivery({ log: session.log, turnHint: () => this.observations.activeTurn });
     for (const name of ['connection', 'update', 'fault']) this.delivery.on(name, value => this.emit(name, value));
-    // Codex names the session in its first hook; then requests can reach its thread.
+    // The terminal's thread, new, forked or resumed, as soon as it is loaded:
+    // requests can reach it before the first message, and a resumed
+    // conversation is context from the start. Older Codex names it in the first hook.
+    this.delivery.on('thread', ({ id, path, history }: { id: string; path?: string; history: boolean }) => {
+      if (this.observations.sessionId !== undefined) return;
+      this.observations.adopt(id);
+      if (path) this.observations.attachTranscript(path, history);
+      this.observations.status('idle', 'Codex is ready');
+    });
     this.observations.on('session', id => { this.emit('session', id); this.delivery.attach(id); });
   }
   async launch({ baseUrl, token }: { baseUrl: string; token: string }): Promise<AgentLaunch> {
@@ -38,18 +46,16 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     const env: NodeJS.ProcessEnv = { ...process.env, FD_BRIDGE_TOKEN: token }; delete env.OPENAI_API_KEY;
     this.server = await startAppServer({ cwd, env, hooks: relay, log });
     await this.delivery.connect(this.server.url, this.server.token);
-    // The terminal will skip hook trust; make sure no other hook waited for review.
-    await this.refuseUnreviewedHooks(cwd);
+    await this.confirmHooks(cwd);
     return { command: 'codex', args: codexArgs(this.server.url, agentArgs), env: { [TOKEN_VARIABLE]: this.server.token }, files: {} };
   }
-  async refuseUnreviewedHooks(cwd: string) {
+  /** Codex unobserved would be no use: every companion hook must be on and trusted. */
+  async confirmHooks(cwd: string) {
     const listed = await this.delivery.call('hooks/list', { cwds: [cwd] });
     if (listed.error) throw new Error(`Codex could not list its hooks: ${listed.error.message}`);
-    const unreviewed = (listed.result?.data ?? []).flatMap((entry: any) => entry.hooks ?? [])
-      .filter((hook: any) => hook.source !== 'sessionFlags' && hook.enabled && ['untrusted', 'modified'].includes(hook.trustStatus));
-    if (!unreviewed.length) return;
-    const list = [...new Set(unreviewed.map((hook: any) => `${hook.sourcePath} (${hook.eventName})`))].join(', ');
-    throw new Error(`Codex has hooks you have not reviewed: ${list}. The companion starts Codex with --dangerously-bypass-hook-trust so that its own hooks run, which would run these without review too. Review them with /hooks in Codex first, then start again.`);
+    const ours: ListedHook[] = (listed.result?.data ?? []).flatMap((entry: any) => entry.hooks ?? []).filter((hook: ListedHook) => hook.source === 'sessionFlags');
+    const running = ours.filter(hook => hook.enabled && hook.trustStatus === 'trusted').length;
+    if (running < CODEX_HOOKS.length) throw new Error(`Codex would run only ${running} of the companion's ${CODEX_HOOKS.length} hooks, and the companion observes Codex through them. Check that hooks are not turned off in your Codex configuration.`);
   }
   deliver(request: VoiceRequest) { return this.delivery.deliver(request); }
   history() { return this.observations.observations; }

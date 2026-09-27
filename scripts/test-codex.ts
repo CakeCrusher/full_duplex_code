@@ -9,7 +9,7 @@ import { startCodexTestHarness, synthesize, connectTestVoice, until, delay } fro
 // arriving while Live answers can keep it from delegating (see USAGE.md).
 const spokenRequest = synthesize('codex-steer-2', 'Please ask Codex to create one more file, named voice dot text, containing the word voice.');
 const work = 'Create four files one at a time, in this order: a.txt, b.txt, c.txt, d.txt. Each contains just its letter. Before each file, run the shell command `sleep 20`. Write one short sentence before each file saying which file is next. When all are done, say DONE.';
-const test = await startCodexTestHarness('codex-voice', work);
+const test = await startCodexTestHarness('codex-voice', { prompt: work });
 const evidence: Record<string, any> = { passed: false };
 let voice: Awaited<ReturnType<typeof connectTestVoice>> | undefined;
 const events = () => fs.readFileSync(path.join(test.runDir, 'events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
