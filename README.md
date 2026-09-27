@@ -6,6 +6,8 @@
 
 <p align="center">Talk to Claude Code or Codex while it works.</p>
 
+<p align="center"><a href="https://www.youtube.com/watch?v=mF8c93XIQw8">▶ Watch it in action: <b>I Coded From the Shower Without Looking at Claude Code</b></a></p>
+
 ![Full-Duplex Code: hand off a game change, take a bath, check in and redirect by voice, then come back to the finished game](assets/full-duplex-hand-off.gif)
 
 Full-Duplex Code adds a voice companion to the coding agent you already use. The agent keeps its normal terminal, typing included. In the browser, a companion powered by GPT Live 1 follows what the agent does: its messages, edits, commands and tool results. It answers your questions from that, and passes your requests to the agent, even in the middle of a turn.
