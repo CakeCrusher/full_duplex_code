@@ -287,6 +287,7 @@ Usage history stays in `.runs/budget.json`. Existing history is preserved; old s
 | Problem | What to check |
 | --- | --- |
 | The launcher won't start | Run it in an interactive terminal and run `fdc doctor`. Check Node, Claude sign-in, and `.env`. |
+| The agent exits right after it starts | The launcher repeats the agent's own error output (stderr), unchanged, after a red `fdc:` line once the agent has exited, and saves it in the run folder's `events.jsonl` (`agent.exit`). An agent that shows its error on screen instead, as Claude does, leaves it just above that line. |
 | A resumed conversation isn't found | Start `fdc` from a normal terminal, not from inside another Claude Code session: there, Claude starts as that session's child and does not save its conversation. |
 | Start voice stays disabled | Accept any pending channel notice or trust prompt in the Claude terminal. Check whether your organization permits channels. |
 | The companion can't hear you | Allow microphone access in Chrome and macOS. Check the **Microphone** selection beside the voice buttons and whether it is muted. |

@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { spawn, type ChildProcess } from 'node:child_process';
 import qrcode from 'qrcode-terminal';
 import { Harness } from './core/bridge.ts';
@@ -15,12 +16,13 @@ import { agents } from './adapters/index.ts';
 import { parseLaunchArgs, UsageError, type LaunchCommand } from './launcher/options.ts';
 import { startTunnel, type Tunnel } from './launcher/tunnel.ts';
 import { confirmStart } from './launcher/launch-prompt.ts';
+import { ErrorTail, failureNotice, loud } from './launcher/agent-errors.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 try { process.loadEnvFile(path.join(root, '.env')); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 const names = Object.keys(agents).join(', ');
 // Mistakes in the command line stop everything before anything starts.
-function refuse(message: string): never { console.error(`fdc: ${message}`); process.exit(2); }
+function refuse(message: string): never { console.error(loud(`fdc: ${message}`)); process.exit(2); }
 function agentNamed(name: string | undefined): AgentDefinition {
   if (!name) refuse(`Name the coding agent to start: fdc [options] <agent> [agent options]. Agents: ${names}. See fdc --help.`);
   if (!Object.hasOwn(agents, name)) refuse(`Unknown agent "${name}". Agents: ${names}.`);
@@ -99,7 +101,7 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
   const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId?.slice(0, 8) ?? (session.resume ? 'resumed' : agent.profile.id)}`);
   let harness: Harness;
   try { harness = await new Harness({ agent, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe, agentArgs }).start(); }
-  catch (error) { console.error(`fdc: ${(error as Error).message}`); process.exit(1); }
+  catch (error) { console.error(loud(`fdc: ${(error as Error).message}`)); process.exit(1); }
   if (harness.portFellBack) console.log(`\nPort ${DEFAULT_PORT} is in use, probably by another companion. This one uses ${new URL(harness.baseUrl).port}; Chrome may ask for microphone access again.`);
   let tunnel: Tunnel | undefined, child: ChildProcess | undefined, stopping = false;
   // One ordered teardown for every way the launcher can end: the agent exiting or
@@ -124,7 +126,7 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
     // The agent takes over the terminal next, so wait here until the address works.
     console.log('\nStarting a Cloudflare tunnel for --public…');
     try { tunnel = await startTunnel({ port: new URL(harness.baseUrl).port, log: line => harness.log({ type: 'tunnel.log', line }) }); }
-    catch (error) { console.error((error as Error).message); await exit('tunnel failed', 1); }
+    catch (error) { console.error(loud(`fdc: ${(error as Error).message}`)); await exit('tunnel failed', 1); }
     const { url, child: tunnelProcess } = tunnel!;
     harness.setPublicUrl(url);
     harness.log({ type: 'tunnel.started', url });
@@ -139,12 +141,26 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
   const launch = harness.agentLaunch!;
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...launch.env };
   delete childEnv.OPENAI_API_KEY;
-  child = spawn(launch.command, launch.args, { cwd, env: childEnv, stdio: 'inherit' });
+  // The agent's error output passes through to the terminal, and a copy is kept.
+  child = spawn(launch.command, launch.args, { cwd, env: childEnv, stdio: ['inherit', 'inherit', 'pipe'] });
+  const errors = new ErrorTail();
+  child.stderr!.on('data', (chunk: Buffer) => { process.stderr.write(chunk); errors.push(chunk); });
   // Ctrl-C belongs to the agent's terminal interaction. Exiting the agent ends the harness.
   process.on('SIGINT', () => {});
-  child.on('error', async error => { console.error(error.message); await exit(`${name} failed to start`, 1); });
+  child.on('error', async error => { console.error(loud(`fdc: ${name} failed to start: ${error.message}`)); await exit(`${name} failed to start`, 1); });
   child.on('exit', async (code, signal) => {
+    // Our own teardown ends the agent too; only an agent that ends by itself can have failed.
+    const byItself = !stopping;
+    if (!child!.stderr!.readableEnded) await Promise.race([once(child!.stderr!, 'end'), new Promise(resolve => setTimeout(resolve, 500))]);
+    const output = errors.output;
+    harness.log({ type: 'agent.exit', code, signal, stderr: output.toString('utf8') });
     await stop(signal ? `${name} ended (${signal})` : `${name} exited (${code})`);
+    // Now that the agent has given the terminal back, nothing can hide it.
+    const notice = byItself ? failureNotice(name, code, signal, output) : undefined;
+    if (notice) {
+      process.stderr.write(`\n${loud(notice)}\n`);
+      if (output.toString('utf8').trim()) process.stderr.write(output.at(-1) === 0x0a ? output : Buffer.concat([output, Buffer.from('\n')]));
+    }
     console.log(`\nFull-Duplex Code stopped${tunnel ? ' and closed the Cloudflare tunnel' : ''}. Usage saved in .runs/budget.json.`);
     process.exit(code ?? 1);
   });
