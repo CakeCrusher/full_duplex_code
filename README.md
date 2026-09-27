@@ -6,9 +6,11 @@
 
 <p align="center">Talk to Claude Code or Codex while it works.</p>
 
-![Full-Duplex Code: talk to the voice companion while Claude Code keeps working](assets/full-duplex-code.gif)
+![Full-Duplex Code: hand off a game change, take a bath, check in and redirect by voice, then come back to the finished game](assets/full-duplex-hand-off.gif)
 
 Full-Duplex Code adds a voice companion to the coding agent you already use. The agent keeps its normal terminal, typing included. In the browser, a companion powered by GPT Live 1 follows what the agent does: its messages, edits, commands and tool results. It answers your questions from that, and passes your requests to the agent, even in the middle of a turn.
+
+You don't have to stay at your desk. Hand off a task, go do something else, and keep talking to your agent from wherever you are: check in, change your mind, and hear when it's done.
 
 ## Quickstart
 
@@ -51,8 +53,6 @@ You can keep typing to the agent too, and ask the companion about it: "What did 
 
 ## From your phone
 
-![Hand off a change, walk away, check in and redirect by voice, then come back to the finished work](assets/full-duplex-hand-off.gif)
-
 Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) once (`brew install cloudflared`), then add `--public`:
 
 ```sh
@@ -74,6 +74,8 @@ The launcher prints a phone link and a QR code once the link works. Open the pag
 | `fdc --help` | All options |
 
 ## How it works
+
+![Full-Duplex Code: talk to the voice companion while Claude Code keeps working](assets/full-duplex-code.gif)
 
 - `fdc` starts a small bridge on this computer, then your agent's own command in the terminal.
 - The agent's hooks report what it does. The bridge turns that into context for GPT Live.
