@@ -88,6 +88,11 @@ try {
   assert.equal(await laptop.locator('#start').isEnabled(), false);
   harness.agentReady = true; harness.publish(harness.status());
   await waitFor(async () => await text(laptop, '#connection') === 'Agent connected' && await laptop.locator('#start').isEnabled(), 'Start voice once Claude is ready');
+  // Which session this is, at the top and in the tab title.
+  const folder = path.basename(dir), shortId = harness.sessionId!.slice(0, 8);
+  assert.equal(await text(laptop, '#session-name'), folder);
+  assert.equal(await text(laptop, '#session-meta'), `Claude Code · session ${shortId} · ${dir}`);
+  assert.equal(await laptop.title(), `${folder} · Claude Code · ${shortId} · Full-Duplex Code`);
 
   // 2. A second device connects too, and both follow the session.
   const phone = await device();

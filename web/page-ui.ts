@@ -33,6 +33,16 @@ export function showSpeakingUpdate(update: { state: string; level?: number; conf
 }
 
 // The bridge's status, sent every second and on change.
+// Which session this page belongs to, at the top and in the tab title, so that
+// several companions open at once can be told apart.
+function showSession(cwd: string, sessionId?: string) {
+  const folder = cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? cwd, id = sessionId?.slice(0, 8);
+  const meta = [profile.product, id && `session ${id}`, cwd].filter(Boolean).join(' · ');
+  if ($('session-name').textContent !== folder) $('session-name').textContent = folder;
+  if ($('session-meta').textContent !== meta) { $('session-meta').textContent = meta; $('session-meta').title = sessionId ? `Session ${sessionId}` : ''; }
+  const title = [folder, profile.product, id, 'Full-Duplex Code'].filter(Boolean).join(' · ');
+  if (document.title !== title) document.title = title;
+}
 export function showStatus(event: BridgeEvent, voice: { active: boolean; muted: boolean; starting: boolean; elsewhere: boolean }) {
   if (event.prompt) {
     const texts: Record<string, string> = {
@@ -72,6 +82,7 @@ export function showStatus(event: BridgeEvent, voice: { active: boolean; muted: 
   $<HTMLButtonElement>('start').disabled = voice.starting || voice.active || !event.agentReady || ['connecting', 'closing'].includes(event.live) || (event.live === 'active' && !movable) || event.agent === 'exited';
   $('start').textContent = movable ? 'Move voice here' : 'Start voice';
   $('project').textContent = event.cwd;
+  showSession(event.cwd, event.sessionId);
   $('usage').textContent = voice.active ? `${Math.floor(event.usageSeconds / 60)}m ${event.usageSeconds % 60}s · $${(event.usageSeconds * 0.05 / 60).toFixed(3)}` : 'Not connected · $0.05/min';
   $('budget').textContent = `Estimated total $${event.committedUsd.toFixed(2)} · includes unfinished sessions`;
 }
