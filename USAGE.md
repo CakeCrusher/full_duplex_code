@@ -1,6 +1,6 @@
 # Using Full-Duplex Code
 
-Full-Duplex Code adds a voice companion to your normal Claude Code terminal. GPT Live 1 handles the conversation with you; Claude Code remains the coding agent that reads files, runs commands, and makes changes.
+Full-Duplex Code adds a voice companion to your normal Claude Code terminal, or to Codex (see [Use Codex](#use-codex)). This guide describes Claude Code first. GPT Live 1 handles the conversation with you; Claude Code remains the coding agent that reads files, runs commands, and makes changes.
 
 You can talk while Claude works, ask about its progress, and give corrections. You can also type directly into Claude. The companion receives hook observations from that same session: submitted prompts, assistant messages, tool arguments and results, file edits, errors, and lifecycle updates.
 
@@ -8,7 +8,7 @@ You can talk while Claude works, ask about its progress, and give corrections. Y
 
 You need:
 
-- Node.js 22 or newer and npm.
+- Node.js 22.18 or newer and npm. Node runs the TypeScript sources directly; there is no build step.
 - Claude Code installed and signed in. Confirm that running `claude` in a terminal works.
 - An OpenAI API key with access to `gpt-live-1`.
 - Chrome and a microphone. Headphones can help keep speaker audio out of your microphone.
@@ -21,7 +21,10 @@ The tested setup is macOS with Chrome. Other operating systems have not been val
 git clone https://github.com/CakeCrusher/full_duplex_code.git
 cd full_duplex_code
 npm ci
+npm link
 ```
+
+`npm link` puts the `fdc` command on your PATH. Without it, run `npm --prefix /path/to/full_duplex_code start -- <agent> …` from your project's folder instead of `fdc <agent> …`.
 
 Create `.env` in the cloned repository and add your OpenAI key:
 
@@ -34,20 +37,21 @@ If `.env` already exists, edit it instead of replacing it. You can alternatively
 Check the setup without starting a paid voice session:
 
 ```sh
-npm run doctor
+fdc doctor
 ```
 
 The output reports whether Claude is installed and signed in, whether the key is present, and recorded local usage. It checks key presence, not whether OpenAI will accept it or grant model access.
 
 ## Start a coding session
 
-Run the launcher from the Full-Duplex Code repository. Replace the example path with an existing project folder:
+In your project's folder, put `fdc` in front of the command you normally use to start Claude Code:
 
 ```sh
-npm start -- --cwd /path/to/your/project
+cd /path/to/your/project
+fdc claude
 ```
 
-To work in the Full-Duplex Code repository itself, use `npm start`.
+Claude works in the folder you run `fdc` from. Everything after `claude` is Claude's own command line, passed through unchanged; see [Pass arguments to Claude Code](#pass-arguments-to-claude-code).
 
 The launcher prints the companion link and waits. Open the link in Chrome, then press Enter to start Claude, or Ctrl-C to quit. Claude fills the terminal once it starts, which hides the link until you exit. Accept Claude's development-channel notice and any workspace trust prompt. Once the channel connects, click **Start voice**, allow microphone access, and wait for the greeting.
 
@@ -111,7 +115,7 @@ All levels receive the same context. Your spoken requests take priority over the
 
 The status beneath Configurations shows **Applying** until Live acknowledges that change, then **Live acknowledged**. **Active from session start** means the preference was included when that connection opened. **Not confirmed** reports a failed update; select the mode again to retry. **Next session** means voice is disconnected and the preference will be used at the next start. Acknowledgment confirms delivery, not exactly when the model’s speech will reflect it. Changing a preference does not discard audio already generated.
 
-Open **GPT Live prompt** beneath the sliders to read the startup instructions. Before connecting, it previews the next session. During or after a connection, it preserves that session’s startup text and shows the selected speaking preference separately. The base prompt is `BASE_PROMPT` in `src/live.js`; `src/voice-policy.js` provides the speaking preferences. Workspace/history, the one-time welcome, and later context appends are supplied separately. The browser page is the **voice companion dashboard**, and its Gantt chart is the **live session timeline**.
+Open **GPT Live prompt** beneath the sliders to read the startup instructions. Before connecting, it previews the next session. During or after a connection, it preserves that session’s startup text and shows the selected speaking preference separately. The base prompt is `basePrompt` in `src/core/prompts.ts`, worded from the agent adapter's profile; `src/core/voice-policy.ts` provides the speaking preferences. Workspace/history, the one-time welcome, and later context appends are supplied separately. The browser page is the **voice companion dashboard**, and its Gantt chart is the **live session timeline**.
 
 **Microphone** chooses the input device. **Chrome default** follows Chrome's own microphone setting. Device names appear after Chrome first grants microphone access. The choice is remembered in this browser and applies the next time you click **Start voice**; it is locked while voice is connected, so use **End voice** before switching. If the saved device is unplugged, the list shows Chrome default until it returns.
 
@@ -160,13 +164,13 @@ Closing the companion tab also closes its voice connection. A disconnected voice
 
 ## Resume a conversation
 
-Use the same project path and the Claude session ID:
+Use Claude's own resume options, in the same project folder:
 
 ```sh
-npm start -- --cwd /path/to/your/project --resume CLAUDE_SESSION_ID
+fdc claude --resume CLAUDE_SESSION_ID
 ```
 
-For a session launched by Full-Duplex Code, the terminal prints a **Local run** folder at startup. Open `connection.json` in that folder and copy its `sessionId` value. Use the complete ID; do not use the short suffix of the folder name. Keep the rest of that file private because it also contains connection credentials.
+`fdc claude --continue` and `fdc claude --resume` (Claude's picker) work too; the companion learns the session's ID from Claude's first hook. For a session launched by Full-Duplex Code, the terminal prints a **Local run** folder at startup. Open `connection.json` in that folder and copy its `sessionId` value. Use the complete ID; do not use the short suffix of the folder name. Keep the rest of that file private because it also contains connection credentials.
 
 Accept the channel notice, open the new companion link, and click **Start voice**. The companion reads saved prompts, assistant text, tool calls, and tool results from that Claude session's transcript. Like any new voice connection, it starts with only the most recent of these; the rest stays in the transcript. Transcript records supply the history; newly arriving hooks supply live observations. Private thinking is not imported. Old voice conversations are not restored independently of Claude's saved history, and the voice model has a finite context capacity.
 
@@ -178,13 +182,11 @@ Instructions added before voice starts are marked **Saved for next voice session
 
 ## Useful launch options
 
-Add options after `npm start --`:
+The companion's own options go between `fdc` and the agent's name: `fdc [options] <agent> [the agent's own arguments]`. An option the launcher does not know stops it before anything starts.
 
 | Option | Purpose |
 | --- | --- |
-| `--cwd /path/to/project` | Choose the folder Claude works in. |
-| `--resume SESSION_ID` | Continue a specific Claude conversation. |
-| `--session-id UUID` | Choose the full UUID for a new conversation. Use either this or `--resume`. |
+| `--voice marin` | Choose the GPT Live voice. |
 | `--observe transcript` | Add saved-text/tool fallback observation if display hooks are unavailable. |
 | `--port 8123` | Choose the local port. The default is 8123, so the companion address and Chrome's microphone permission stay the same between launches. If 8123 is busy, for example with a second companion, the launcher uses a free port and says so. `--port 0` always chooses a free port. |
 | `--public` | Also reach the companion from a phone, through a temporary Cloudflare tunnel the launcher starts and stops. See [Use it from your phone](#use-it-from-your-phone). |
@@ -192,46 +194,75 @@ Add options after `npm start --`:
 For example:
 
 ```sh
-npm start -- --cwd /path/to/project --voice marin
+fdc --voice marin claude
 ```
 
-Run `npm start -- --help` to see all options. Transcript observation depends on when Claude saves messages, so updates can arrive later than in the default mode.
+Run `fdc --help` to see all options. Transcript observation depends on when Claude saves messages, so updates can arrive later than in the default mode.
 
 ### Pass arguments to Claude Code
 
-The launcher handles the companion options listed above, plus `--voice` and `--help`. It forwards every other argument to Claude Code, in the order you supplied it, after the generated Claude options. Claude applies its normal override and merge rules; for example, you can choose its model or permission mode. Quoted prompts and option values are passed as arguments, without shell evaluation.
+Everything after `claude` is Claude Code's own command line. The launcher passes it unchanged, in the order you gave it, after the options it adds for the companion (its MCP configuration, the voice channel, its hook settings and, for a new conversation, a session ID). Claude applies its normal override and merge rules; for example, you can choose its model or permission mode. Quoted prompts and option values are passed as arguments, without shell evaluation.
 
 Start with Claude's permission checks disabled:
 
 ```sh
-npm start -- --dangerously-skip-permissions
+fdc claude --dangerously-skip-permissions
 ```
 
-Or combine Claude flags with a project path and an existing conversation:
+Or combine Claude flags with an existing conversation:
 
 ```sh
-npm start -- --cwd /path/to/project --resume CLAUDE_SESSION_ID --dangerously-skip-permissions --model opus
+fdc claude --resume CLAUDE_SESSION_ID --dangerously-skip-permissions --model opus
 ```
 
 You can also pass an initial prompt:
 
 ```sh
-npm start -- --model opus "Explain this project"
+fdc claude --model opus "Explain this project"
 ```
 
-The first `--` tells npm to pass the arguments to the launcher. An additional `--` stops the launcher's option parsing and sends the remaining arguments directly to Claude. For example, `npm start -- -- --help` displays Claude's help instead of the companion's help. Put companion options and `--resume` / `--session-id` before this additional separator so the companion tracks the selected session. To pass a value that itself matches a companion flag, use this separator or Claude's `--option=value` form.
+`fdc claude --help`, `fdc claude --version` and Claude's subcommands, such as `fdc claude mcp list`, run Claude directly, without the companion.
 
-These options are passed to the normal terminal process. Options that replace Claude's hooks or channel configuration also replace the companion connections they provide. See the [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) for flag behavior.
+The launcher refuses Claude options that would hide Claude from the companion, and says why: `--settings` (Claude keeps only the last one, so yours would replace the companion's hooks; put those settings in `.claude/settings.local.json` or `~/.claude/settings.json` instead), `--bare` and `--safe-mode` (they turn off hooks), `-p` / `--print` (Claude answers once and exits), `--bg`, `--cloud` and `--environment` (the session runs elsewhere), `--tmux`, and an `--mcp-config` that defines a server named `voice`. Your own MCP servers and channels load beside the companion's. See the [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) for flag behavior.
+
+## Use Codex
+
+Put `fdc` in front of your usual Codex command, in your project's folder. Codex's own options and its `resume` and `fork` subcommands work as usual:
+
+```sh
+fdc codex
+fdc codex --model gpt-5.5 --search
+fdc --public codex resume SESSION_ID
+```
+
+You need Codex 0.155 or newer, signed in with `codex login`. The companion does not pass its OpenAI key to Codex, so a Codex that relies on `OPENAI_API_KEY` in the environment should sign in with `codex login --with-api-key` instead.
+
+How it connects:
+
+- The launcher starts its own Codex app server on this computer, protected by a random token, and runs your Codex command attached to it (`--remote`). Nothing is written to your project or to `~/.codex`: the companion's hooks are given to that app server as command-line settings.
+- Codex runs a hook only once you have trusted it, and the companion's hooks are new to it. The launcher asks Codex for the name and hash of each of them and trusts exactly those, for this run only, as command-line settings too (`hooks.state`). Your own hooks keep the review status you gave them, and Codex asks about any you have not reviewed, as usual. If Codex would not run all of the companion's hooks, for example because hooks are turned off in your Codex configuration, the launcher stops and says so.
+- The companion takes the terminal's thread as soon as Codex loads it, so you can click **Start voice** before you type anything, and a request can be the session's first message. That is a new session's thread as the terminal starts, a forked thread, or the one you resume. A resumed conversation is context for GPT Live from the start; a fork's earlier messages are not, because Codex keeps them with the original session. Codex 0.155 creates a new session's thread only with its first message, so there voice can start once you have sent one.
+- With `resume` and `fork`, Codex refuses permission options such as `-a` and `-s` when it runs attached to an app server ("Permission overrides are not supported when resuming a remote task"). The resumed session may not keep the permissions it had: in a check, a session started with `-s workspace-write` resumed as `read-only`. Change them inside Codex with `/permissions`.
+- A spoken request steers Codex's running turn (`turn/steer`); when Codex is idle, or the turn ends first, it starts a new turn. Codex sees the request labeled `[Voice request …]`. Approval prompts still appear in the Codex terminal.
+- The companion observes Codex's hooks (prompts, tools, approvals, turn ends) and follows its transcript for assistant messages and steered requests. The final message of a turn is observed once.
+
+Refused, with the reason: `codex exec` and `codex review` (no interactive terminal), `--remote` (the companion attaches Codex to its own app server), and turning hooks off. `fdc codex --help` and subcommands such as `fdc codex login` run Codex directly.
+
+To resume a Codex session, use Codex's own `resume` in the same project folder: `fdc codex resume SESSION_ID`, `fdc codex resume --last`, or `fdc codex resume` for Codex's picker. The session ID is in `connection.json` in the run folder, as for Claude, and in Codex's own session list.
+
+When many events arrive while you speak, GPT Live sometimes answers without passing the request on: in a check, it delegated 3 of 5 requests while context arrived every 1.5 seconds, and 4 of 4 without. This affects Claude Code the same way. If a request does not show up in the timeline, say it again.
 
 ## Use it from your phone
 
 You can talk to Claude from your phone while it keeps running on your computer. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) once (for example `brew install cloudflared`), then add `--public`:
 
 ```sh
-npm start -- --cwd /path/to/your/project --public
+fdc --public claude
 ```
 
-The launcher starts a temporary Cloudflare tunnel, waits until it is ready, and prints a **From your phone** link with a QR code. Scan it with your phone's camera, open it in Chrome or another Chromium browser, and click **Start voice**. Then press Enter in the terminal to start Claude. When Claude ends for any reason, including Ctrl-C at the prompt or closing the terminal, the launcher closes the voice session and stops the tunnel. Without `--public`, nothing is reachable from outside this computer.
+The launcher starts a temporary Cloudflare tunnel, waits until the link actually opens the page, and prints a **From your phone** link with a QR code. (Cloudflare names a new tunnel a few seconds before the name resolves; a device that tried it in that window could be told it does not exist for up to a minute, so the launcher checks with Cloudflare's own nameservers first.) Scan it with your phone's camera, open it in Chrome or another Chromium browser, and click **Start voice**. Then press Enter in the terminal to start Claude. When Claude ends for any reason, including Ctrl-C at the prompt or closing the terminal, the launcher closes the voice session and stops the tunnel. Without `--public`, nothing is reachable from outside this computer.
+
+You can open the page on your computer and on your phone at the same time, in any order, before or after Claude starts. Every open page follows the session, and voice runs in one of them. On another page, **Start voice** becomes **Move voice here**, which ends voice where it was and starts it on that page. A page whose connection drops, for example when the phone sleeps, reconnects by itself; voice on that page ends, and you can start it again. Each start of `fdc` makes new links, so a page opened from an earlier start's link says so.
 
 The tunnel gives the page the `https://` address a phone needs for its microphone. Voice audio does not use it: it goes directly between the phone and OpenAI, as it does from a desktop browser. Only the page and its voice connection are accepted through the tunnel; Claude's hooks and channel connection are refused unless they come from this computer directly.
 
@@ -244,7 +275,7 @@ Keep the companion page in the foreground on your phone: locking the screen or s
 OpenAI bills the connected voice session, including time spent listening or muted. Claude usage remains on your existing Claude account. Use **End voice** when you are done.
 
 ```sh
-npm run usage
+fdc usage
 ```
 
 The application estimates voice cost at $0.05 per minute and tracks cumulative usage without a local spending cap. Voice stays connected until you end it, close the companion, or the connection ends; there is no local duration limit. Check [OpenAI's model page](https://developers.openai.com/api/docs/models/gpt-live-1) for current service pricing and availability.
@@ -257,15 +288,18 @@ Usage history stays in `.runs/budget.json`. Existing history is preserved; old s
 
 | Problem | What to check |
 | --- | --- |
-| The launcher won't start | Run it in an interactive terminal and run `npm run doctor`. Check Node, Claude sign-in, and `.env`. |
+| The launcher won't start | Run it in an interactive terminal and run `fdc doctor`. Check Node, Claude sign-in, and `.env`. |
+| The agent exits right after it starts | The launcher repeats the agent's own error output (stderr), unchanged, after a red `fdc:` line once the agent has exited, and saves it in the run folder's `events.jsonl` (`agent.exit`). An agent that shows its error on screen instead, as Claude does, leaves it just above that line. |
+| A resumed conversation isn't found | Start `fdc` from a normal terminal, not from inside another Claude Code session: there, Claude starts as that session's child and does not save its conversation. |
 | Start voice stays disabled | Accept any pending channel notice or trust prompt in the Claude terminal. Check whether your organization permits channels. |
 | The companion can't hear you | Allow microphone access in Chrome and macOS. Check the **Microphone** selection beside the voice buttons and whether it is muted. |
 | OpenAI rejects the connection | Check the key, API account billing, and access to `gpt-live-1`. A successful doctor check alone does not verify these. |
 | Claude hooks | Every raw observation, including tool calls/results, file changes, displayed text, and lifecycle hooks, at bridge receipt time. The bounded Live view goes to thinking; originals remain here. |
 | Context to Live | Every actual thinking append and commentary append, from send to acknowledgment. Click for the exact JSON. Acknowledgment does not mean the model has finished using the content. |
 | The companion misses terminal text | Confirm Claude was started through this launcher. If hooks are unavailable, restart the same session with `--resume SESSION_ID --observe transcript`. |
-| A second companion tab cannot connect | Close the first tab, then open the link again. Only one audio client can connect to each launcher. |
-| Voice disconnected | Keep Claude open, reopen the companion link, and click Start voice. Resolve any terminal/channel issue first. |
+| The page says its link is from an earlier start | Each start of `fdc` makes a new link. Open the link it printed this time. |
+| Voice is on in another tab or device | Voice runs in one page at a time. Click **Move voice here** to bring it to this page. |
+| Voice disconnected | The page reconnects by itself; click Start voice again. Resolve any terminal or channel issue first. |
 | An old launcher still reports a budget limit | Exit Claude with `/exit`, restart the launcher, and use the newly opened companion tab. |
 
 Voice closes automatically if microphone streaming stops or the Claude channel remains disconnected. This avoids leaving a paid connection running without a usable companion.
@@ -276,11 +310,25 @@ Voice closes automatically if microphone streaming stops or the Claude channel r
 
 Treat logs and companion links as private. When reporting a problem, share the error and reproduction steps after removing keys, connection tokens, and private project content.
 
+## How the code is organized
+
+The TypeScript sources run directly under Node; the bridge strips the page modules' types when it serves them. `npm run typecheck` checks everything with `tsc`.
+
+- `src/core/` is the part shared by every coding agent: the bridge and its endpoints, the open pages, voice sessions, the mediator, the observation feed, the context queue, the delivery outbox, status and the event log, the timeline, the audio audit, the usage ledger and the command-hook relay.
+- `src/adapters/claude/` is everything specific to Claude Code: its hooks and launch flags (`launch.ts`), how its hooks become observations and turn state (`observer.ts`), the voice channel it is reached through (`delivery.ts`, `channel-server.ts`) and its wording (`profile.ts`).
+- `src/adapters/codex/` is the same for Codex: its app server and hooks (`app-server.ts`), its command (`launch.ts`), hooks and transcript as observations (`observer.ts`), and delivery by `turn/steer` or a new turn (`delivery.ts`). Both adapters read their agent's own arguments (`arguments.ts`).
+- `src/launcher/` holds the launcher's option parsing, Enter prompt and tunnel; `src/cli.ts` runs them.
+- `web/` is the page: audio I/O, page UI, bridge client, WebRTC peer, timeline view, sound cues and the audio worklet.
+
+The core reaches an agent only through the adapter contract in `src/core/adapter.ts`: a `profile` (names, the event that ends a turn, whether assistant text streams during the turn and whether a request can reach a running turn), `launch()`, `observations` in one shared format (kind, text, raw event, time, turn state), `deliver()`, which reports how far a request got, and `history()`. Prompts, context labels, the speaking preferences, the page and the timeline take the agent's names from its profile.
+
+To support another coding agent, start from [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Checking an installation
 
-`npm test` runs offline checks without OpenAI spending. `npm run test:ui` checks the live timeline, hover details, navigation, reload, and real browser audio capture/playback between two local WebRTC peers, with a virtual microphone and no paid API connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session. `npm run test:updates` checks a rapid seven-step Claude task, complete thinking delivery without progress speech cues, and status recall with real voice.
+`npm test` runs offline checks without OpenAI spending. `npm run test:pages` opens companion pages in real Chrome in the orders people use: before the agent is ready, on two devices at once, moving voice between them, after a dropped connection, from an earlier start's link and after the companion stops; `npm run test:pages -- --public` does the same with the second device on a real Cloudflare tunnel. Neither spends API credits. `npm run test:ui` checks the live timeline, hover details, navigation, reload, and real browser audio capture/playback between two local WebRTC peers, with a virtual microphone and no paid API connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session. `npm run test:updates` checks a rapid seven-step Claude task, complete thinking delivery without progress speech cues, and status recall with real voice.
 
-The other integration commands in `package.json` start real Claude and OpenAI voice sessions. They require macOS `say`, `ffmpeg`, and the relevant browser setup; they consume API credits. Ordinary use does not require these test tools.
+`npm run test:codex` runs one real Codex session with real voice: a spoken request steers Codex's running turn, and Codex acts on it in that turn. `npm run test:codex-start` starts real Codex without a first message, then resumes and forks that session; each time a request delivered before anything is typed becomes the session's first message. It uses a little Codex usage and no voice. The other integration commands in `package.json` start real Claude and OpenAI voice sessions. They require macOS `say`, `ffmpeg`, and the relevant browser setup; they consume API credits. Ordinary use does not require these test tools.
 
 ## License
 

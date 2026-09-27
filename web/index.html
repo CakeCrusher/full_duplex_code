@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Full-Duplex Code · Claude Code</title><link rel="stylesheet" href="/style.css"><link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <title>Full-Duplex Code · {{product}}</title><link rel="stylesheet" href="/style.css"><link rel="icon" type="image/svg+xml" href="/icon.svg">
 </head>
-<body>
+<body data-agent="{{profile}}">
   <main>
-    <header><div class="brand">Full-Duplex Code <span>for Claude Code</span></div><span id="connection" role="status">Connecting…</span></header>
-    <section class="intro"><h1>Talk through the work.</h1><p>Talk while Claude works. Watch your voice, its progress, and the companion’s responses unfold together.</p></section>
+    <header><div class="brand">Full-Duplex Code <span>for {{product}}</span></div><span id="connection" role="status">Connecting…</span></header>
+    <section class="intro"><h1>Talk through the work.</h1><p>Talk while {{name}} works. Watch your voice, its progress, and the companion’s responses unfold together.</p></section>
     <section class="controls" aria-label="Voice controls">
       <button id="start" disabled>Start voice</button><button id="mute" disabled aria-pressed="false">Mute microphone</button><button id="stop" disabled>End voice</button>
       <label class="microphone-device" for="microphone-device">Microphone <select id="microphone-device"><option value="">Chrome default</option></select></label>
@@ -18,39 +18,39 @@
     <details id="live-prompt" class="prompt-panel">
       <summary>GPT Live prompt</summary>
       <p id="prompt-state">Waiting for the launcher’s prompt…</p>
-      <p>The base prompt is in <code>src/live.js</code> (<code>BASE_PROMPT</code>). The speaking preference from <code>src/voice-policy.js</code> is appended at startup.</p>
+      <p>The base prompt is in <code>src/core/prompts.ts</code> (<code>basePrompt</code>). The speaking preference from <code>src/core/voice-policy.ts</code> is appended at startup.</p>
       <pre id="prompt-instructions" tabindex="0" aria-label="GPT Live startup instructions"></pre>
       <form id="instruction-form"><label for="instruction-text">Append a system instruction</label><textarea id="instruction-text" rows="3" placeholder="For example: Explain unfamiliar terms in plain English." required></textarea><p>Additional guidance for Live. Applies to this conversation and future voice connections in this companion.</p><button id="instruction-append" type="submit">Append instruction</button><p id="instruction-status" role="status" aria-live="polite"></p></form>
       <div id="instruction-history" aria-label="Additional instructions"></div>
       <details><summary>Selected speaking preference</summary><p>Changing Configurations during voice appends these instructions. Check Context to Live for the exact send and acknowledgment; the startup text above stays unchanged.</p><pre id="prompt-preference" tabindex="0" aria-label="Selected speaking preference instructions"></pre></details>
-      <p>Workspace details and recorded history are supplied separately at startup. Later Claude observations, preference changes, and the one-time welcome appear in Context to Live.</p>
+      <p>Workspace details and recorded history are supplied separately at startup. Later {{name}} observations, preference changes, and the one-time welcome appear in Context to Live.</p>
     </details>
     <p id="notice" role="alert"></p>
-    <section class="workspace"><div><span class="label">Claude Code</span><p id="agentState">Waiting for the terminal session</p></div><div><span class="label">Voice session</span><p id="usage">Not connected · $0.05/min</p></div></section>
+    <section class="workspace"><div><span class="label">{{product}}</span><p id="agentState">Waiting for the terminal session</p></div><div><span class="label">Voice session</span><p id="usage">Not connected · $0.05/min</p></div></section>
     <section class="timeline" aria-labelledby="timeline-title">
       <div class="timeline-heading"><div><div class="eyebrow">ONE CONVERSATION · SIX TRACKS</div><h2 id="timeline-title">The session, in time.</h2></div><div class="timeline-indicator"><span class="live-dot"></span><span id="timeline-mode">Following live</span><time id="timeline-clock">0:00</time></div></div>
-      <p id="context-delivery">Claude observations stay saved while voice is off.</p>
+      <p id="context-delivery">{{name}} observations stay saved while voice is off.</p>
       <div class="timeline-toolbar"><p>Hover to inspect. Click to pin the details.</p><div class="timeline-actions"><label for="timeline-zoom">Window</label><select id="timeline-zoom"><option value="15000">15 seconds</option><option value="30000">30 seconds</option><option value="60000" selected>1 minute</option><option value="180000">3 minutes</option><option value="300000">5 minutes</option></select><button id="timeline-back" aria-label="Earlier in the timeline">←</button><button id="timeline-forward" aria-label="Later in the timeline">→</button><button id="timeline-live" aria-pressed="true">Follow live</button></div></div>
       <div class="gantt-layout">
-        <div class="track-labels" aria-hidden="true"><div class="axis-label">Time elapsed</div><div class="track-label operator-label"><i></i><span>Operator audio<small>After noise gate</small></span></div><div class="track-label speech-label"><i></i><span>Live speech<small>Browser playback</small></span></div><div class="track-label transcript-label"><i></i><span>Transcript<small><b>Input ASR</b> <b>Live</b></small></span></div><div class="track-label claude-label"><i></i><span>Claude hooks<small>All observations</small></span></div><div class="track-label claude-label"><i></i><span>Context to Live<small>Send → acknowledgment</small></span></div><div class="track-label requests-label"><i></i><span>Requests to Claude<small>Voice + terminal</small></span></div></div>
+        <div class="track-labels" aria-hidden="true"><div class="axis-label">Time elapsed</div><div class="track-label operator-label"><i></i><span>Operator audio<small>After noise gate</small></span></div><div class="track-label speech-label"><i></i><span>Live speech<small>Browser playback</small></span></div><div class="track-label transcript-label"><i></i><span>Transcript<small><b>Input ASR</b> <b>Live</b></small></span></div><div class="track-label agent-label"><i></i><span>{{name}} {{eventsWord}}<small>All observations</small></span></div><div class="track-label agent-label"><i></i><span>Context to Live<small>Send → acknowledgment</small></span></div><div class="track-label requests-label"><i></i><span>Requests to {{name}}<small>Voice + terminal</small></span></div></div>
         <div id="timeline-plot" class="timeline-plot" aria-label="Live session Gantt chart">
           <div id="timeline-axis" class="timeline-axis"></div>
           <div class="timeline-lane" data-lane="operator" role="group" aria-label="Operator audio"><span class="lane-empty">Microphone activity appears here</span></div>
           <div class="timeline-lane" data-lane="speech" role="group" aria-label="Live speech"><span class="lane-empty">The companion’s speech appears here</span></div>
           <div class="timeline-lane transcript-lane" data-lane="transcript" role="group" aria-label="Transcript"><span class="lane-empty">API input and output transcripts; input text may be inaccurate</span></div>
-          <div class="timeline-lane" data-lane="claude" role="group" aria-label="Claude hooks"><span class="lane-empty">Every hook appears here, including tools and displayed text</span></div>
+          <div class="timeline-lane" data-lane="agent" role="group" aria-label="{{name}} {{eventsWord}}"><span class="lane-empty">Every {{eventWord}} appears here, including tools and displayed text</span></div>
           <div class="timeline-lane" data-lane="context" role="group" aria-label="Context sent to Live"><span class="lane-empty">Thinking appends and commentary, with delivery timing</span></div>
-          <div class="timeline-lane" data-lane="requests" role="group" aria-label="Requests to Claude"><span class="lane-empty">Requests appear as they reach Claude</span></div>
+          <div class="timeline-lane" data-lane="requests" role="group" aria-label="Requests to {{name}}"><span class="lane-empty">Requests appear as they reach {{name}}</span></div>
           <div id="timeline-now" class="timeline-now" aria-hidden="true"><span>now</span></div>
         </div>
       </div>
       <div class="timeline-navigation"><span id="timeline-range">0:00 – 1:00</span><input id="timeline-scrub" type="range" min="0" max="0" value="0" step="100" aria-label="Browse timeline history"><span>latest</span></div>
-      <p id="timeline-empty" class="timeline-empty">Start voice or type into Claude to begin. Parallel activity will line up vertically.</p>
+      <p id="timeline-empty" class="timeline-empty">Start voice or type into {{name}} to begin. Parallel activity will line up vertically.</p>
       <div class="timeline-key"><span>Bars show time spans.</span><span>Thin markers show instant events.</span><span>Transcript rows: <b class="you-key">input ASR</b> / <b class="live-key">Live</b>.</span></div>
     </section>
-    <section class="timeline-detail" aria-labelledby="detail-title"><div class="detail-heading"><span id="detail-kind" class="eyebrow">Inspect the timeline</span><button id="detail-clear" hidden>Unpin details</button></div><h3 id="detail-title">Hover for a closer look.</h3><p id="detail-time">Click an item to pin it. Keyboard focus and tap work too.</p><div class="message-heading"><span id="detail-message-label" class="eyebrow" hidden></span><button id="detail-copy" hidden>Copy message</button></div><pre id="detail-text">Audio, transcripts, every Claude hook, context delivery, and requests share the same clock.</pre><p id="detail-verification" hidden></p><details id="detail-payload" hidden><summary id="detail-json-label">Channel notification JSON</summary><pre id="detail-json"></pre></details><details id="detail-observed" hidden><summary>Prompt captured by Claude’s UserPromptSubmit hook</summary><pre id="detail-observed-text"></pre></details><p id="detail-source"></p></section>
+    <section class="timeline-detail" aria-labelledby="detail-title"><div class="detail-heading"><span id="detail-kind" class="eyebrow">Inspect the timeline</span><button id="detail-clear" hidden>Unpin details</button></div><h3 id="detail-title">Hover for a closer look.</h3><p id="detail-time">Click an item to pin it. Keyboard focus and tap work too.</p><div class="message-heading"><span id="detail-message-label" class="eyebrow" hidden></span><button id="detail-copy" hidden>Copy message</button></div><pre id="detail-text">Audio, transcripts, every {{name}} {{eventWord}}, context delivery, and requests share the same clock.</pre><p id="detail-verification" hidden></p><details id="detail-payload" hidden><summary id="detail-json-label">{{Wire}} JSON</summary><pre id="detail-json"></pre></details><details id="detail-observed" hidden><summary>Prompt captured by {{name}}’s {{promptEvent}} {{eventWord}}</summary><pre id="detail-observed-text"></pre></details><p id="detail-source"></p></section>
     <footer><span id="project"></span><span id="budget"></span></footer>
-    <p class="hint">Audio and playback are saved locally in this run’s private .runs folder for auditing. The voice is AI-generated. End voice closes the audio connection; Claude remains available in your terminal.</p>
+    <p class="hint">Audio and playback are saved locally in this run’s private .runs folder for auditing. The voice is AI-generated. End voice closes the audio connection; {{name}} remains available in your terminal.</p>
   </main>
   <div id="timeline-tooltip" class="timeline-tooltip" role="tooltip" hidden><strong id="tooltip-title"></strong><p id="tooltip-text"></p><small>Click to pin full details below</small></div>
   <script type="module" src="/app.js"></script>

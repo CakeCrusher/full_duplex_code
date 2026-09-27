@@ -3,22 +3,29 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Talk to Claude Code while it works. A full-duplex voice companion powered by GPT Live 1.",
+  "description": "Talk to your coding agent while it works. A full-duplex voice companion powered by GPT Live 1, starting with Claude Code.",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18"
+  },
+  "bin": {
+    "fdc": "src/cli.ts"
   },
   "scripts": {
-    "start": "node src/cli.js",
-    "test": "node --test test/*.test.js",
-    "doctor": "node src/cli.js doctor",
-    "usage": "node src/cli.js usage",
-    "test:integration": "node scripts/test-integration.mjs",
-    "test:hooks": "node scripts/test-hook-context.mjs",
-    "test:updates": "node scripts/test-selective-updates.mjs",
-    "test:terminal": "node scripts/test-terminal-context.mjs",
-    "test:ui": "node scripts/test-ui-context.mjs",
-    "test:browser": "node scripts/test-browser.mjs",
-    "test:correction": "node scripts/test-correction.mjs"
+    "start": "node src/cli.ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "doctor": "node src/cli.ts doctor",
+    "usage": "node src/cli.ts usage",
+    "test:integration": "node scripts/test-integration.ts",
+    "test:hooks": "node scripts/test-hook-context.ts",
+    "test:updates": "node scripts/test-selective-updates.ts",
+    "test:terminal": "node scripts/test-terminal-context.ts",
+    "test:ui": "node scripts/test-ui-context.ts",
+    "test:browser": "node scripts/test-browser.ts",
+    "test:correction": "node scripts/test-correction.ts",
+    "test:codex": "node scripts/test-codex.ts",
+    "test:codex-start": "node scripts/test-codex-start.ts",
+    "test:pages": "node scripts/test-pages.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -27,8 +34,11 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
+    "@types/node": "^24.19.0",
+    "@types/ws": "^8.18.1",
     "node-pty": "^1.1.0",
-    "playwright": "^1.63.0"
+    "playwright": "^1.63.0",
+    "typescript": "^5.9.3"
   },
   "license": "PolyForm-Noncommercial-1.0.0",
   "repository": {
