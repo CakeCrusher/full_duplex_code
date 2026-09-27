@@ -260,7 +260,9 @@ You can talk to Claude from your phone while it keeps running on your computer. 
 fdc --public claude
 ```
 
-The launcher starts a temporary Cloudflare tunnel, waits until it is ready, and prints a **From your phone** link with a QR code. Scan it with your phone's camera, open it in Chrome or another Chromium browser, and click **Start voice**. Then press Enter in the terminal to start Claude. When Claude ends for any reason, including Ctrl-C at the prompt or closing the terminal, the launcher closes the voice session and stops the tunnel. Without `--public`, nothing is reachable from outside this computer.
+The launcher starts a temporary Cloudflare tunnel, waits until the link actually opens the page, and prints a **From your phone** link with a QR code. (Cloudflare names a new tunnel a few seconds before the name resolves; a device that tried it in that window could be told it does not exist for up to a minute, so the launcher checks with Cloudflare's own nameservers first.) Scan it with your phone's camera, open it in Chrome or another Chromium browser, and click **Start voice**. Then press Enter in the terminal to start Claude. When Claude ends for any reason, including Ctrl-C at the prompt or closing the terminal, the launcher closes the voice session and stops the tunnel. Without `--public`, nothing is reachable from outside this computer.
+
+You can open the page on your computer and on your phone at the same time, in any order, before or after Claude starts. Every open page follows the session, and voice runs in one of them. On another page, **Start voice** becomes **Move voice here**, which ends voice where it was and starts it on that page. A page whose connection drops, for example when the phone sleeps, reconnects by itself; voice on that page ends, and you can start it again. Each start of `fdc` makes new links, so a page opened from an earlier start's link says so.
 
 The tunnel gives the page the `https://` address a phone needs for its microphone. Voice audio does not use it: it goes directly between the phone and OpenAI, as it does from a desktop browser. Only the page and its voice connection are accepted through the tunnel; Claude's hooks and channel connection are refused unless they come from this computer directly.
 
@@ -295,8 +297,9 @@ Usage history stays in `.runs/budget.json`. Existing history is preserved; old s
 | Claude hooks | Every raw observation, including tool calls/results, file changes, displayed text, and lifecycle hooks, at bridge receipt time. The bounded Live view goes to thinking; originals remain here. |
 | Context to Live | Every actual thinking append and commentary append, from send to acknowledgment. Click for the exact JSON. Acknowledgment does not mean the model has finished using the content. |
 | The companion misses terminal text | Confirm Claude was started through this launcher. If hooks are unavailable, restart the same session with `--resume SESSION_ID --observe transcript`. |
-| A second companion tab cannot connect | Close the first tab, then open the link again. Only one audio client can connect to each launcher. |
-| Voice disconnected | Keep Claude open, reopen the companion link, and click Start voice. Resolve any terminal/channel issue first. |
+| The page says its link is from an earlier start | Each start of `fdc` makes a new link. Open the link it printed this time. |
+| Voice is on in another tab or device | Voice runs in one page at a time. Click **Move voice here** to bring it to this page. |
+| Voice disconnected | The page reconnects by itself; click Start voice again. Resolve any terminal or channel issue first. |
 | An old launcher still reports a budget limit | Exit Claude with `/exit`, restart the launcher, and use the newly opened companion tab. |
 
 Voice closes automatically if microphone streaming stops or the Claude channel remains disconnected. This avoids leaving a paid connection running without a usable companion.
@@ -311,7 +314,7 @@ Treat logs and companion links as private. When reporting a problem, share the e
 
 The TypeScript sources run directly under Node; the bridge strips the page modules' types when it serves them. `npm run typecheck` checks everything with `tsc`.
 
-- `src/core/` is the part shared by every coding agent: the bridge and its endpoints, voice sessions, the mediator, the observation feed, the context queue, the delivery outbox, status and the event log, the timeline, the audio audit, the usage ledger and the command-hook relay.
+- `src/core/` is the part shared by every coding agent: the bridge and its endpoints, the open pages, voice sessions, the mediator, the observation feed, the context queue, the delivery outbox, status and the event log, the timeline, the audio audit, the usage ledger and the command-hook relay.
 - `src/adapters/claude/` is everything specific to Claude Code: its hooks and launch flags (`launch.ts`), how its hooks become observations and turn state (`observer.ts`), the voice channel it is reached through (`delivery.ts`, `channel-server.ts`) and its wording (`profile.ts`).
 - `src/adapters/codex/` is the same for Codex: its app server and hooks (`app-server.ts`), its command (`launch.ts`), hooks and transcript as observations (`observer.ts`), and delivery by `turn/steer` or a new turn (`delivery.ts`). Both adapters read their agent's own arguments (`arguments.ts`).
 - `src/launcher/` holds the launcher's option parsing, Enter prompt and tunnel; `src/cli.ts` runs them.
@@ -321,7 +324,7 @@ The core reaches an agent only through the adapter contract in `src/core/adapter
 
 ## Checking an installation
 
-`npm test` runs offline checks without OpenAI spending. `npm run test:ui` checks the live timeline, hover details, navigation, reload, and real browser audio capture/playback between two local WebRTC peers, with a virtual microphone and no paid API connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session. `npm run test:updates` checks a rapid seven-step Claude task, complete thinking delivery without progress speech cues, and status recall with real voice.
+`npm test` runs offline checks without OpenAI spending. `npm run test:pages` opens companion pages in real Chrome in the orders people use: before the agent is ready, on two devices at once, moving voice between them, after a dropped connection, from an earlier start's link and after the companion stops; `npm run test:pages -- --public` does the same with the second device on a real Cloudflare tunnel. Neither spends API credits. `npm run test:ui` checks the live timeline, hover details, navigation, reload, and real browser audio capture/playback between two local WebRTC peers, with a virtual microphone and no paid API connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session. `npm run test:updates` checks a rapid seven-step Claude task, complete thinking delivery without progress speech cues, and status recall with real voice.
 
 `npm run test:codex` runs one real Codex session with real voice: a spoken request steers Codex's running turn, and Codex acts on it in that turn. `npm run test:codex-start` starts real Codex without a first message, then resumes and forks that session; each time a request delivered before anything is typed becomes the session's first message. It uses a little Codex usage and no voice. The other integration commands in `package.json` start real Claude and OpenAI voice sessions. They require macOS `say`, `ffmpeg`, and the relevant browser setup; they consume API credits. Ordinary use does not require these test tools.
 

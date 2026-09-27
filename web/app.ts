@@ -14,6 +14,9 @@ const bridge = new BridgeClient(), audio = new AudioIO(), peer = new WebRtcPeer(
 let active = false, starting = false, muted = false, currentStatus: BridgeEvent | undefined;
 let voiceSessionId: string | null = null;
 let generation = 0;
+// This page's identity on the bridge, and its connection: it reconnects by itself.
+let pageId: string | null = null, connections = 0, attempts = 0, leaving = false, voiceDropped = false;
+let retry: ReturnType<typeof setTimeout> | undefined;
 const cues = new CueTracker(), cuePlayer = new CuePlayer();
 let replaying = false;
 const timeline = new TimelineView();
@@ -22,16 +25,18 @@ function handle(event: BridgeEvent) {
   timeline.handle(event);
   const cue = cues.cue(event, { replaying });
   if (cue) cuePlayer.play(cue);
+  if (event.type === 'page') pageId = event.id;
   if (event.type === 'status') {
     currentStatus = event;
-    showStatus(event, { active, muted, starting });
+    showStatus(event, { active, muted, starting, elsewhere: Boolean(event.voicePage) && event.voicePage !== pageId });
   }
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
   if (event.type === 'history') {
     replaying = true;
     try { for (const item of event.events) handle(item); } finally { replaying = false; }
   }
-  if (event.type === 'fault') { notice(event.message); if (starting && !active) { starting = false; releaseAudio(); } }
+  // After a reconnect, the replayed history is not news.
+  if (event.type === 'fault') { if (!(replaying && connections > 1)) notice(event.message); if (starting && !active) { starting = false; releaseAudio(); } }
   if (event.type === 'voice_answer') peer.answer(event.sdp, message => { notice(message); stop(); });
   if (event.type === 'voice_started') {
     voiceSessionId = event.sessionId;
@@ -41,12 +46,12 @@ function handle(event: BridgeEvent) {
   }
   if (event.type === 'voice_closed') {
     releaseAudio();
-    notice(event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? `Voice session ended. ${profile.name} is still available in your terminal.` : 'Voice connection ended. Final usage was not confirmed; the last reported usage is saved and may be incomplete.');
+    notice(event.moved ? 'Voice moved to another tab or device. Click Move voice here to bring it back.' : event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? `Voice session ended. ${profile.name} is still available in your terminal.` : 'Voice connection ended. Final usage was not confirmed; the last reported usage is saved and may be incomplete.');
   }
 }
 $<HTMLFormElement>('instruction-form').onsubmit = event => {
   event.preventDefault();
-  if (!bridge.open) { $('instruction-status').textContent = 'Reconnect to the companion first.'; return; }
+  if (!bridge.open) { $('instruction-status').textContent = 'Not connected to the companion; try again once it reconnects.'; return; }
   const text = $<HTMLTextAreaElement>('instruction-text').value.trim();
   if (!text) return;
   if (new TextEncoder().encode(text).length > 440) { $('instruction-status').textContent = 'Please shorten this instruction before appending it.'; return; }
@@ -57,11 +62,47 @@ $<HTMLFormElement>('instruction-form').onsubmit = event => {
 watchMicrophones(notice);
 function connect() {
   if (!token) { notice('Open the companion link printed by the launcher in your terminal.'); return; }
+  clearTimeout(retry);
   bridge.connect(token, {
+    onOpen: () => {
+      connections++; attempts = 0;
+      if (voiceDropped) notice('Reconnected. Voice ended when the connection dropped; click Start voice to start it again.');
+      else if (connections > 1) notice('');
+      voiceDropped = false;
+    },
     onEvent: handle,
-    onClose: () => { const cue = cues.end(); if (cue) cuePlayer.play(cue); releaseAudio(); showSpeakingUpdate({ state: 'disconnected' }); $('connection').textContent = 'Disconnected'; $<HTMLButtonElement>('start').disabled = true; notice('The local companion disconnected. Reopen the launcher link to reconnect.'); },
-    onError: () => notice('Unable to connect. Another companion tab may already be open.'),
+    onClose: disconnected,
   });
+}
+function disconnected() {
+  const cue = cues.end(); if (cue) cuePlayer.play(cue);
+  const hadVoice = active || starting;
+  releaseAudio(); pageId = null;
+  showSpeakingUpdate({ state: 'disconnected' });
+  $('connection').textContent = 'Reconnecting…'; $<HTMLButtonElement>('start').disabled = true;
+  if (leaving) return;
+  if (hadVoice) { voiceDropped = true; notice('The connection to the companion dropped, which ended voice. Reconnecting…'); }
+  reconnect();
+}
+// A link from an earlier start is refused for good. Otherwise the companion may
+// be restarting, still coming up, or briefly out of reach: try again, less often.
+async function reconnect() {
+  const reason = await reachability();
+  // Returning to the page may have reconnected it meanwhile.
+  if (bridge.open || bridge.connecting || leaving) return;
+  if (reason === 'refused') {
+    $('connection').textContent = 'Not connected';
+    notice('This link is from an earlier start of the companion. Open the link fdc printed this time.');
+    return;
+  }
+  if (reason === 'unreachable' && attempts >= 2) notice(`Can't reach the companion. It stops when ${profile.name} exits; if it did, start fdc again and open its new link. Retrying…`);
+  retry = setTimeout(() => { if (!bridge.open && !bridge.connecting) connect(); }, Math.min(10000, 500 * 2 ** attempts++));
+}
+async function reachability(): Promise<'reachable' | 'refused' | 'unreachable'> {
+  try {
+    const response = await fetch('/api/status', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store', signal: AbortSignal.timeout(5000) });
+    return response.status === 403 ? 'refused' : response.ok ? 'reachable' : 'unreachable';
+  } catch { return 'unreachable'; }
 }
 // Audit samples and levels measured by the worklet.
 function measured(data: WorkletMessage) {
@@ -137,5 +178,11 @@ $('mute').onclick = () => {
   muted = !muted; audio.mute(muted); bridge.send({ type: 'mute', muted });
   $('mute').textContent = muted ? 'Unmute microphone' : 'Mute microphone'; $('mute').setAttribute('aria-pressed', String(muted)); $('audioState').textContent = muted ? 'Microphone muted' : 'Microphone on';
 };
-addEventListener('pagehide', () => { stop(); bridge.close(); });
+// A connection that has gone quiet is dead even if it looks open, as after a phone sleeps.
+setInterval(() => { if (bridge.open && Date.now() - bridge.lastMessageAt > 6000) { bridge.close(); disconnected(); } }, 2000);
+// Coming back to the page reconnects at once instead of waiting for the next try.
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !bridge.open && !bridge.connecting && !leaving && token) { attempts = 0; connect(); } });
+addEventListener('pagehide', () => { leaving = true; clearTimeout(retry); stop(); bridge.close(); });
+// A page restored from the back/forward cache connects again.
+addEventListener('pageshow', event => { if (event.persisted) { leaving = false; connect(); } });
 connect();

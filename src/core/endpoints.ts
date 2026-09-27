@@ -1,11 +1,12 @@
 import http from 'node:http';
 import type { Duplex } from 'node:stream';
 import { timingSafeEqual } from 'node:crypto';
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocketServer } from 'ws';
 import type { Harness } from './bridge.ts';
 import { MAX_HOOK_BYTES } from './limits.ts';
 import { pageFile } from './page.ts';
-import { attachBrowser } from './browser-socket.ts';
+import { attachPage } from './browser-socket.ts';
+import { Pages } from './pages.ts';
 
 const equal = (a: unknown, b: string) => typeof a === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 async function body(req: http.IncomingMessage, maxBytes = 1024 * 1024) {
@@ -60,11 +61,13 @@ export class Endpoints {
     const { local, allowed } = this.access(req);
     const agentSocket = Object.hasOwn(bridge.adapter.sockets, route) ? bridge.adapter.sockets[route] : undefined;
     const auth = agentSocket ? equal(token, bridge.agentToken) : route === '/voice' && equal(token, bridge.browserToken);
-    const occupied = agentSocket ? !agentSocket.available() : bridge.browser?.readyState === WebSocket.OPEN;
+    // Pages are not exclusive: any number up to the limit, each one watching the session.
+    const occupied = agentSocket ? !agentSocket.available() : bridge.pages.size >= Pages.LIMIT;
     if (!auth || !allowed || (agentSocket && !local) || occupied || bridge.stopping) {
+      if (!agentSocket) bridge.log({ type: 'page.refused', via: local ? 'local' : 'tunnel', reason: !allowed ? 'address or origin' : !auth ? 'token' : bridge.stopping ? 'stopping' : 'too many pages' });
       socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); socket.destroy(); return;
     }
-    this.wss.handleUpgrade(req, socket, head, ws => agentSocket ? agentSocket.attach(ws) : attachBrowser(bridge, ws));
+    this.wss.handleUpgrade(req, socket, head, ws => agentSocket ? agentSocket.attach(ws) : attachPage(bridge, ws, local ? 'local' : 'tunnel'));
   }
   async handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
     const bridge = this.bridge;

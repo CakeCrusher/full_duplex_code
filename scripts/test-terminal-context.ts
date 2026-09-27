@@ -38,7 +38,7 @@ async function ask(name: keyof typeof questions, expected: RegExp[]) {
 async function endVoice(label: string) {
   await voice!.close(); voice = null;
   for (const name of ['voice-events.json', 'output.pcm', 'output.wav']) fs.renameSync(path.join(test!.runDir, name), path.join(test!.runDir, `${label}-${name}`));
-  await until(() => !test!.harness.browser, { label: 'voice socket closed' });
+  await until(() => test!.harness.pages.size === 0, { label: 'voice socket closed' });
 }
 
 try {

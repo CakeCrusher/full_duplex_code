@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import type { OutboxEntry } from './outbox.ts';
+import type { Page } from './pages.ts';
 import { LiveSession } from './live-session.ts';
 import { Mediator } from './mediator.ts';
 import { AudioAudit } from './audio-audit.ts';
@@ -26,6 +27,12 @@ export class VoiceSessions {
   additionalInstructions: Instruction[] = [];
   lastAudioAt = 0;
   audioWatchdog?: NodeJS.Timeout;
+  /** The page the current voice session belongs to: its events go there, and its microphone is the one heard. */
+  page?: Page;
+  /** Sessions that ended because another page started voice, and one being ended now. */
+  moved = new WeakSet<LiveSession>(); moving = false;
+  /** Opens each voice connection; tests replace it. */
+  createLive = (options: ConstructorParameters<typeof LiveSession>[0]) => new LiveSession(options);
   constructor(bridge: Harness) {
     this.bridge = bridge;
     this.speakingUpdate = { state: 'next_session', level: this.speakingLevel };
@@ -85,10 +92,19 @@ export class VoiceSessions {
     }
     publish(this.bridge.status());
   }
-  async start(sdp?: unknown) {
+  async start(sdp?: unknown, page?: Page) {
     const bridge = this.bridge, { agent, observer, log, publish, fault, clean } = bridge, { name } = agent.profile;
     if (sdp !== undefined && (typeof sdp !== 'string' || !sdp.trim() || Buffer.byteLength(sdp) > 65536)) throw new Error('Invalid voice connection offer.');
-    if (this.live && this.live.state !== 'closed') return;
+    const running = this.live && this.live.state !== 'closed' ? this.live : undefined;
+    if (running) {
+      // Start on another page moves voice there. A repeated start, or one while
+      // voice is still connecting, closing or already moving, changes nothing.
+      if (!page || page === this.page || running.state !== 'active' || this.moving) return;
+      log({ type: 'voice.moved', from: this.page?.id, to: page.id });
+      this.moved.add(running); this.moving = true;
+      try { await running.close('voice moved to another page'); } finally { this.moving = false; }
+      if (this.live !== running) return;
+    }
     if (!bridge.agentReady) throw new Error(`Wait for the voice ${agent.profile.transport} to connect in the ${name} terminal.`);
     if (observer.state === 'exited') throw new Error(`The ${name} session has exited.`);
     const startup = attachment(agent, bridge.cwd, observer.state);
@@ -97,16 +113,16 @@ export class VoiceSessions {
     if (history.text) input.push({ type: 'message', role: 'user', content: [{ type: 'input_text', text: historyIntro(agent) + history.text }] });
     const startupLevel = this.speakingLevel;
     const startupInstructions = [...this.additionalInstructions];
-    const live: LiveSession = new LiveSession({ apiKey: bridge.apiKey, budget: bridge.ledger, voice: bridge.voice, instructions: this.instructions(), label: `${name} ${bridge.sessionId ?? 'session'}`, input, log: event => log({ liveRun: live.reservation, ...event }) });
+    const live: LiveSession = this.createLive({ apiKey: bridge.apiKey, budget: bridge.ledger, voice: bridge.voice, instructions: this.instructions(), label: `${name} ${bridge.sessionId ?? 'session'}`, input, log: event => log({ liveRun: live.reservation, ...event }) });
     let preferenceReady: Promise<void> | undefined;
     this.speakingUpdate = { state: 'starting', level: startupLevel };
     this.audit?.close(); this.audit = null;
-    this.live = live;
+    this.live = live; this.page = page;
     this.mediator?.stop();
     this.mediator = new Mediator({ live, observer, agent, speakingLevel: startupLevel, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean });
     publish(bridge.status());
-    live.on('fault', error => fault(error));
-    live.on('answer', sdp => publish({ type: 'voice_answer', sdp }));
+    live.on('fault', error => fault(error, page));
+    live.on('answer', sdp => publish({ type: 'voice_answer', sdp }, page));
     live.on('sent', event => {
       if (/^session\.(thinking|commentary|instructions)\.append$/.test(event.type)) publish({ type: 'context_sent', id: event.event_id, kind: event.type.split('.')[1], text: event.content, notification: event });
     });
@@ -115,7 +131,7 @@ export class VoiceSessions {
         const pcm = Buffer.from(event.delta, 'base64');
         this.audit?.write('output', pcm, { startMs: event.start_ms, endMs: event.end_ms });
         if (live.transport === 'webrtc') return; // The browser plays the negotiated media track.
-        const browser = bridge.browser;
+        const browser = page?.ws;
         if (browser?.readyState !== WebSocket.OPEN) return;
         if (browser.bufferedAmount > 1024 * 1024) return live.close('Audio playback connection too slow');
         browser.send(pcm);
@@ -130,11 +146,16 @@ export class VoiceSessions {
         this.speakingUpdate = { state: 'acknowledged', level: startupLevel, confirmedLevel: startupLevel, sessionId: live.id, acknowledgedAt: Date.now(), source: 'startup' };
         if (this.speakingLevel !== startupLevel) preferenceReady = this.setSpeakingLevel(this.speakingLevel);
         this.audit = new AudioAudit({ dir: path.join(bridge.runDir, 'audio', live.reservation!), log: event => log({ liveRun: live.reservation, ...event }), onError: error => fault(error) });
-        publish({ type: 'voice_started', sessionId: live.id });
+        publish({ type: 'voice_started', sessionId: live.id }, page);
         publish(bridge.status());
       }
     });
-    live.on('closed', result => { clearInterval(this.audioWatchdog); this.mediator?.stop(); publish({ type: 'voice_closed', ...result }); publish(bridge.status()); bridge.saveTimeline(); });
+    live.on('closed', result => {
+      clearInterval(this.audioWatchdog); this.mediator?.stop();
+      publish({ type: 'voice_closed', ...result, moved: this.moved.has(live) || undefined }, page);
+      if (this.live === live) this.page = undefined;
+      publish(bridge.status()); bridge.saveTimeline();
+    });
     this.lastAudioAt = Date.now();
     await live.start(sdp as string | undefined);
     this.audioWatchdog = setInterval(() => { if (Date.now() - this.lastAudioAt > 5000) live.close('Microphone audio stream stopped'); }, 1000);

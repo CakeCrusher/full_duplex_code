@@ -125,10 +125,9 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
   if (values.public) {
     // The agent takes over the terminal next, so wait here until the address works.
     console.log('\nStarting a Cloudflare tunnel for --public…');
-    try { tunnel = await startTunnel({ port: new URL(harness.baseUrl).port, log: line => harness.log({ type: 'tunnel.log', line }) }); }
+    try { tunnel = await startTunnel({ port: new URL(harness.baseUrl).port, log: line => harness.log({ type: 'tunnel.log', line }), onAddress: url => harness.setPublicUrl(url) }); }
     catch (error) { console.error(loud(`fdc: ${(error as Error).message}`)); await exit('tunnel failed', 1); }
     const { url, child: tunnelProcess } = tunnel!;
-    harness.setPublicUrl(url);
     harness.log({ type: 'tunnel.started', url });
     tunnelProcess.on('exit', code => { if (!stopping) harness.fault(new Error(`The Cloudflare tunnel stopped (${code}); the phone link no longer works.`)); });
     console.log(`\nFrom your phone: ${harness.publicBrowserUrl}\nScan with your phone's camera:`);

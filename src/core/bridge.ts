@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import type { WebSocket } from 'ws';
 import type { AgentAdapter, AgentDefinition, AgentLaunch, VoiceRequest } from './adapter.ts';
 import type { AgentObserver } from './agent-observer.ts';
 import { redact } from './redact.ts';
@@ -11,6 +10,7 @@ import { StatusLog, statusSnapshot, type BridgeEvent } from './status.ts';
 import { Outbox } from './outbox.ts';
 import { VoiceSessions, type SpeakingUpdate } from './voice-sessions.ts';
 import { Endpoints } from './endpoints.ts';
+import { Pages, type Page } from './pages.ts';
 
 export interface HarnessOptions {
   /** The coding agent, from src/adapters. */
@@ -35,10 +35,11 @@ export class Harness {
   publicOrigin: string | null = null; publicBrowserUrl: string | null = null;
   baseUrl = ''; browserUrl = ''; portFellBack = false;
   agentReady = false; stopping = false;
-  browser: WebSocket | null = null;
+  /** Every open companion page. */
+  pages: Pages;
   agentLaunch?: AgentLaunch;
   clean: (text: unknown) => string;
-  statusLog: StatusLog; log: (event: BridgeEvent) => void; publish: (event: BridgeEvent) => void; fault: (error: Error) => void;
+  statusLog: StatusLog; log: (event: BridgeEvent) => void; publish: (event: BridgeEvent, page?: Page) => void; fault: (error: Error, page?: Page) => void;
   ledger: UsageLedger; timeline: Timeline; outbox: Outbox; voiceSessions: VoiceSessions; endpoints: Endpoints;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
   constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [] }: HarnessOptions) {
@@ -48,7 +49,8 @@ export class Harness {
     if (publicUrl) this.setPublicUrl(publicUrl);
     this.clean = text => redact(text, [apiKey, this.browserToken, this.agentToken]);
     this.timeline = new Timeline(undefined, agent);
-    this.statusLog = new StatusLog({ runDir, clean: this.clean, timeline: this.timeline, browser: () => this.browser });
+    this.pages = new Pages({ log: event => this.log(event) });
+    this.statusLog = new StatusLog({ runDir, clean: this.clean, timeline: this.timeline, pages: this.pages });
     this.log = this.statusLog.log; this.publish = this.statusLog.publish; this.fault = this.statusLog.fault;
     this.ledger = new UsageLedger(path.join(root, '.runs', 'budget.json'));
     this.voiceSessions = new VoiceSessions(this);
@@ -96,7 +98,7 @@ export class Harness {
   instructions() { return this.voiceSessions.instructions(); }
   appendInstruction(text: unknown) { return this.voiceSessions.appendInstruction(text); }
   setSpeakingLevel(level: unknown) { return this.voiceSessions.setSpeakingLevel(level); }
-  startLive(sdp?: unknown) { return this.voiceSessions.start(sdp); }
+  startLive(sdp?: unknown, page?: Page) { return this.voiceSessions.start(sdp, page); }
   deliver(request: VoiceRequest) { this.outbox.add(request); }
   async start() {
     const port = await this.endpoints.listen(this.port, this.portFallback);
@@ -120,6 +122,7 @@ export class Harness {
     if (this.live) await this.live.close('harness stopped');
     this.mediator?.stop();
     this.audit?.close(); this.saveTimeline();
+    this.pages.close();
     await this.endpoints.close();
     await agentClosed;
   }

@@ -290,6 +290,7 @@ test('receiver diagnostics retain concealment over time and reject stale voice s
   const ws = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/voice', { headers: { Authorization: `Bearer ${h.browserToken}` } });
   t.after(() => ws.terminate());
   await new Promise(resolve => ws.on('open', resolve));
+  h.voiceSessions.page = [...h.pages.all.values()][0]; // The voice session belongs to this page.
   const send = async (voiceSessionId: string, stats: Record<string, unknown>) => {
     ws.send(JSON.stringify({ type: 'audio_transport', at: Date.now(), voiceSessionId, stats }));
     await new Promise(resolve => { ws.once('pong', resolve); ws.ping(); });

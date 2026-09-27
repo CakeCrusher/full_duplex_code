@@ -144,7 +144,8 @@ try {
   const other = await browser.newPage();
   await other.goto(harness.baseUrl + '/');
   await other.exposeFunction('measureInput', (rms: number) => inputFrames.push(rms));
-  harness.startLive = async (sdp: any) => {
+  harness.startLive = async (sdp: any, page?: any) => {
+    harness.voiceSessions.page = page; // As the real start does: this page runs voice.
     harness.audit = new AudioAudit({ dir: path.join(dir,'audio'), log:harness.log, onError:error=>errors.push(error.message) });
     harness.live = { instructions:liveInstructions(claude, harness.speakingLevel), append:(kind: string,text: string)=>{probe.preference={kind,text};return new Promise<void>(resolve=>{probe.ack=resolve;});}, id: 'offline-audio', state: 'active', usageSeconds: 0, audio: () => { throw new Error('Browser sent microphone through the control socket'); }, close: async () => {
       harness.live!.state = 'closed'; publish({ type: 'voice_closed', finalized: true }); publish(harness.status());

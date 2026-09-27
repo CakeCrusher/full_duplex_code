@@ -33,7 +33,7 @@ export function showSpeakingUpdate(update: { state: string; level?: number; conf
 }
 
 // The bridge's status, sent every second and on change.
-export function showStatus(event: BridgeEvent, voice: { active: boolean; muted: boolean; starting: boolean }) {
+export function showStatus(event: BridgeEvent, voice: { active: boolean; muted: boolean; starting: boolean; elsewhere: boolean }) {
   if (event.prompt) {
     const texts: Record<string, string> = {
       'prompt-state': ({ preview: 'Next voice session · startup preview', session: 'Current voice session · startup instructions', previous: 'Last voice session · startup instructions' } as Record<string, string>)[event.prompt.mode],
@@ -65,9 +65,12 @@ export function showStatus(event: BridgeEvent, voice: { active: boolean; muted: 
     : delivery.observationsWaiting ? `${delivery.observationsWaiting} ${profile.eventsWord} being combined · oldest ${(delivery.oldestObservationMs / 1000).toFixed(1)}s · estimated API backlog ${delivery.estimatedBacklogSeconds.toFixed(1)}s. Full observations remain saved.`
     : delivery.waiting ? `${delivery.waiting} context fragments waiting · sending in order, including during speech. All observations remain saved.`
     : delivery.inFlight ? `All context sent · ${delivery.inFlight} fragment${delivery.inFlight === 1 ? '' : 's'} awaiting Live’s acknowledgment.` : 'No context waiting to be sent.';
-  $('connection').textContent = voice.active ? voice.muted ? 'Microphone muted' : 'Listening' : event.agentReady ? 'Agent connected' : `Waiting for ${name}`;
+  $('connection').textContent = voice.active ? voice.muted ? 'Microphone muted' : 'Listening' : voice.elsewhere ? 'Voice is on in another tab or device' : event.agentReady ? 'Agent connected' : `Waiting for ${name}`;
   $('agentState').textContent = ({ starting: 'Starting in your terminal', idle: 'Ready for your next request', working: 'Working', needs_attention: 'Needs your attention in the terminal', failed: 'Reported an error', exited: 'Session ended' } as Record<string, string>)[event.agent] ?? event.agent;
-  $<HTMLButtonElement>('start').disabled = voice.starting || voice.active || !event.agentReady || ['connecting', 'active', 'closing'].includes(event.live) || event.agent === 'exited';
+  // Voice running in another page can be moved here; one still connecting or closing cannot.
+  const movable = voice.elsewhere && event.live === 'active';
+  $<HTMLButtonElement>('start').disabled = voice.starting || voice.active || !event.agentReady || ['connecting', 'closing'].includes(event.live) || (event.live === 'active' && !movable) || event.agent === 'exited';
+  $('start').textContent = movable ? 'Move voice here' : 'Start voice';
   $('project').textContent = event.cwd;
   $('usage').textContent = voice.active ? `${Math.floor(event.usageSeconds / 60)}m ${event.usageSeconds % 60}s · $${(event.usageSeconds * 0.05 / 60).toFixed(3)}` : 'Not connected · $0.05/min';
   $('budget').textContent = `Estimated total $${event.committedUsd.toFixed(2)} · includes unfinished sessions`;

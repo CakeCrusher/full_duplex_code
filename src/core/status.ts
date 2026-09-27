@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { WebSocket } from 'ws';
 import type { Timeline } from './timeline.ts';
+import type { Page, Pages } from './pages.ts';
 import type { Harness } from './bridge.ts';
 import { speakingPolicy } from './voice-policy.ts';
 
@@ -9,23 +9,23 @@ export type BridgeEvent = Record<string, any>;
 // Events the page replays after a reload.
 const HISTORY_TYPES = ['caption', 'task', 'fault', 'agent_input', 'agent_text'];
 
-// The run's event log and the stream of updates to the page.
+// The run's event log and the stream of updates to the pages.
 export class StatusLog {
-  runDir: string; clean: (text: string) => string; timeline: Timeline;
-  browser: () => WebSocket | null | undefined;
+  runDir: string; clean: (text: string) => string; timeline: Timeline; pages: Pages;
   uiEvents: BridgeEvent[] = [];
-  constructor({ runDir, clean, timeline, browser }: { runDir: string; clean: (text: string) => string; timeline: Timeline; browser: () => WebSocket | null | undefined }) {
-    this.runDir = runDir; this.clean = clean; this.timeline = timeline; this.browser = browser;
+  constructor({ runDir, clean, timeline, pages }: { runDir: string; clean: (text: string) => string; timeline: Timeline; pages: Pages }) {
+    this.runDir = runDir; this.clean = clean; this.timeline = timeline; this.pages = pages;
   }
   log = (event: BridgeEvent) => fs.appendFileSync(path.join(this.runDir, 'events.jsonl'), this.clean(JSON.stringify({ at: Date.now(), ...event })) + '\n', { mode: 0o600 });
-  publish = (event: BridgeEvent) => {
+  /** Sends an event to every page, or only to the page it concerns; the timeline is every page's. */
+  publish = (event: BridgeEvent, page?: Page) => {
     event = { at: Date.now(), ...event };
-    const items = this.timeline.add(event), browser = this.browser();
-    if (items.length && browser?.readyState === WebSocket.OPEN) browser.send(JSON.stringify({ type: 'timeline_update', items }));
+    const items = this.timeline.add(event);
+    if (items.length) this.pages.broadcast({ type: 'timeline_update', items });
     if (HISTORY_TYPES.includes(event.type)) { this.uiEvents.push(event); if (this.uiEvents.length > 600) this.uiEvents.shift(); }
-    if (browser?.readyState === WebSocket.OPEN) browser.send(JSON.stringify(event));
+    if (page) this.pages.send(page, event); else this.pages.broadcast(event);
   };
-  fault = (error: Error) => { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: this.clean(error.message) }); };
+  fault = (error: Error, page?: Page) => { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: this.clean(error.message) }, page); };
   saveTimeline() { fs.writeFileSync(path.join(this.runDir, 'timeline.json'), this.clean(JSON.stringify(this.timeline.snapshot())), { mode: 0o600 }); }
 }
 
@@ -49,5 +49,7 @@ export function statusSnapshot(bridge: Harness) {
     oldestObservationMs: feed?.pending.length ? Date.now() - feed.pending[0].receivedAt : 0,
     pendingEstimatedTokens: context?.inFlightTokens ?? 0,
     estimatedBacklogSeconds: context ? context.inFlightTokens / context.tokensPerSecond : 0 };
-  return { type: 'status', agent: observer.state, agentReady: Boolean(bridge.agentReady), live: live?.state ?? 'disconnected', cwd: bridge.cwd, sessionId: bridge.sessionId, usageSeconds: live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: bridge.runDir, observation: bridge.observation, speakingLevel: voice.speakingLevel, speakingUpdate, prompt, contextDelivery };
+  // The page running voice, so that the others can offer to move it.
+  const voicePage = live && live.state !== 'closed' ? voice.page?.id ?? null : null;
+  return { type: 'status', agent: observer.state, agentReady: Boolean(bridge.agentReady), live: live?.state ?? 'disconnected', voicePage, pages: bridge.pages.size, cwd: bridge.cwd, sessionId: bridge.sessionId, usageSeconds: live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: bridge.runDir, observation: bridge.observation, speakingLevel: voice.speakingLevel, speakingUpdate, prompt, contextDelivery };
 }
