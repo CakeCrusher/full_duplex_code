@@ -322,6 +322,8 @@ The TypeScript sources run directly under Node; the bridge strips the page modul
 
 The core reaches an agent only through the adapter contract in `src/core/adapter.ts`: a `profile` (names, the event that ends a turn, whether assistant text streams during the turn and whether a request can reach a running turn), `launch()`, `observations` in one shared format (kind, text, raw event, time, turn state), `deliver()`, which reports how far a request got, and `history()`. Prompts, context labels, the speaking preferences, the page and the timeline take the agent's names from its profile.
 
+To support another coding agent, start from [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Checking an installation
 
 `npm test` runs offline checks without OpenAI spending. `npm run test:pages` opens companion pages in real Chrome in the orders people use: before the agent is ready, on two devices at once, moving voice between them, after a dropped connection, from an earlier start's link and after the companion stops; `npm run test:pages -- --public` does the same with the second device on a real Cloudflare tunnel. Neither spends API credits. `npm run test:ui` checks the live timeline, hover details, navigation, reload, and real browser audio capture/playback between two local WebRTC peers, with a virtual microphone and no paid API connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session. `npm run test:updates` checks a rapid seven-step Claude task, complete thinking delivery without progress speech cues, and status recall with real voice.
