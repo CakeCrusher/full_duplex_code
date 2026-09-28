@@ -106,3 +106,25 @@ test('without a session ID, the first hook names the session and later foreign h
   assert.equal(observer.hook({ session_id: 'other', hook_event_name: 'UserPromptSubmit', prompt: 'x' }), false);
   assert.deepEqual(named, ['picked']); assert.equal(observer.sessionId, 'picked'); assert.equal(observer.state, 'idle');
 });
+
+test('a SessionStart for another session moves to it, as when a resume completes after a provisional ID', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-switch-')), resumed = path.join(dir, 'resumed.jsonl');
+  const log: any[] = [];
+  const observer = new ClaudeObserver({ log: event => log.push(event) });
+  t.after(() => { observer.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  fs.writeFileSync(resumed, [
+    { type: 'user', sessionId: 'resumed', uuid: 'u1', message: { role: 'user', content: 'Plan the launch' } },
+    { type: 'assistant', sessionId: 'resumed', message: { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'Here is the plan.' }] } },
+  ].map(record => JSON.stringify(record)).join('\n') + '\n');
+  const named: string[] = []; observer.on('session', id => named.push(id));
+  // Claude loads its instructions under a provisional ID, then resumes the picked session.
+  observer.hook({ session_id: 'provisional', hook_event_name: 'InstructionsLoaded', transcript_path: path.join(dir, 'provisional.jsonl') });
+  observer.hook({ session_id: 'resumed', hook_event_name: 'SessionStart', source: 'resume', transcript_path: resumed });
+  assert.deepEqual(named, ['provisional', 'resumed']); assert.equal(observer.sessionId, 'resumed');
+  assert.deepEqual(JSON.parse(observer.conversationContext()), [{ role: 'input', text: 'Plan the launch' }, { role: 'output', text: 'Here is the plan.' }], 'the resumed conversation is history');
+  assert.equal(observer.hook({ session_id: 'resumed', hook_event_name: 'UserPromptSubmit', prompt: 'Continue' }), true);
+  assert.equal(observer.hook({ session_id: 'provisional', hook_event_name: 'Stop' }), false, 'the provisional session is left behind');
+  assert.equal(observer.hook({ session_id: 'resumed', agent_id: 'child', hook_event_name: 'SessionStart' }), true);
+  assert.equal(observer.hook({ session_id: 'other', agent_id: 'child', hook_event_name: 'SessionStart' }), false, 'a subagent never moves the session');
+  assert.deepEqual(log.filter(e => e.type === 'agent.hook_refused').map(e => [e.name, e.session_id, e.sessionId]), [['Stop', 'provisional', 'resumed'], ['SessionStart', 'other', 'resumed']]);
+});

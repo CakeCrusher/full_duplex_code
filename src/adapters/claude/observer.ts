@@ -93,12 +93,20 @@ export class ClaudeObserver extends AgentObserver {
     }
   }
   override hook(event: Record<string, any>): boolean {
-    // Resuming by picker, --continue or a fork: Claude chooses the ID. Only this
-    // Claude process runs the run's hooks, so its first event names the session.
-    if (this.sessionId === undefined && typeof event.session_id === 'string' && event.session_id) {
-      this.sessionId = event.session_id; this.log({ type: 'agent.session', sessionId: this.sessionId }); this.emit('session', this.sessionId);
+    // Resuming by picker, --continue or a fork: Claude chooses the ID, and may
+    // fire a hook under a provisional one before the resume completes. Only this
+    // Claude process runs the run's hooks, so its first event names the session,
+    // and a SessionStart for another session (the resume completing, /resume,
+    // /clear) moves to that one.
+    const id = typeof event.session_id === 'string' && event.session_id ? event.session_id : undefined;
+    if (id && (this.sessionId === undefined || (event.hook_event_name === 'SessionStart' && !event.agent_id && id !== this.sessionId))) {
+      const previous = this.sessionId;
+      this.sessionId = id; this.log({ type: 'agent.session', sessionId: id, previous }); this.emit('session', id);
     }
-    if (event.session_id !== this.sessionId) return false;
+    if (event.session_id !== this.sessionId) {
+      this.log({ type: 'agent.hook_refused', name: event.hook_event_name, session_id: event.session_id, sessionId: this.sessionId });
+      return false;
+    }
     event = JSON.parse(this.clean(JSON.stringify(event)));
     const name = event.hook_event_name;
     if (name === 'MessageDisplay') {
