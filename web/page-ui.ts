@@ -70,6 +70,7 @@ export function showStatus(event: BridgeEvent, voice: { active: boolean; muted: 
   }
   if (document.activeElement !== $('speaking-level')) showSpeaking(event.speakingLevel ?? 1);
   showSpeakingUpdate(event.speakingUpdate ?? { state: 'next_session', level: event.speakingLevel ?? 1 });
+  $<HTMLInputElement>('confirm-deliveries').checked = event.confirmDeliveries !== false;
   const delivery = event.contextDelivery ?? { waiting: 0, inFlight: 0 };
   $('context-delivery').textContent = event.live !== 'active' ? `${name} observations stay saved while voice is off.`
     : delivery.observationsWaiting ? `${delivery.observationsWaiting} ${profile.eventsWord} being combined · oldest ${(delivery.oldestObservationMs / 1000).toFixed(1)}s · estimated API backlog ${delivery.estimatedBacklogSeconds.toFixed(1)}s. Full observations remain saved.`

@@ -161,6 +161,28 @@ test('spoken delivery confirmation follows channel success once, independently o
   assert.ok(h.uiEvents.some(e => e.type === 'fault' && /request was sent.*voice confirmation failed/i.test(e.message)));
 });
 
+test('the operator can turn the spoken delivery confirmation off and on from the page', async t => {
+  const h = await fixture(t), appends: { kind: string; content: string }[] = [];
+  h.live = { id: 'voice-one', state: 'active', append: async (kind: string, content: string) => appends.push({ kind, content }), close: async () => { h.live!.state = 'closed'; } } as any;
+  const page = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/voice', { headers: { Authorization: `Bearer ${h.browserToken}` } });
+  const channel = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/channel', { headers: { Authorization: `Bearer ${h.agentToken}` } });
+  t.after(() => { page.terminate(); channel.terminate(); });
+  await Promise.all([page, channel].map(ws => new Promise(resolve => ws.on('open', resolve))));
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+  channel.send(JSON.stringify({ type: 'channel.ready' }));
+  assert.equal(h.status().confirmDeliveries, true, 'on by default');
+  page.send(JSON.stringify({ type: 'confirm_deliveries', on: false })); await settle();
+  assert.equal(h.status().confirmDeliveries, false);
+  h.deliver({ id: 'quiet', content: 'Present.', voiceSessionId: 'voice-one' });
+  channel.send(JSON.stringify({ type: 'channel.sent', id: 'quiet' })); await settle();
+  assert.equal(h.outbox.get('quiet')!.state, 'sent');
+  assert.equal(appends.length, 0, 'a delivery is not announced while confirmation is off');
+  page.send(JSON.stringify({ type: 'confirm_deliveries', on: true })); await settle();
+  h.deliver({ id: 'loud', content: 'Build.', voiceSessionId: 'voice-one' });
+  channel.send(JSON.stringify({ type: 'channel.sent', id: 'loud' })); await settle();
+  assert.deepEqual(appends.map(a => a.content), ['Your request has been sent to Claude Code.']);
+});
+
 test('the actual command hook relays a typed prompt into observer history and browser activity', async t => {
   const h = await fixture(t);
   const child = spawn(process.execPath, [fileURLToPath(new URL('../src/core/hook-relay.ts', import.meta.url)), h.baseUrl + '/hook'], {

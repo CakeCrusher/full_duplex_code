@@ -25,6 +25,8 @@ export class VoiceSessions {
   speakingLevel = DEFAULT_SPEAKING_LEVEL;
   speakingUpdate: SpeakingUpdate;
   additionalInstructions: Instruction[] = [];
+  /** Speak a fixed line when a request reaches the agent. The operator can turn it off, e.g. while presenting. */
+  confirmDeliveries = true;
   lastAudioAt = 0;
   audioWatchdog?: NodeJS.Timeout;
   /** The page the current voice session belongs to: its events go there, and its microphone is the one heard. */
@@ -162,9 +164,13 @@ export class VoiceSessions {
     await preferenceReady;
     if (this.speakingLevel !== 0 && live.state === 'active') await live.greet(greeting(agent));
   }
+  setConfirmDeliveries(on: unknown) {
+    this.confirmDeliveries = on !== false;
+    this.bridge.log({ type: 'voice.confirm_deliveries', on: this.confirmDeliveries }); this.bridge.publish(this.bridge.status());
+  }
   confirmDelivery(task: OutboxEntry) {
     const live = this.live;
-    if (task.confirmationSent || !task.voiceSessionId || live?.state !== 'active' || task.voiceSessionId !== live.id) return;
+    if (!this.confirmDeliveries || task.confirmationSent || !task.voiceSessionId || live?.state !== 'active' || task.voiceSessionId !== live.id) return;
     task.confirmationSent = true;
     // Delivery is an operator-facing fact, independent of the observation
     // backlog. The adapter confirms its own write; this does not claim that the

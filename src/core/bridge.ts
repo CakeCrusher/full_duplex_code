@@ -98,6 +98,7 @@ export class Harness {
   instructions() { return this.voiceSessions.instructions(); }
   appendInstruction(text: unknown) { return this.voiceSessions.appendInstruction(text); }
   setSpeakingLevel(level: unknown) { return this.voiceSessions.setSpeakingLevel(level); }
+  setConfirmDeliveries(on: unknown) { this.voiceSessions.setConfirmDeliveries(on); }
   startLive(sdp?: unknown, page?: Page) { return this.voiceSessions.start(sdp, page); }
   deliver(request: VoiceRequest) { this.outbox.add(request); }
   async start() {

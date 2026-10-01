@@ -34,6 +34,7 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
       const event = JSON.parse(raw.toString());
       if (event.type === 'start') bridge.startLive(event.sdp, page).catch(error => bridge.fault(error, page));
       if (event.type === 'speaking_level') bridge.setSpeakingLevel(event.level).catch(error => bridge.fault(error));
+      if (event.type === 'confirm_deliveries') bridge.setConfirmDeliveries(event.on);
       if (event.type === 'append_instruction') bridge.appendInstruction(event.text).catch(error => bridge.fault(error));
       // Only pages that held a microphone send this, after their voice ended.
       if (event.type === 'audio_stopped') { bridge.log({ type: 'audio_stopped', liveRun: bridge.live?.reservation, page: page.id }); bridge.publish({ type: 'audio_stopped' }); bridge.saveTimeline(); }
