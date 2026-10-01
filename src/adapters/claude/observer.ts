@@ -7,6 +7,7 @@ import { observation as makeObservation } from '../../core/observation.ts';
 import { TranscriptTail } from '../../core/transcript-tail.ts';
 import { claudeProfile } from './profile.ts';
 import { claudeContext } from './context.ts';
+import { receivedRequest } from './channel-message.ts';
 
 // What each hook is, in the core's terms. Other hooks are ordinary events.
 const KINDS = new Map<string, ObservationKind>([
@@ -45,7 +46,7 @@ export class ClaudeObserver extends AgentObserver {
   turn: TurnState = 'unknown';
   transcriptPath?: string; tail?: TranscriptTail; stopTimer?: NodeJS.Timeout;
   constructor({ sessionId, observation = 'hooks', clean = String, log = () => {} }: { sessionId?: string; observation?: string; clean?: (text: string) => string; log?: Logger }) {
-    super({ agent: { profile: claudeProfile, context: claudeContext }, clean, log });
+    super({ agent: { profile: claudeProfile, context: claudeContext, receivedRequest }, clean, log });
     this.sessionId = sessionId; this.observation = observation;
   }
   observe(data: Record<string, any>, emit = true) {

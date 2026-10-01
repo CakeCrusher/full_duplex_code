@@ -6,6 +6,7 @@ import { observation as makeObservation } from '../../core/observation.ts';
 import { TranscriptTail } from '../../core/transcript-tail.ts';
 import { codexProfile } from './profile.ts';
 import { codexContext } from './context.ts';
+import { receivedRequest } from './delivery.ts';
 
 // What each Codex hook is, in the core's terms. Other hooks are ordinary events.
 const KINDS = new Map<string, ObservationKind>([
@@ -58,7 +59,7 @@ export class CodexObserver extends AgentObserver {
   // The last final message that a Stop hook carried in full.
   finalInStop?: string;
   constructor({ sessionId, clean = String, log = () => {} }: { sessionId?: string; clean?: (text: string) => string; log?: Logger }) {
-    super({ agent: { profile: codexProfile, context: codexContext }, clean, log });
+    super({ agent: { profile: codexProfile, context: codexContext, receivedRequest }, clean, log });
     this.sessionId = sessionId;
   }
   observe(data: Record<string, any>, emit = true) {

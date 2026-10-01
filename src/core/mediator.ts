@@ -38,16 +38,12 @@ export class Mediator {
       live.close(`${this.agent.profile.name} context delivery failed`);
     }, this.agent);
     this.context.setSpeakingLevel(speakingLevel);
+    // Earlier work reaches Live only through the bounded startup history; the feed
+    // sends only observations that arrive from now on.
     this.feed = new ObservationFeed(this.context, log, { agent: this.agent, coalesceMs });
-    // Earlier work reaches Live only through the bounded startup history.
-    // Track its turn state here, but send only observations that arrive from now on.
-    for (const observation of observer.observations) this.feed.projector.observe(observation);
-    this.onObservation = event => this.forward(event);
+    this.onObservation = event => this.feed.add(event);
     this.onLive = event => this.liveEvent(event);
     live.on('event', this.onLive); observer.on('observation', this.onObservation);
-  }
-  forward(event: Observation) {
-    this.feed.add(event);
   }
   fault(error: Error) { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: error.message }); }
   liveEvent(event: any) {

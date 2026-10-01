@@ -88,7 +88,7 @@ test('hook context keeps flowing during continuous microphone and speaker activi
   assert.equal(h.mediator!.context.inFlight, 0);
   assert.ok(sent.every(e => e.kind === 'thinking'));
   const reconstructed = sent.map(e => e.content.replace(/^\[[^\n]+\]\n\[Claude [^\n]+\]\n/, '')).join('');
-  for (const hook of observations) assert.ok(reconstructed.includes(hook.hook_event_name));
+  for (const hook of observations) assert.equal(reconstructed.includes(`"hook":"${hook.hook_event_name}"`), hook.hook_event_name !== 'Stop', 'every hook but Stop reaches Live');
   assert.match(reconstructed, /future_field.*retained/);
   assert.deepEqual(h.observer.observations.map(o => JSON.parse(o.text)), observations, 'all original observations stay intact locally');
 });

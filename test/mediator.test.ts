@@ -63,7 +63,7 @@ test('voice startup and restart send only new observations; earlier work goes to
   await flush();
   restarted.mediator.feed.flush(); await flush();
   assert.equal(restarted.appends.length, 0, 'restarting voice sends no backlog');
-  restarted.hook({ hook_event_name: 'Stop', last_assistant_message: 'Done after restart.' });
+  restarted.hook({ hook_event_name: 'MessageDisplay', message_id: 'restart', index: 0, delta: 'Done after restart.' });
   await flush();
   assert.match(content(restarted), /Done after restart/);
 });
@@ -129,13 +129,14 @@ test('a full burst of observations remains thinking after idle time; no progress
     f.hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: { stdout: `Result ${i}.` } });
   }
   f.hook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' });
+  f.hook({ hook_event_name: 'MessageDisplay', message_id: 'final', index: 0, delta: 'All work complete.' });
   f.hook({ hook_event_name: 'Stop', last_assistant_message: 'All work complete.' });
   await flush();
   for (let i = 0; i < 10; i++) { f.mediator.feed.flush(); await flush(); }
   t.mock.timers.tick(300000); await flush();
-  assert.equal(f.observer.observations.length, 82, 'all original hooks survive locally');
+  assert.equal(f.observer.observations.length, 83, 'all original hooks survive locally');
   assert.match(content(f), /PermissionRequest/);
-  assert.match(content(f), /All work complete/);
+  assert.equal(content(f).match(/All work complete/g)?.length, 1, 'the displayed answer is sent; Stop, which repeats it, is not');
   for (let i = 0; i < 40; i++) {
     assert.ok(content(f).includes(`Detail ${i}.`));
     assert.ok(content(f).includes(`Result ${i}.`));

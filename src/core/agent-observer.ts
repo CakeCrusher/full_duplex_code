@@ -4,7 +4,7 @@ import type { AgentDefinition, AgentState, Observation } from './adapter.ts';
 export interface ConversationTurn { role: 'input' | 'output'; text: string }
 export type Logger = (event: Record<string, unknown>) => void;
 /** The parts of an agent definition that describe its observations. */
-export type ObservedAgent = Pick<AgentDefinition, 'profile' | 'context'>;
+export type ObservedAgent = Pick<AgentDefinition, 'profile' | 'context' | 'receivedRequest'>;
 
 // The observation store: everything seen from one agent session, in the shared
 // Observation format, plus the plain conversation and the agent's state.

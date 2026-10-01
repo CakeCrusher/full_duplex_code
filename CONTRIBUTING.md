@@ -22,7 +22,7 @@ Each adapter folder uses the same file names for the same jobs; copy the layout:
 | `arguments.ts` | Reads the agent's own command line: sessions, resume, options that would break the companion | [Claude](src/adapters/claude/arguments.ts), [Codex](src/adapters/codex/arguments.ts) |
 | `launch.ts` | The agent's command, with the hooks and connection the companion needs | [Claude](src/adapters/claude/launch.ts), [Codex](src/adapters/codex/launch.ts) |
 | `observer.ts` | The agent's events as shared observations, turn state and conversation | [Claude](src/adapters/claude/observer.ts), [Codex](src/adapters/codex/observer.ts) |
-| `context.ts` | Which fields of its events the voice model does not need | [Claude](src/adapters/claude/context.ts), [Codex](src/adapters/codex/context.ts) |
+| `context.ts` | What of its events reaches the voice model: one table whose rows remove an event or keys, or truncate them to a number of characters (`ContextRule` in [`adapter.ts`](src/core/adapter.ts)). The core already omits base64 data and echoed voice requests, and notes any record still large, which shows the rows to add | [Claude](src/adapters/claude/context.ts), [Codex](src/adapters/codex/context.ts) |
 | `delivery.ts` | Sends a spoken request and reports how far it got | [Claude](src/adapters/claude/delivery.ts), [Codex](src/adapters/codex/delivery.ts) |
 | `index.ts` | The definition: puts the parts together, plus `doctor` and help text | [Claude](src/adapters/claude/index.ts), [Codex](src/adapters/codex/index.ts) |
 

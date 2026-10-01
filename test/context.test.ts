@@ -7,35 +7,37 @@ import { LineReader } from '../src/core/line-reader.ts';
 import { VoiceHistory, type SpokenRequest } from '../src/core/voice-history.ts';
 import { redact } from '../src/core/redact.ts';
 import { startupHistory } from '../src/core/startup-history.ts';
-import { thinkingText } from '../src/core/context-text.ts';
+import { contextData } from '../src/core/context-rules.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 
-test('binary attachments stay in raw hooks while Live receives metadata and all surrounding text', () => {
-  const image = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'ABCxyz'.repeat(5000) } };
-  const hook: any = { hook_event_name: 'PostToolBatch', tool_calls: [{ tool_response: [{ type: 'text', text: 'Score 20; no console errors' }, image] }], code: 'const data = "ABCxyz";', future_field: 'preserved' };
-  const raw=JSON.stringify(hook), result=JSON.parse(thinkingText(raw));
-  assert.equal(hook.tool_calls[0].tool_response[1].source.data.length,30000);
-  assert.match(result.tool_calls[0].tool_response[1].source.data,/30000 encoded characters retained/);
-  assert.equal(result.tool_calls[0].tool_response[0].text,'Score 20; no console errors');
-  assert.equal(result.code,hook.code); assert.equal(result.future_field,'preserved');
-  assert.ok(thinkingText(raw).length<1000);
-  assert.equal(startupHistory(claude, [{text:raw}]).count,1,'restart history uses the same text representation');
-  assert.equal(thinkingText('ordinary plain text'),'ordinary plain text');
-  assert.equal(thinkingText(JSON.stringify({data:'x'.repeat(20000)})),JSON.stringify({data:'x'.repeat(20000)}),'ordinary data fields are not stripped');
-  assert.match(thinkingText(JSON.stringify({type:'image',mimeType:'image/png',data:'ABCxyz'.repeat(5000)})),/30000 encoded characters retained/);
+test('base64 is omitted wherever it appears, for any agent; ordinary text of any length is not', () => {
+  const screenshot = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: '/9j/4AAQ'.repeat(5000) } };
+  const mcp = { type: 'image', data: 'iVBORw0K'.repeat(5000), mimeType: 'image/png' };
+  const read = { type: 'image', file: { base64: 'iVBOR'.repeat(32000), type: 'image/png', dimensions: { originalWidth: 520, originalHeight: 900 } } };
+  const generated = { type: 'input_image', image_url: 'data:image/png;base64,' + 'iVBORw0KGgo'.repeat(2000), detail: 'high' };
+  const prose = 'A long paragraph of ordinary text, kept whole. '.repeat(2000);
+  const raw = JSON.stringify({ tool_response: [{ type: 'text', text: 'Score 20' }, screenshot, mcp, read, generated], code: 'const data = "ABCxyz";', prose });
+  const data: any = contextData(claude, { name: 'PostToolUse', text: raw });
+  assert.equal(data.tool_response[1].source.data, '[omitted: 40,000 chars]');
+  assert.equal(data.tool_response[2].data, '[omitted: 40,000 chars]');
+  assert.deepEqual(data.tool_response[3], { type: 'image', file: { base64: '[omitted: 160,000 chars]', type: 'image/png', dimensions: { originalWidth: 520, originalHeight: 900 } } });
+  assert.equal(data.tool_response[4].image_url, '[omitted: 22,022 chars]');
+  assert.equal(data.tool_response[0].text, 'Score 20'); assert.equal(data.code, 'const data = "ABCxyz";'); assert.equal(data.prose, prose);
+  assert.equal(JSON.parse(raw).tool_response[1].source.data.length, 40000, 'the original stays intact for the local log');
+  assert.ok(startupHistory(claude, [{ name: 'PostToolUse', text: JSON.stringify({ tool_response: [screenshot] }) }]).text.length < 1000, 'resuming voice also omits the bytes');
 });
 
-test('Read image results keep dimensions and file metadata without sending file.base64', () => {
-  const file = { base64: 'iVBOR'.repeat(32000), type: 'image/png', originalSize: 120000,
-    dimensions: { originalWidth: 520, originalHeight: 900, displayWidth: 520, displayHeight: 900 } };
-  const raw = JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_response: { type: 'image', file } });
-  const result = JSON.parse(thinkingText(raw)).tool_response.file;
-  assert.match(result.base64, /160000 encoded characters retained/);
-  assert.deepEqual({ ...result, base64: file.base64 }, file);
-  assert.equal(JSON.parse(raw).tool_response.file.base64, file.base64, 'the original audit payload remains intact');
-  assert.ok(startupHistory(claude, [{ text: raw }]).text.length < 1000, 'resuming voice also omits the binary bytes');
-  const ordinary = JSON.stringify({ file: { base64: 'ordinary application data' } });
-  assert.equal(thinkingText(ordinary), ordinary, 'untyped data is not assumed to be an attachment');
+test('startup context is filtered as live context is', () => {
+  const observations = [
+    { name: 'UserPromptSubmit', text: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt: '<channel source="voice" message_id="3f1e2d4c-5b6a-4978-8a9b-0c1d2e3f4a5b" source_kind="voice_operator">\nUser request (transcribed speech): …\n</channel>' }) },
+    { name: 'MessageDisplay', text: JSON.stringify({ hook_event_name: 'MessageDisplay', session_id: 's', delta: 'The page is ready.' }) },
+    { name: 'Stop', text: JSON.stringify({ hook_event_name: 'Stop', last_assistant_message: 'The page is ready.' }) },
+  ];
+  const history = startupHistory(claude, observations);
+  assert.equal(history.count, 2);
+  assert.match(history.text, /\[voice request 3f1e2d4c: the voice command you already have; Claude has received it\]/);
+  assert.match(history.text, /"delta":"The page is ready\."/);
+  assert.doesNotMatch(history.text, /last_assistant_message|session_id/);
 });
 
 test('context fragments preserve Unicode and fit the token estimate including source labels', () => {
@@ -157,7 +159,7 @@ test('a request is the conversation since the previous delegation, one utterance
 
 
 test('startup context keeps the most recent observations in order and notes what it omitted', () => {
-  const observations = Array.from({ length: 10 }, (_, i) => ({ text: `observation ${i} ` + 'x'.repeat(100) }));
+  const observations = Array.from({ length: 10 }, (_, i) => ({ name: 'PostToolUse', text: JSON.stringify({ result: `observation ${i} ` + 'x'.repeat(100) }) }));
   const history = startupHistory(claude, observations, 700);
   assert.ok(history.count > 0 && history.count < 10);
   assert.equal(history.omitted, 10 - history.count);
@@ -170,7 +172,7 @@ test('startup context keeps the most recent observations in order and notes what
 });
 
 test('an oversized newest observation is excerpted rather than hiding all recent work', () => {
-  const history = startupHistory(claude, [{ text: 'older' }, { text: 'START' + '世界'.repeat(4000) + 'FINISH' }], 3000);
+  const history = startupHistory(claude, [{ name: 'PostToolUse', text: '{"result":"older"}' }, { name: 'PostToolUse', text: JSON.stringify({ result: 'START' + '世界'.repeat(4000) + 'FINISH' }) }], 3000);
   assert.equal(history.count, 2);
   assert.match(history.text, /START/); assert.match(history.text, /FINISH/); assert.match(history.text, /full record in the local hook log/);
   assert.ok(Buffer.byteLength(history.text) <= 3000);

@@ -50,6 +50,10 @@ export const quietReference = ({ profile: { name } }: Agent) => `[Quiet: no foll
 export const milestoneReference = ({ profile: { turnEnd } }: Agent) =>
   `[Milestones: silent reference, not speech. Do not narrate work in progress. Answer the operator first; consider a brief outcome only after the main ${turnEnd}.]\n`;
 
+// A voice request echoed back as the agent's prompt: Live has it already.
+export const voiceEcho = ({ profile: { name } }: Agent, id: string) =>
+  `[voice request ${id.slice(0, 8)}: the voice command you already have; ${name} has received it]`;
+
 // Facts the mediator adds when a delegation cannot be sent.
 export const nothingToSend = ({ profile: { name } }: Agent) =>
   `No new operator speech is available to send. Answer from the observed ${name} session; already submitted requests must not be resent.`;

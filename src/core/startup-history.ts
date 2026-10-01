@@ -1,5 +1,6 @@
-import type { AgentProfile } from './adapter.ts';
-import { thinkingText } from './context-text.ts';
+import type { Observation } from './adapter.ts';
+import type { ObservedAgent } from './agent-observer.ts';
+import { contextData } from './context-rules.ts';
 import { historyEntry, historyOmitted } from './prompts.ts';
 
 const OMISSION_RESERVE = 160;
@@ -16,16 +17,18 @@ function headAndTail(text: string, maxBytes: number): string {
   return best;
 }
 
-export function startupHistory(agent: { profile: AgentProfile }, observations: readonly { text: string }[], maxBytes = 7000, itemBytes = 2400) {
-  // A new voice connection starts from the most recent work. Live's startup
-  // input is available immediately (unlike timed appends); keep it under the
-  // 8,192-token limit with a conservative byte bound. Older observations stay
-  // in the local log and are never replayed as appends: a long session would
-  // otherwise bury the present under minutes of backlog.
+export function startupHistory(agent: ObservedAgent, observations: readonly Pick<Observation, 'name' | 'text'>[], maxBytes = 7000, itemBytes = 2400) {
+  // A new voice connection starts from the most recent work, filtered as live
+  // context is. Live's startup input is available immediately (unlike timed
+  // appends); keep it under the 8,192-token limit with a conservative byte bound.
+  // Older observations stay in the local log and are never replayed as appends:
+  // a long session would otherwise bury the present under minutes of backlog.
   const budget = maxBytes - OMISSION_RESERVE, entries: string[] = [];
   let used = 0;
   for (let i = observations.length - 1; i >= 0 && budget > 0; i--) {
-    const record = headAndTail(thinkingText(observations[i].text), Math.min(itemBytes, budget - 64));
+    const data = contextData(agent, observations[i]);
+    if (data === undefined) continue;
+    const record = headAndTail(JSON.stringify(data), Math.min(itemBytes, budget - 64));
     const next = historyEntry(agent, record);
     if (!record || used + Buffer.byteLength(next) > budget) break;
     entries.unshift(next); used += Buffer.byteLength(next);

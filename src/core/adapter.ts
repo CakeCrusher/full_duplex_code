@@ -64,13 +64,20 @@ export interface Observation {
   child: boolean;
 }
 
-/** How the feed turns an agent's observations into context records. */
-export interface ContextRules {
-  /** Transport fields the voice model does not need; dropped from context records. */
-  isMetadata(key: string, name: string): boolean;
-  /** For a tool record too wide to excerpt: the fields that carry its outcome. */
-  essentials(data: Record<string, any>): Record<string, unknown>;
-}
+/**
+ * One row of the table that decides what of an agent's events reaches Live: remove
+ * an event or keys (never sent), or truncate them to a number of characters, cut
+ * from the middle (1200 keeps the first and last 600; 0 keeps only an omission
+ * marker). The core applies the rows in order; anything no row names is sent as it is.
+ */
+export type ContextRule = {
+  /** The event, by the name the observer gives it (`Observation.name`); every event when absent. */
+  event?: string;
+  /** Only events whose top-level fields have these values, such as `{ tool_name: 'Edit' }`. */
+  where?: Record<string, string>;
+  /** Dotted paths into the event; the whole event when absent. */
+  key?: string | readonly string[];
+} & ({ remove: true } | { truncate: number });
 
 /** A spoken request on its way to the agent. */
 export interface VoiceRequest {
@@ -106,7 +113,8 @@ export interface AgentArguments {
 /** Everything the core knows about one kind of agent before a session exists. */
 export interface AgentDefinition {
   profile: AgentProfile;
-  context: ContextRules;
+  /** What of its events reaches Live: see ContextRule. */
+  context: readonly ContextRule[];
   /** Reads the agent's own arguments. Throws, with the reason, when one would stop the companion from working. */
   readArgs(args: readonly string[]): AgentArguments;
   /** Ways to observe assistant text that `--observe` can choose, default first; none if there is no choice. */
