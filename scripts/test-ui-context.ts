@@ -9,7 +9,7 @@ import { channelNotification } from '../src/adapters/claude/channel-message.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { Harness } from '../src/core/bridge.ts';
 import { AudioAudit } from '../src/core/audio-audit.ts';
-import { liveInstructions } from '../src/core/prompts.ts';
+import { liveInstructions, voiceRequest } from '../src/core/prompts.ts';
 import { UsageLedger } from '../src/core/usage-ledger.ts';
 
 // Test hooks the page scripts below install in the browser.
@@ -45,7 +45,7 @@ for (const [role, startMs, endMs, text] of [
   ['intermediary', 19000, 23000, 'The selected theme is now saved between visits.'],
   ['intermediary', 29500, 31500, 'The toggle is ready, and all three tests passed.'],
 ] as [string, number, number, string][]) publish({ type: 'caption', voiceSessionId: 'fixture', voiceStartedAt: base, role, startMs, endMs, text, at: base + endMs + 400 });
-const requestContent = 'User request (transcribed speech):\nAdd a dark-mode toggle named “夜”.\n\nEarlier voice conversation for reference only:\nintermediary: The theme lives in settings.\n';
+const requestContent = voiceRequest([{ role: 'intermediary', text: 'The theme lives in settings.' }, { role: 'operator', text: 'Add a dark-mode toggle named “夜”.' }]) + '\n';
 const notification = channelNotification({ id: 'request-one', content: requestContent });
 for (const [at, state] of [[7500, 'queued'], [9000, 'sent']] as [number, string][]) publish({ type: 'task', id: 'request-one', queuedAt: base + 7500, at: base + at, state, text: requestContent, notification });
 const observedPrompt = `<channel source="voice" message_id="request-one">\n${requestContent}\n</channel>`;

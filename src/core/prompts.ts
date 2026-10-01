@@ -1,6 +1,7 @@
 // Everything the voice model reads that names the agent, built from the
 // adapter's profile.
 import type { AgentProfile } from './adapter.ts';
+import type { Utterance } from './voice-history.ts';
 import { DEFAULT_SPEAKING_LEVEL, speakingPolicy } from './voice-policy.ts';
 
 type Agent = { profile: AgentProfile };
@@ -56,6 +57,8 @@ export const queueFailed = ({ profile: { name } }: Agent) =>
   `The voice bridge failed to queue the user’s request for ${name}. The request was not delivered; the terminal connection needs attention.`;
 export const deliveryConfirmation = ({ profile: { product } }: Agent) => `Your request has been sent to ${product}.`;
 
-export function voiceRequest(text: string, context: string): string {
-  return `User request (transcribed speech):\n${text}${context ? `\n\nEarlier voice conversation for reference only:\n${context}` : ''}`;
-}
+// A delegated request as the agent receives it: a note on how to read it, then
+// the conversation since the previous request, one utterance per line.
+const SPEAKERS: Record<Utterance['role'], string> = { operator: 'user', intermediary: 'voice assistant' };
+export const voiceRequest = (utterances: readonly Pick<Utterance, 'role' | 'text'>[]) =>
+  `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.\n\n${utterances.map(u => `${SPEAKERS[u.role]}: ${u.text.replace(/\s+/g, ' ').trim()}`).join('\n')}`;

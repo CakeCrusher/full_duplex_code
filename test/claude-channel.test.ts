@@ -6,6 +6,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { AddressInfo } from 'node:net';
 import { channelNotification } from '../src/adapters/claude/channel-message.ts';
 import { LineReader } from '../src/core/line-reader.ts';
+import { voiceRequest } from '../src/core/prompts.ts';
 
 const until = async <T>(check: () => T) => {
   for (let i = 0; i < 300; i++) { const result = check(); if (result) return result; await new Promise(r => setTimeout(r, 10)); }
@@ -33,7 +34,7 @@ test('real MCP channel exposes no tools and delivers each notification once', as
   await until(() => events.some(e => e.type === 'channel.ready'));
   send({ id: 2, method: 'tools/call', params: { name: 'reply', arguments: { message_id: 'one', text: 'fake' } } });
   assert.equal((await until(() => messages.find(e => e.id === 2))).error.code, -32601);
-  const content = 'User request (transcribed speech):\nMake “世界” blue.\n\nEarlier voice conversation for reference only:\nintermediary: Use \"blue\".\n';
+  const content = voiceRequest([{ role: 'intermediary', text: 'Use "blue".' }, { role: 'operator', text: 'Make “世界” blue.' }]) + '\n';
   for (let i = 0; i < 2; i++) socket.send(JSON.stringify({ type: 'channel.deliver', id: 'one', content }));
   await until(() => events.filter(e => e.type === 'channel.sent').length === 2);
   const notifications = messages.filter(e => e.method === 'notifications/claude/channel');

@@ -75,7 +75,7 @@ test('a delegation sends ordinary user text once, without asking Claude to use c
   f.mediator.delegate('duplicate', 1100);
   await flush();
   assert.equal(f.deliveries.length, 1);
-  assert.match(f.deliveries[0].content, /Make the button blue/);
+  assert.match(f.deliveries[0].content, /^User request \(transcribed speech\): .+\n\nuser: Make the button blue\.$/);
   assert.doesNotMatch(f.deliveries[0].content, /acknowledge|reply|message_id|GPT Live/);
 });
 

@@ -73,14 +73,14 @@ export class Mediator {
   delegate(delegationId: string, offsetMs: number) {
     if (this.live.state !== 'active') return;
     const request = this.history.request(offsetMs);
-    if (!request || !request.text.trim()) {
+    if (!request) {
       this.log({ type: 'bridge.delegation_suppressed', delegationId, reason: 'No new operator speech to send' });
       this.context.add('thinking', nothingToSend(this.agent), delegationId);
       return;
     }
-    const content = this.clean(voiceRequest(request.text, request.context));
+    const content = this.clean(voiceRequest(request.utterances));
     try {
-      this.deliver({ id: randomUUID(), content, delegationId, voiceSessionId: this.live.id, text: this.clean(request.text), queuedAt: Date.now() });
+      this.deliver({ id: randomUUID(), content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now() });
       this.history.markDelivered(request);
     } catch (error) {
       this.fault(error as Error);

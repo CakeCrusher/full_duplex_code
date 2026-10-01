@@ -98,9 +98,9 @@ Runs also save `audio.transport` events once per second with the browser receive
 
 Where supported, the browser requests a 200 ms target for WebRTC’s existing network jitter buffer to help recover late packets. Actual delay is chosen by the browser and varies with the connection. Incoming and outgoing audio continue simultaneously; the app does not hold whole sentences, filter speech, or replace Live’s voice. This cannot correct unwanted narration or words that Live never generated.
 
-Click a voice request to see the **full channel message**, including any earlier conversation attached for reference. **Copy message** copies that text. Expand **Channel notification JSON** for the content and metadata sent by the channel. Once Claude's `UserPromptSubmit` hook arrives, the inspector shows the captured prompt and checks that its contents match the sent message. Until then, delivery is not presented as verified receipt. A mismatch is shown explicitly.
+Click a voice request to see the **full channel message**. **Copy message** copies that text. Expand **Channel notification JSON** for the content and metadata sent by the channel. Once Claude's `UserPromptSubmit` hook arrives, the inspector shows the captured prompt and checks that its contents match the sent message. Until then, delivery is not presented as verified receipt. A mismatch is shown explicitly.
 
-The channel uses the latest speech group as the request, with a two-second pause separating groups. Earlier speech remains reference context. The bridge does not rewrite transcription mistakes; the inspector shows what was actually sent.
+Each request carries the voice conversation since the previous request, one utterance per line: yours marked `user:`, Live's marked `voice assistant:`. A one-sentence note at the top tells the agent that the request is in your lines and Live's lines are context. Speech from before the previous request went with it and is not sent again. The bridge does not rewrite transcription mistakes; the inspector shows what was actually sent.
 
 The timeline remains available across page reloads while the launcher is running. It starts fresh with a new launcher. All hooks remain visible. The Context to Live row shows actual sends and acknowledgments separately from hook receipt, so delivery delays are visible.
 

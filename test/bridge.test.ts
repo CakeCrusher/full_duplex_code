@@ -10,6 +10,7 @@ import WebSocket from 'ws';
 import { Harness } from '../src/core/bridge.ts';
 import { EventEmitter } from 'node:events';
 import { Mediator } from '../src/core/mediator.ts';
+import { voiceRequest } from '../src/core/prompts.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 
 async function fixture(t: TestContext) {
@@ -109,8 +110,8 @@ test('channel delivery ends at sent and does not depend on Claude calling a tool
   await new Promise(resolve => ws.on('open', resolve));
   const delivery = new Promise<any>(resolve => ws.once('message', data => resolve(JSON.parse(data.toString()))));
   ws.send(JSON.stringify({ type: 'channel.ready' }));
-  const content = 'User request (transcribed speech):\nHello 世界.\n\nEarlier voice conversation for reference only:\nintermediary: Yes.\n';
-  h.deliver({ id: 'one', text: 'lossy short preview', content });
+  const content = voiceRequest([{ role: 'intermediary', text: 'Yes.' }, { role: 'operator', text: 'Hello 世界.' }]) + '\n';
+  h.deliver({ id: 'one', content });
   const delivered = await delivery;
   assert.equal(delivered.id, 'one');
   const shown = h.uiEvents.filter(e => e.type === 'task').at(-1)!;

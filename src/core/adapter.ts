@@ -76,7 +76,6 @@ export interface ContextRules {
 export interface VoiceRequest {
   id: string;
   content: string;
-  text?: string;
   delegationId?: string | null;
   voiceSessionId?: string;
   queuedAt?: number;

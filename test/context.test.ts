@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { BACKGROUND_REFERENCE } from '../src/core/prompts.ts';
 import { ContextQueue } from '../src/core/context-queue.ts';
 import { LineReader } from '../src/core/line-reader.ts';
-import { VoiceHistory } from '../src/core/voice-history.ts';
+import { VoiceHistory, type SpokenRequest } from '../src/core/voice-history.ts';
 import { redact } from '../src/core/redact.ts';
 import { startupHistory } from '../src/core/startup-history.ts';
 import { thinkingText } from '../src/core/context-text.ts';
@@ -115,15 +115,16 @@ test('JSONL input survives split UTF-8 bytes and partial lines', () => {
   for (const byte of data) reader.push(Buffer.from([byte]));
   assert.deepEqual(found, [{ text: 'hello 🌎' }]);
 });
+const said = (request: SpokenRequest | null) => request?.utterances.map(u => `${u.role}: ${u.text.trim()}`);
 test('only a delegation consumes a request, and repeating it cannot resend the same speech', () => {
   const h = new VoiceHistory();
   h.add({ type: 'session.input_transcript.delta', delta: 'Create ', start_ms: 1, end_ms: 100 });
   h.add({ type: 'session.input_transcript.delta', delta: 'a file.', start_ms: 100, end_ms: 200 });
-  const request = h.request(220)!; assert.equal(request.text, 'Create a file.');
-  assert.equal(h.request(220)!.text, 'Create a file.');
+  const request = h.request(220)!; assert.deepEqual(said(request), ['operator: Create a file.']);
+  assert.deepEqual(said(h.request(220)), ['operator: Create a file.']);
   h.markDelivered(request); assert.equal(h.request(220), null);
   h.add({ type: 'session.input_transcript.delta', delta: 'Use JavaScript.', start_ms: 300, end_ms: 400 });
-  assert.equal(h.request(420)!.text, 'Use JavaScript.');
+  assert.deepEqual(said(h.request(420)), ['operator: Use JavaScript.']);
 });
 test('known credentials and likely API keys are scrubbed', () => {
   assert.equal(redact('token abcdefghijk', ['abcdefghijk']), 'token [redacted]');
@@ -131,18 +132,27 @@ test('known credentials and likely API keys are scrubbed', () => {
 });
 
 
-test('a later command keeps answered questions in context, not in its request text', () => {
+test('a request is the conversation since the previous delegation, one utterance per speaker and pause', () => {
   const h = new VoiceHistory();
-  h.add({ type: 'session.input_transcript.delta', delta: 'What port?', start_ms: 0, end_ms: 800 });
-  h.add({ type: 'session.output_transcript.delta', delta: 'Port 4317.', start_ms: 1000, end_ms: 1800 });
-  h.add({ type: 'session.input_transcript.delta', delta: 'Create ', start_ms: 5000, end_ms: 5400 });
-  h.add({ type: 'session.output_transcript.delta', delta: 'Mm hmm', start_ms: 5300, end_ms: 5500 });
-  h.add({ type: 'session.input_transcript.delta', delta: 'a file.', start_ms: 5400, end_ms: 5900 });
-  const request = h.request(6000)!;
-  assert.equal(request.text, 'Create a file.');
-  assert.match(request.context, /What port/);
-  assert.match(request.context, /4317/);
-  h.markDelivered(request); assert.equal(h.request(6000), null);
+  const say = (stream: 'input' | 'output', delta: string, start_ms: number, end_ms: number) => h.add({ type: `session.${stream}_transcript.delta`, delta, start_ms, end_ms });
+  say('input', 'Fix the login bug.', 0, 800);
+  h.markDelivered(h.request(900)!);
+  say('input', 'What port?', 2000, 2800);
+  say('output', 'Port 4317.', 3000, 3800);
+  say('input', ' Create', 9000, 9400);
+  say('output', 'Mm hmm', 9300, 9500);
+  say('input', ' a file.', 9400, 9900);
+  say('input', ' Then test it.', 12500, 13000);
+  say('output', 'Sure.', 13200, 13600);
+  say('input', ' One more thing.', 17000, 17500);
+  const request = h.request(13100)!;
+  assert.deepEqual(said(request), ['operator: What port?', 'intermediary: Port 4317.', 'operator: Create a file.', 'intermediary: Mm hmm', 'operator: Then test it.', 'intermediary: Sure.'],
+    'nothing from before the previous delegation; a backchannel does not split an utterance, a pause over 2 s does');
+  h.markDelivered(request);
+  assert.deepEqual(said(h.request(18000)), ['operator: One more thing.'], 'speech starting over 3 s after a delegation goes with the next request');
+  h.markDelivered(h.request(18000)!);
+  say('output', 'Done.', 19000, 19500);
+  assert.equal(h.request(20000), null, 'the voice assistant alone makes no request');
 });
 
 
