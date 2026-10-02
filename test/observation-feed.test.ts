@@ -245,6 +245,12 @@ test("Pi's table: a reply keeps its text, repeats and signatures go, and bulky t
     result: { content: [{ type: 'text', text: output }], structuredContent: { output, truncated: false, exit_code: 1, wall_time_seconds: 0 } } });
   assert.match(bash.result.content[0].text, EXCERPT); assert.match(bash.result.content[0].text, /Error: failed$/, 'the end, where errors land, is kept');
   assert.deepEqual(bash.result.structuredContent, { truncated: false, exit_code: 1, wall_time_seconds: 0 }, 'the second copy of the output goes');
+  // A long search, as Pi reported one: its output cut, with a copy of what it kept in details.
+  const search = 'src/core/startup-history.ts:    const data = contextData(agent, observations[i]);\n'.repeat(700);
+  const cut = data({ type: 'tool_execution_end', toolCallId: 'call_9', toolName: 'bash', isError: false, result: { content: [{ type: 'text', text: search + '\n\n[Showing lines 1-700 of 4100]' }],
+    details: { truncation: { content: search, truncated: true, truncatedBy: 'bytes', totalLines: 4100, outputLines: 700 }, fullOutputPath: '/tmp/pi-bash-1.log' } } });
+  assert.ok(JSON.stringify(cut).length < 2000, 'one result stays one short record');
+  assert.deepEqual(cut.result.details, { truncation: { truncated: true, truncatedBy: 'bytes', totalLines: 4100, outputLines: 700 }, fullOutputPath: '/tmp/pi-bash-1.log' });
   const screenshot = '{"content":[{"type":"text","text":"Successfully captured screenshot"},{"type":"image","data":"' + '/9j/4AAQSkZJRgABAQAAAQABAAD'.repeat(1500) + '"}]}';
   const script = data({ type: 'tool_execution_end', toolCallId: 'call_4', toolName: 'codemode', isError: false,
     result: { content: [{ type: 'text', text: 'Script completed\nWall time 3.4 seconds\nOutput:\n' }, { type: 'text', text: screenshot }],

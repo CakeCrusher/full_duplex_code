@@ -15,6 +15,9 @@ export const piContext: ContextRule[] = [
   { event: 'message_end', key: ['message.api', 'message.provider', 'message.model', 'message.usage', 'message.timestamp', 'message.responseId',
     'message.rawStopReason', 'message.thinkingLevel', 'message.content.thinkingSignature', 'message.content.textSignature',
     'message.content.thinking', 'message.content.id', 'message.content.arguments'], remove: true },
+  // When Pi cuts a tool's output short, it keeps a copy of the output it kept, beside
+  // the facts of the cut (bash, read, grep, find, ls). The output itself is in content.
+  { key: 'result.details.truncation.content', remove: true },
   // A model is a long definition; its name comes first.
   { event: 'model_select', key: ['model', 'previousModel'], truncate: 200 },
   // The whole file being written, and the text of a file read.
