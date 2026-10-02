@@ -87,6 +87,7 @@ The launcher prints a phone link and a QR code once the link works. Open the pag
 
 - [User guide](USAGE.md): the page and its timeline, what the companion follows, resuming, costs and troubleshooting.
 - [Contributing](CONTRIBUTING.md): support another coding agent, and how changes are reviewed.
+- [Principles](PRINCIPLES.md): the rules behind the companion and its adapters.
 
 ## License
 

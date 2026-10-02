@@ -4,29 +4,7 @@ Full-Duplex Code reaches each coding agent through an adapter. This page points 
 
 ## Add support for another coding agent
 
-Two adapters exist. Read them side by side and start from the one closer to your agent.
-
-| | Claude Code | Codex |
-| --- | --- | --- |
-| Adapter | [`src/adapters/claude/`](src/adapters/claude/) | [`src/adapters/codex/`](src/adapters/codex/) |
-| Requests reach the agent through | an MCP channel ([`channel-server.ts`](src/adapters/claude/channel-server.ts)) | its app server ([`app-server.ts`](src/adapters/codex/app-server.ts)) |
-| Observed through | command hooks, or its transcript | command hooks and its transcript |
-
-The contract is [`src/core/adapter.ts`](src/core/adapter.ts). An agent is an `AgentDefinition`, registered by command name in [`src/adapters/index.ts`](src/adapters/index.ts). From there `fdc <agent> …`, `fdc doctor`, `fdc --help`, the voice prompts and the page pick it up. Nothing in `src/core/` names an agent.
-
-Each adapter folder uses the same file names for the same jobs; copy the layout:
-
-| File | Job | Read |
-| --- | --- | --- |
-| `profile.ts` | Names and capabilities the core uses in prompts and on the page | [Claude](src/adapters/claude/profile.ts), [Codex](src/adapters/codex/profile.ts) |
-| `arguments.ts` | Reads the agent's own command line: sessions, resume, options that would break the companion | [Claude](src/adapters/claude/arguments.ts), [Codex](src/adapters/codex/arguments.ts) |
-| `launch.ts` | The agent's command, with the hooks and connection the companion needs | [Claude](src/adapters/claude/launch.ts), [Codex](src/adapters/codex/launch.ts) |
-| `observer.ts` | The agent's events as shared observations, turn state and conversation | [Claude](src/adapters/claude/observer.ts), [Codex](src/adapters/codex/observer.ts) |
-| `context.ts` | What of its events reaches the voice model: one table whose rows remove an event or keys, or truncate them to a number of characters (`ContextRule` in [`adapter.ts`](src/core/adapter.ts)). The core already omits base64 data and echoed voice requests, and notes any record still large, which shows the rows to add | [Claude](src/adapters/claude/context.ts), [Codex](src/adapters/codex/context.ts) |
-| `delivery.ts` | Sends a spoken request and reports how far it got | [Claude](src/adapters/claude/delivery.ts), [Codex](src/adapters/codex/delivery.ts) |
-| `index.ts` | The definition: puts the parts together, plus `doctor` and help text | [Claude](src/adapters/claude/index.ts), [Codex](src/adapters/codex/index.ts) |
-
-Shared pieces an adapter builds on: [`agent-observer.ts`](src/core/agent-observer.ts), [`observation.ts`](src/core/observation.ts), [`transcript-tail.ts`](src/core/transcript-tail.ts), [`hook-command.ts`](src/core/hook-command.ts) and [`hook-relay.ts`](src/core/hook-relay.ts).
+Start with [`src/adapters/README.md`](src/adapters/README.md): what an adapter does, file by file, and the two that exist. The design rules behind them are in [PRINCIPLES.md](PRINCIPLES.md).
 
 ## Test it
 
