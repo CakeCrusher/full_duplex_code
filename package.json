@@ -26,6 +26,7 @@
     "test:codex": "node scripts/test-codex.ts",
     "test:codex-start": "node scripts/test-codex-start.ts",
     "test:pi": "node scripts/test-pi.ts",
+    "test:pi-voice": "node scripts/test-pi-voice.ts",
     "test:pages": "node scripts/test-pages.ts"
   },
   "dependencies": {
