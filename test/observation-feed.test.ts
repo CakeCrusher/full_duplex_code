@@ -5,6 +5,7 @@ import { ObservationProjector, ObservationFeed, type ContextTarget } from '../sr
 import { contextData, truncate } from '../src/core/context-rules.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { codex } from '../src/adapters/codex/index.ts';
+import { pi } from '../src/adapters/pi/index.ts';
 import { nextTurnState, observationKind } from '../src/adapters/claude/observer.ts';
 import * as codexEvents from '../src/adapters/codex/observer.ts';
 
@@ -220,4 +221,43 @@ test('displayed answers are sent in full, from the main agent and subagents alik
   assert.match(prepared.content, /Earlier error: missing file/);
   assert.match(prepared.content, /child/);
   assert.doesNotMatch(prepared.content, /Open it locally/);
+});
+
+test("Pi's table: a reply keeps its text, repeats and signatures go, and bulky tool output becomes excerpts", () => {
+  turn = 'unknown';
+  const p = new ObservationProjector(pi), sid = 'a0fafa', see = (data: Record<string, any>) => p.project({ kind: 'event', name: data.type, text: JSON.stringify({ ...data, session_id: sid }), state: 'working' });
+  const data = (data: Record<string, any>) => JSON.parse(see(data)!.text).data;
+  // Shapes from a live capture of Pi 1.0 (gpt-5.5) and a saved Pi session.
+  assert.equal(see({ type: 'message_end', message: { role: 'system', content: '', sections: { preamble: 'x'.repeat(12000) } } }), null);
+  assert.equal(see({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: 'List the files' }] } }), null, 'the input event carried it');
+  assert.equal(see({ type: 'message_end', message: { role: 'toolResult', toolCallId: 'call_1', toolName: 'bash', content: [{ type: 'text', text: 'README.md' }], isError: false } }), null, 'tool_execution_end carried it');
+  const reply = data({ type: 'message_end', message: { role: 'assistant', content: [
+    { type: 'thinking', thinking: 'private', thinkingSignature: 'e'.repeat(1951) },
+    { type: 'toolCall', id: 'call_3Sso6xrGoowlftx3bad4n4e5|fc_0a44', name: 'bash', arguments: { command: 'ls', timeout: 10 } },
+    { type: 'text', text: 'This folder is a capture.', textSignature: '{"v":1,"id":"msg_0a44","phase":"final_answer"}' }],
+    api: 'openai-responses', provider: 'openai', model: 'gpt-5.5', usage: { input: 3171, output: 37, cost: { total: 0.016965 } },
+    stopReason: 'stop', timestamp: 1790918813371, responseId: 'resp_0a44', rawStopReason: 'completed', thinkingLevel: 'medium' } });
+  assert.deepEqual(reply, { type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking' }, { type: 'toolCall', name: 'bash' }, { type: 'text', text: 'This folder is a capture.' }], stopReason: 'stop' } });
+  const start = data({ type: 'tool_execution_start', toolCallId: 'call_3', parentToolCallId: 'call_2', toolName: 'bash', args: { command: 'npm test', timeout: 10 } });
+  assert.deepEqual(start, { type: 'tool_execution_start', toolName: 'bash', args: { command: 'npm test', timeout: 10 } }, 'the command is always whole');
+  const output = 'ok\n'.repeat(1000) + 'Error: failed';
+  const bash = data({ type: 'tool_execution_end', toolCallId: 'call_3', toolName: 'bash', isError: true,
+    result: { content: [{ type: 'text', text: output }], structuredContent: { output, truncated: false, exit_code: 1, wall_time_seconds: 0 } } });
+  assert.match(bash.result.content[0].text, EXCERPT); assert.match(bash.result.content[0].text, /Error: failed$/, 'the end, where errors land, is kept');
+  assert.deepEqual(bash.result.structuredContent, { truncated: false, exit_code: 1, wall_time_seconds: 0 }, 'the second copy of the output goes');
+  const screenshot = '{"content":[{"type":"text","text":"Successfully captured screenshot"},{"type":"image","data":"' + '/9j/4AAQSkZJRgABAQAAAQABAAD'.repeat(1500) + '"}]}';
+  const script = data({ type: 'tool_execution_end', toolCallId: 'call_4', toolName: 'codemode', isError: false,
+    result: { content: [{ type: 'text', text: 'Script completed\nWall time 3.4 seconds\nOutput:\n' }, { type: 'text', text: screenshot }],
+      details: { calls: [{ name: 'mcp__open_claude_in_chrome__computer', args: '{"action":"screenshot"}' }] }, nestedCalls: { calls: [], complete: true } } });
+  assert.ok(JSON.stringify(script).length < 2000, 'a screenshot inside a script output is excerpted');
+  assert.deepEqual(Object.keys(script.result), ['content']);
+  const write = data({ type: 'tool_execution_start', toolCallId: 'c5', toolName: 'write', args: { path: 'index.html', content: '<p>hello</p>\n'.repeat(400) } });
+  assert.match(write.args.content, EXCERPT); assert.equal(write.args.path, 'index.html');
+  const read = data({ type: 'tool_execution_end', toolCallId: 'c6', toolName: 'read', isError: false, result: { content: [{ type: 'text', text: 'const value = 1;\n'.repeat(400) }] } });
+  assert.match(read.result.content[0].text, EXCERPT);
+  const edit = data({ type: 'tool_execution_end', toolCallId: 'c7', toolName: 'edit', isError: false, result: { content: [{ type: 'text', text: 'Successfully replaced 1 block(s) in a.ts.' }], details: { diff: '-a\n+b', patch: '--- a.ts\n+++ a.ts\n-a\n+b', firstChangedLine: 3 } } });
+  assert.deepEqual(edit.result.details, { diff: '-a\n+b', firstChangedLine: 3 });
+  const model = data({ type: 'model_select', source: 'set', model: { id: 'gpt-5.5', name: 'GPT-5.5', provider: 'openai', cost: { input: 5 }, contextWindow: 400000, compat: { a: 'x'.repeat(500) } } });
+  assert.match(model.model, /^\{"id":"gpt-5\.5","name":"GPT-5\.5"/);
+  assert.equal(see({ type: 'agent_settled' })!.text.includes(sid), false, 'the session ID is transport, not context');
 });

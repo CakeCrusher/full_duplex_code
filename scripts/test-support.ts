@@ -9,6 +9,7 @@ import WebSocket from 'ws';
 import { Harness, type HarnessOptions } from '../src/core/bridge.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { codex } from '../src/adapters/codex/index.ts';
+import { pi } from '../src/adapters/pi/index.ts';
 
 export const root = fileURLToPath(new URL('..', import.meta.url));
 try { process.loadEnvFile(path.join(root, '.env')); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
@@ -150,3 +151,39 @@ export async function connectTestVoice(harness: Harness) {
     },
   };
 }
+
+// Real Pi in a terminal, with the companion's extension. Its sessions are kept in
+// the run folder, apart from the operator's. PI_BIN runs Pi from a checkout when
+// no pi is on the PATH: a pi command that runs it is put first on the PATH.
+export async function startPiTestHarness(label: string, { args = [], cwd, sessionDir }: { args?: string[]; cwd?: string; sessionDir?: string } = {}) {
+  const runDir = path.join(root, '.runs', `${label}-${Date.now()}`);
+  if (!cwd) { cwd = path.join(runDir, 'workspace'); fs.mkdirSync(cwd, { recursive: true }); spawnSync('git', ['init', '--quiet'], { cwd }); }
+  sessionDir ??= path.join(runDir, 'pi-sessions');
+  const agentArgs = ['--session-dir', sessionDir, '--thinking', 'low', ...args];
+  const harness = await new Harness({ agent: pi, root, runDir, cwd, apiKey: process.env.OPENAI_API_KEY!, agentArgs }).start();
+  const launch = harness.agentLaunch!;
+  const env: Record<string, string> = { ...process.env as Record<string, string>, ...launch.env, TERM: 'xterm-256color' }; delete env.OPENAI_API_KEY;
+  if (process.env.PI_BIN) {
+    const bin = path.join(runDir, 'bin'); fs.mkdirSync(bin, { recursive: true });
+    // A wrapper, not a link: a checkout's script finds its files from its own path.
+    fs.writeFileSync(path.join(bin, 'pi'), `#!/bin/sh\nexec '${process.env.PI_BIN.replaceAll("'", "'\\''")}' "$@"\n`, { mode: 0o755 });
+    env.PATH = `${bin}:${env.PATH}`;
+  }
+  const helper = path.join(root, 'node_modules/node-pty/prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper');
+  if (fs.existsSync(helper)) fs.chmodSync(helper, fs.statSync(helper).mode | 0o111);
+  const terminal = pty.spawn(launch.command, launch.args, { name: 'xterm-256color', cols: 140, rows: 45, cwd, env });
+  let exited = false;
+  terminal.onData(data => fs.appendFileSync(path.join(runDir, 'terminal.log'), data));
+  terminal.onExit(() => { exited = true; });
+  console.log('Run:', runDir);
+  try { await until(() => harness.agentReady && harness.observer.state !== 'starting', { label: "Pi's companion extension connected", timeout: 60000 }); }
+  catch (error) { terminal.kill(); await harness.close(); throw error; }
+  return { harness, terminal, runDir, cwd, sessionDir, isAlive: () => !exited, async close() {
+    // Pi quits on Ctrl-C twice, or Ctrl-D on an empty editor.
+    if (!exited) { terminal.write('\x04'); await delay(800); }
+    if (!exited) { terminal.write('\x03'); await delay(300); terminal.write('\x03'); await delay(800); }
+    if (!exited) terminal.kill('SIGTERM');
+    await harness.close(); await delay(300);
+  } };
+}
+

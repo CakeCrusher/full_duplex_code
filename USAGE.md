@@ -1,6 +1,6 @@
 # Using Full-Duplex Code
 
-Full-Duplex Code adds a voice companion to your normal Claude Code terminal, or to Codex (see [Use Codex](#use-codex)). This guide describes Claude Code first. GPT Live 1 handles the conversation with you; Claude Code remains the coding agent that reads files, runs commands, and makes changes.
+Full-Duplex Code adds a voice companion to your normal Claude Code terminal, or to Codex or Pi (see [Use Codex](#use-codex) and [Use Pi](#use-pi)). This guide describes Claude Code first. GPT Live 1 handles the conversation with you; Claude Code remains the coding agent that reads files, runs commands, and makes changes.
 
 You can talk while Claude works, ask about its progress, and give corrections. You can also type directly into Claude. The companion receives hook observations from that same session: submitted prompts, assistant messages, tool arguments and results, file edits, errors, and lifecycle updates.
 
@@ -137,7 +137,7 @@ Claude responds normally in its terminal. The channel has no acknowledgment or r
 
 The bridge saves every original observation locally. Assistant text from `MessageDisplay`, typed prompts, and restored user/assistant transcript text are sent in full. `Stop` is not sent, because its text repeats what `MessageDisplay` already carried; the turn state on later observations shows that the turn finished, which does not mean its program was verified. A voice request that comes back as Claude's prompt is sent as a short frame, since GPT Live already has it. Every forwarded observation keeps its hook name and Claude's turn state.
 
-One table in the adapter decides the rest ([Claude](src/adapters/claude/context.ts), [Codex](src/adapters/codex/context.ts)). Each row removes an event or fields, or truncates fields to a number of characters, keeping their start and end. For Claude, whole files (Write's content, an overwrite's patch, the file before an edit), the text of a file read and Bash's stdout keep their first and last 600 characters; commands and stderr are always whole; PDF pages and connection bookkeeping are removed; `PostToolBatch`, which repeats each `PostToolUse`, is not sent. Anything the table does not name is sent whole. A tool record still over about 1,200 tokens arrives with the note "large result, shown untrimmed": that marks a gap in the table, and GPT Live may mention it. Identical repeated bodies refer back to the earlier hook. Exact original code and logs remain available in the raw hook inspector.
+One table in the adapter decides the rest ([Claude](src/adapters/claude/context.ts), [Codex](src/adapters/codex/context.ts), [Pi](src/adapters/pi/context.ts)). Each row removes an event or fields, or truncates fields to a number of characters, keeping their start and end. For Claude, whole files (Write's content, an overwrite's patch, the file before an edit), the text of a file read and Bash's stdout keep their first and last 600 characters; commands and stderr are always whole; PDF pages and connection bookkeeping are removed; `PostToolBatch`, which repeats each `PostToolUse`, is not sent. Anything the table does not name is sent whole. A tool record still over about 1,200 tokens arrives with the note "large result, shown untrimmed": that marks a gap in the table, and GPT Live may mention it. Identical repeated bodies refer back to the earlier hook. Exact original code and logs remain available in the raw hook inspector.
 
 Ordinary observations collect for up to 250 milliseconds; requests, completion, errors and permission events flush immediately. The bridge preserves observation order and does not drop whole events or hold new hooks behind pending acknowledgments. `events.jsonl` retains the originals; `context.prepared` records the derived text, each record's size and receipt time. Bulky tool fields are reduced before delivery, while assistant prose remains complete. This improves measured latency but does not guarantee a five-second API deadline for arbitrary bursts, very long prose, restored history or service delays.
 
@@ -252,6 +252,28 @@ To resume a Codex session, use Codex's own `resume` in the same project folder: 
 
 When many events arrive while you speak, GPT Live sometimes answers without passing the request on: in a check, it delegated 3 of 5 requests while context arrived every 1.5 seconds, and 4 of 4 without. This affects Claude Code the same way. If a request does not show up in the timeline, say it again.
 
+## Use Pi
+
+Put `fdc` in front of your usual Pi command, in your project's folder. Pi's own options work as usual:
+
+```sh
+fdc pi
+fdc pi --model sonnet:high
+fdc pi --continue
+```
+
+You need Pi 1.0 as a `pi` command on your PATH, signed in once with `/login` inside Pi; `fdc doctor pi` checks both. To run Pi from a checkout, put a two-line script named `pi` on your PATH that runs the checkout's `pi-test.sh` (`exec /path/to/pi/pi-test.sh "$@"`); a symbolic link does not work, because the script finds its files from its own path.
+
+How it connects:
+
+- Pi has no hooks, channel or app server. Its extensions are its way in, so the launcher loads the companion's extension ([`extension.ts`](src/adapters/pi/extension.ts)) for this run only, with `-e`, ahead of your own arguments. Nothing is installed in Pi, and `--no-extensions` still loads it. Your own extensions and MCP servers load beside it.
+- The extension forwards Pi's events to the bridge, as a command hook does: your input, each finished message, each tool's start and end, questions waiting in the terminal, compaction, and the end of the run (`agent_settled`, after which Pi will not continue by itself). It leaves out each token of a message and partial tool output, whose end events carry them whole, and events that repeat the whole context. Its handlers return nothing, so it never changes what Pi does.
+- A spoken request reaches Pi through the same extension, labeled `[Voice request …]`, as a steer: while Pi works, it lands after the current tool calls and before the next model call; while Pi is idle, it starts a turn. Pi reports it as input from the extension, which the timeline shows as received.
+- The extension reports Pi's session as Pi starts, so you can click **Start voice** before typing anything. With `--continue`, `--resume`, `--session` or `--fork`, the session's saved messages are context for GPT Live from the start, read from Pi's session file. `/new`, `/resume` and `/fork` inside Pi move the companion to the new session.
+- What reaches GPT Live follows the same rules as for Claude, with Pi's own table: the assistant's text stays whole, the provider's bookkeeping and the signatures of its reasoning are removed, finished messages that repeat an input or a tool result are not sent, and file content, command output and script output keep their first and last 600 characters.
+
+Refused, with the reason: `-p` / `--print` and `--mode json` or `rpc` (no interactive session). `fdc pi --help`, `--version` and subcommands such as `fdc pi mcp list` run Pi directly. Pi Durable's coding agent loads no extensions, so the companion cannot reach it.
+
 ## Use it from your phone
 
 You can talk to Claude from your phone while it keeps running on your computer. Install [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) once (for example `brew install cloudflared`), then add `--public`:
@@ -316,7 +338,9 @@ The TypeScript sources run directly under Node; the bridge strips the page modul
 
 - `src/core/` is the part shared by every coding agent: the bridge and its endpoints, the open pages, voice sessions, the mediator, the observation feed, the context queue, the delivery outbox, status and the event log, the timeline, the audio audit, the usage ledger and the command-hook relay.
 - `src/adapters/claude/` is everything specific to Claude Code: its hooks and launch flags (`launch.ts`), how its hooks become observations and turn state (`observer.ts`), what of them reaches GPT Live (`context.ts`), the voice channel it is reached through (`delivery.ts`, `channel-server.ts`) and its wording (`profile.ts`).
-- `src/adapters/codex/` is the same for Codex: its app server and hooks (`app-server.ts`), its command (`launch.ts`), hooks and transcript as observations (`observer.ts`), and delivery by `turn/steer` or a new turn (`delivery.ts`). Both adapters read their agent's own arguments (`arguments.ts`).
+- `src/adapters/codex/` is the same for Codex: its app server and hooks (`app-server.ts`), its command (`launch.ts`), hooks and transcript as observations (`observer.ts`), and delivery by `turn/steer` or a new turn (`delivery.ts`).
+- `src/adapters/pi/` is the same for Pi: the extension Pi loads (`extension.ts`), its command (`launch.ts`), its events and session file as observations (`observer.ts`), and delivery through the extension (`delivery.ts`).
+- Every adapter reads its agent's own arguments (`arguments.ts`).
 - `src/launcher/` holds the launcher's option parsing, Enter prompt and tunnel; `src/cli.ts` runs them.
 - `web/` is the page: audio I/O, page UI, bridge client, WebRTC peer, timeline view, sound cues and the audio worklet.
 
@@ -328,7 +352,7 @@ To support another coding agent, start from [CONTRIBUTING.md](CONTRIBUTING.md).
 
 `npm test` runs offline checks without OpenAI spending. `npm run test:pages` opens companion pages in real Chrome in the orders people use: before the agent is ready, on two devices at once, moving voice between them, after a dropped connection, from an earlier start's link and after the companion stops; `npm run test:pages -- --public` does the same with the second device on a real Cloudflare tunnel. Neither spends API credits. `npm run test:ui` checks the live timeline, hover details, navigation, reload, and real browser audio capture/playback between two local WebRTC peers, with a virtual microphone and no paid API connection. `npm run test:hooks` uses synthesized speech to check recall of file/tool details and new work through the one-way channel; it starts a paid voice session. `npm run test:updates` checks a rapid seven-step Claude task, complete thinking delivery without progress speech cues, and status recall with real voice.
 
-`npm run test:codex` runs one real Codex session with real voice: a spoken request steers Codex's running turn, and Codex acts on it in that turn. `npm run test:codex-start` starts real Codex without a first message, then resumes and forks that session; each time a request delivered before anything is typed becomes the session's first message. It uses a little Codex usage and no voice. The other integration commands in `package.json` start real Claude and OpenAI voice sessions. They require macOS `say`, `ffmpeg`, and the relevant browser setup; they consume API credits. Ordinary use does not require these test tools.
+`npm run test:codex` runs one real Codex session with real voice: a spoken request steers Codex's running turn, and Codex acts on it in that turn. `npm run test:codex-start` starts real Codex without a first message, then resumes and forks that session; each time a request delivered before anything is typed becomes the session's first message. It uses a little Codex usage and no voice. `npm run test:pi` does the same for real Pi: a request as the first turn, a second one steered into a running command, then the session continued. It uses a little of the model usage Pi is signed in to, and no voice; set `PI_BIN` to a checkout's `pi-test.sh` when no `pi` is on the PATH. The other integration commands in `package.json` start real Claude and OpenAI voice sessions. They require macOS `say`, `ffmpeg`, and the relevant browser setup; they consume API credits. Ordinary use does not require these test tools.
 
 ## License
 

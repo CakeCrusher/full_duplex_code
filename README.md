@@ -4,7 +4,7 @@
 
 <h1 align="center">Full-Duplex Code</h1>
 
-<p align="center">Talk to Claude Code or Codex while it works.</p>
+<p align="center">Talk to Claude Code, Codex or Pi while it works.</p>
 
 <p align="center"><a href="https://www.youtube.com/watch?v=mF8c93XIQw8">▶ Watch it in action: <b>I Coded From the Shower Without Looking at Claude Code</b></a></p>
 
@@ -16,7 +16,7 @@ You don't have to stay at your desk. Hand off a task, go do something else, and 
 
 ## Quickstart
 
-**You need** macOS (the tested setup), Node.js 22.18 or newer, Chrome, a microphone, Claude Code or Codex 0.155 or newer, installed and signed in, and an OpenAI API key with access to GPT Live 1.
+**You need** macOS (the tested setup), Node.js 22.18 or newer, Chrome, a microphone, Claude Code, Codex 0.155 or newer, or Pi 1.0, installed and signed in, and an OpenAI API key with access to GPT Live 1.
 
 ### 1. Install
 
@@ -37,6 +37,7 @@ In your project's folder, put `fdc` in front of the command you normally run. Ev
 cd /path/to/your/project
 fdc claude          # or: fdc claude --dangerously-skip-permissions
 fdc codex           # or: fdc codex --model gpt-5.5
+fdc pi              # or: fdc pi --continue
 ```
 
 ### 3. Connect and talk
@@ -51,7 +52,7 @@ You can keep typing to the agent too, and ask the companion about it: "What did 
 ### 4. Stop
 
 - **End voice** closes the voice connection and its billing, about $0.05 a minute. The agent keeps working.
-- Exiting the agent stops everything: `/exit` in Claude Code, Ctrl-C twice in Codex.
+- Exiting the agent stops everything: `/exit` in Claude Code, Ctrl-C twice in Codex or Pi.
 
 ## From your phone
 
@@ -69,6 +70,7 @@ The launcher prints a phone link and a QR code once the link works. Open the pag
 | --- | --- |
 | `fdc claude --resume SESSION_ID` | Resume a Claude Code conversation |
 | `fdc codex resume SESSION_ID` | Resume a Codex session |
+| `fdc pi --continue` | Continue the last Pi session in this folder |
 | `fdc --public codex` | Also reach the companion from your phone |
 | `fdc --voice cedar claude` | Pick the GPT Live voice (default `marin`) |
 | `fdc doctor` | Check the setup without API spending |
@@ -80,8 +82,8 @@ The launcher prints a phone link and a QR code once the link works. Open the pag
 ![Full-Duplex Code: talk to the voice companion while Claude Code keeps working](assets/full-duplex-code.gif)
 
 - `fdc` starts a small bridge on this computer, then your agent's own command in the terminal.
-- The agent's hooks report what it does. The bridge turns that into context for GPT Live.
-- Your voice goes from the browser straight to OpenAI. Requests reach the agent through Claude Code's channel or Codex's app server, even mid-turn.
+- The agent's hooks report what it does (for Pi, an extension loaded for that run). The bridge turns that into context for GPT Live.
+- Your voice goes from the browser straight to OpenAI. Requests reach the agent through Claude Code's channel, Codex's app server or that Pi extension, even mid-turn.
 
 ## Learn more
 
