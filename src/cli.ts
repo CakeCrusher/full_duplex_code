@@ -86,8 +86,17 @@ if (session.direct) {
   await run(agent, session);
 }
 
+// Whether a command can be started by name, as spawn finds it: a shell alias or function cannot.
+function onPath(command: string) {
+  return (process.env.PATH ?? '').split(path.delimiter).some(dir => {
+    try { fs.accessSync(path.join(dir, command), fs.constants.X_OK); return true; } catch { return false; }
+  });
+}
+
 async function run(agent: AgentDefinition, session: AgentArguments) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) refuse(`Run fdc in a terminal. The final interface is the normal interactive ${product} chat.`);
+  const { id } = agent.profile;
+  if (!onPath(id)) refuse(`${id} is not on your PATH, so ${product} cannot start. A shell alias does not count: fdc starts ${id} as a program. Install ${product}, or put a script named ${id} on your PATH that runs it.`);
   if (!process.env.OPENAI_API_KEY) refuse('Add OPENAI_API_KEY to .env or your environment.');
   const modes = agent.observationModes;
   if (values.observe !== undefined && !modes.includes(values.observe)) refuse(modes.length ? `--observe must be ${modes.join(' or ')} for ${agent.profile.id}.` : `--observe does not apply to ${agent.profile.id}.`);
