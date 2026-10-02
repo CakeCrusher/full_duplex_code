@@ -262,7 +262,7 @@ fdc pi --model sonnet:high
 fdc pi --continue
 ```
 
-You need Pi 1.0 as a `pi` command on your PATH, signed in once with `/login` inside Pi; `fdc doctor pi` checks both. To run Pi from a checkout, put a two-line script named `pi` on your PATH that runs the checkout's `pi-test.sh` (`exec /path/to/pi/pi-test.sh "$@"`); a symbolic link does not work, because the script finds its files from its own path.
+You need Pi 1.0, signed in once with `/login` inside Pi; `fdc doctor pi` checks both. Pi can be installed or run from a checkout through a shell alias, such as `alias pi=~/pi/pi-test.sh`.
 
 How it connects:
 
@@ -273,6 +273,8 @@ How it connects:
 - What reaches GPT Live follows the same rules as for Claude, with Pi's own table: the assistant's text stays whole, the provider's bookkeeping and the signatures of its reasoning are removed, finished messages that repeat an input or a tool result are not sent, and file content, command output and script output keep their first and last 600 characters.
 
 Refused, with the reason: `-p` / `--print` and `--mode json` or `rpc` (no interactive session). `fdc pi --help`, `--version` and subcommands such as `fdc pi mcp list` run Pi directly. Pi Durable's coding agent loads no extensions, so the companion cannot reach it.
+
+The launcher finds every agent's command as your shell does: on your PATH, or else as an alias in your interactive shell, which it reads once and runs directly. A shell function is not followed.
 
 ## Use it from your phone
 

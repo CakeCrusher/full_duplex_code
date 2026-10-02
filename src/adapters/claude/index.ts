@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { spawnSync } from 'node:child_process';
+import { runCommand } from '../../core/command.ts';
 import type { AgentAdapter, AgentDefinition, AgentLaunch, AgentSession, VoiceRequest } from '../../core/adapter.ts';
 import { claudeProfile } from './profile.ts';
 import { claudeContext } from './context.ts';
@@ -39,8 +39,8 @@ export class ClaudeAdapter extends EventEmitter implements AgentAdapter {
 }
 
 export function doctor() {
-  const version = spawnSync('claude', ['--version'], { encoding: 'utf8' });
-  const auth = spawnSync('claude', ['auth', 'status'], { encoding: 'utf8' });
+  const version = runCommand('claude', ['--version']);
+  const auth = runCommand('claude', ['auth', 'status']);
   let loggedIn = false; try { loggedIn = JSON.parse(auth.stdout).loggedIn; } catch {}
   return { report: { claude: version.stdout?.trim() || 'not found', claudeLoggedIn: loggedIn }, ok: version.status === 0 && loggedIn };
 }

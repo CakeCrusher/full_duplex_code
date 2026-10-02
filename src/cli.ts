@@ -10,6 +10,7 @@ import { once } from 'node:events';
 import { spawn, type ChildProcess } from 'node:child_process';
 import qrcode from 'qrcode-terminal';
 import { Harness } from './core/bridge.ts';
+import { resolveCommand, type Command } from './core/command.ts';
 import { UsageLedger } from './core/usage-ledger.ts';
 import type { AgentArguments, AgentDefinition } from './core/adapter.ts';
 import { agents } from './adapters/index.ts';
@@ -79,7 +80,8 @@ if (session.direct) {
   // Help, version and subcommands are not sessions: run the agent's command as is,
   // still without the companion's OpenAI key.
   const env = { ...process.env }; delete env.OPENAI_API_KEY;
-  const child = spawn(agent.profile.id, agentArgs, { cwd, env, stdio: 'inherit' });
+  const { command, args } = agentCommand(agent.profile.id);
+  const child = spawn(command, [...args, ...agentArgs], { cwd, env, stdio: 'inherit' });
   child.on('error', error => refuse(`${agent.profile.id}: ${error.message}`));
   child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
 } else {
@@ -87,16 +89,14 @@ if (session.direct) {
 }
 
 // Whether a command can be started by name, as spawn finds it: a shell alias or function cannot.
-function onPath(command: string) {
-  return (process.env.PATH ?? '').split(path.delimiter).some(dir => {
-    try { fs.accessSync(path.join(dir, command), fs.constants.X_OK); return true; } catch { return false; }
-  });
+// The agent's command as the operator's shell runs it: on the PATH, or an alias.
+function agentCommand(name: string): Command {
+  return resolveCommand(name) ?? refuse(`${name} was not found, on your PATH or as an alias in your shell, so ${product} cannot start. Install ${product}, or check that \`${name}\` runs in a new terminal.`);
 }
 
 async function run(agent: AgentDefinition, session: AgentArguments) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) refuse(`Run fdc in a terminal. The final interface is the normal interactive ${product} chat.`);
-  const { id } = agent.profile;
-  if (!onPath(id)) refuse(`${id} is not on your PATH, so ${product} cannot start. A shell alias does not count: fdc starts ${id} as a program. Install ${product}, or put a script named ${id} on your PATH that runs it.`);
+  agentCommand(agent.profile.id);
   if (!process.env.OPENAI_API_KEY) refuse('Add OPENAI_API_KEY to .env or your environment.');
   const modes = agent.observationModes;
   if (values.observe !== undefined && !modes.includes(values.observe)) refuse(modes.length ? `--observe must be ${modes.join(' or ')} for ${agent.profile.id}.` : `--observe does not apply to ${agent.profile.id}.`);
@@ -150,7 +150,9 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...launch.env };
   delete childEnv.OPENAI_API_KEY;
   // The agent's error output passes through to the terminal, and a copy is kept.
-  child = spawn(launch.command, launch.args, { cwd, env: childEnv, stdio: ['inherit', 'inherit', 'pipe'] });
+  const { command, args, via } = agentCommand(launch.command);
+  harness.log({ type: 'launcher.command', name: launch.command, command, args, via });
+  child = spawn(command, [...args, ...launch.args], { cwd, env: childEnv, stdio: ['inherit', 'inherit', 'pipe'] });
   const errors = new ErrorTail();
   child.stderr!.on('data', (chunk: Buffer) => { process.stderr.write(chunk); errors.push(chunk); });
   // Ctrl-C belongs to the agent's terminal interaction. Exiting the agent ends the harness.

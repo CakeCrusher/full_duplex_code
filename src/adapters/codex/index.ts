@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { spawnSync } from 'node:child_process';
+import { runCommand } from '../../core/command.ts';
 import type { AgentAdapter, AgentDefinition, AgentLaunch, AgentSession, VoiceRequest } from '../../core/adapter.ts';
 import { hookCommand } from '../../core/hook-command.ts';
 import { codexProfile } from './profile.ts';
@@ -63,8 +63,8 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
 }
 
 export function doctor() {
-  const version = spawnSync('codex', ['--version'], { encoding: 'utf8' });
-  const login = spawnSync('codex', ['login', 'status'], { encoding: 'utf8' });
+  const version = runCommand('codex', ['--version']);
+  const login = runCommand('codex', ['login', 'status']);
   return { report: { codex: version.stdout?.trim() || 'not found', codexLoggedIn: login.status === 0 }, ok: version.status === 0 && login.status === 0 };
 }
 

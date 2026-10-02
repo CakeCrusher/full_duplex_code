@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { spawnSync } from 'node:child_process';
+import { runCommand } from '../../core/command.ts';
 import type { AgentAdapter, AgentDefinition, AgentLaunch, AgentSession, VoiceRequest } from '../../core/adapter.ts';
 import { piProfile } from './profile.ts';
 import { piContext } from './context.ts';
@@ -38,12 +38,12 @@ export class PiAdapter extends EventEmitter implements AgentAdapter {
 }
 
 export function doctor() {
-  const version = spawnSync('pi', ['--version'], { encoding: 'utf8' });
+  const version = runCommand('pi', ['--version']);
   // The provider Pi uses by default, or the first one it has a saved login for.
   const dir = process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), '.pi', 'agent');
   const read = (file: string) => { try { return JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')); } catch { return {}; } };
   const provider = read('settings.json').defaultProvider ?? Object.keys(read('auth.json'))[0];
-  const loggedIn = Boolean(provider) && spawnSync('pi', ['auth', 'check', '--provider', provider, '--no-refresh'], { encoding: 'utf8' }).status === 0;
+  const loggedIn = Boolean(provider) && runCommand('pi', ['auth', 'check', '--provider', provider, '--no-refresh']).status === 0;
   return { report: { pi: version.stdout?.trim() || 'not found', piLoggedIn: loggedIn }, ok: version.status === 0 && loggedIn };
 }
 
