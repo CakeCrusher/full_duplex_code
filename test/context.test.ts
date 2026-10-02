@@ -16,13 +16,15 @@ test('base64 is omitted wherever it appears, for any agent; ordinary text of any
   const read = { type: 'image', file: { base64: 'iVBOR'.repeat(32000), type: 'image/png', dimensions: { originalWidth: 520, originalHeight: 900 } } };
   const generated = { type: 'input_image', image_url: 'data:image/png;base64,' + 'iVBORw0KGgo'.repeat(2000), detail: 'high' };
   const prose = 'A long paragraph of ordinary text, kept whole. '.repeat(2000);
-  const raw = JSON.stringify({ tool_response: [{ type: 'text', text: 'Score 20' }, screenshot, mcp, read, generated], code: 'const data = "ABCxyz";', prose });
+  const printed = 'Script completed\nOutput:\n{"content":[{"type":"text","text":"Captured"},{"type":"image","data":"' + '/9j/4AAQ'.repeat(1000) + '=="}]}';
+  const raw = JSON.stringify({ tool_response: [{ type: 'text', text: 'Score 20' }, screenshot, mcp, read, generated], code: 'const data = "ABCxyz";', prose, printed });
   const data: any = contextData(claude, { name: 'PostToolUse', text: raw });
   assert.equal(data.tool_response[1].source.data, '[omitted: 40,000 chars]');
   assert.equal(data.tool_response[2].data, '[omitted: 40,000 chars]');
   assert.deepEqual(data.tool_response[3], { type: 'image', file: { base64: '[omitted: 160,000 chars]', type: 'image/png', dimensions: { originalWidth: 520, originalHeight: 900 } } });
   assert.equal(data.tool_response[4].image_url, '[omitted: 22,022 chars]');
   assert.equal(data.tool_response[0].text, 'Score 20'); assert.equal(data.code, 'const data = "ABCxyz";'); assert.equal(data.prose, prose);
+  assert.equal(data.printed, 'Script completed\nOutput:\n{"content":[{"type":"text","text":"Captured"},{"type":"image","data":"[omitted: 8,002 chars]"}]}', 'base64 printed inside text');
   assert.equal(JSON.parse(raw).tool_response[1].source.data.length, 40000, 'the original stays intact for the local log');
   assert.ok(startupHistory(claude, [{ name: 'PostToolUse', text: JSON.stringify({ tool_response: [screenshot] }) }]).text.length < 1000, 'resuming voice also omits the bytes');
 });

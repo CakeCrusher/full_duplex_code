@@ -73,9 +73,9 @@ export interface Observation {
 export type ContextRule = {
   /** The event, by the name the observer gives it (`Observation.name`); every event when absent. */
   event?: string;
-  /** Only events whose top-level fields have these values, such as `{ tool_name: 'Edit' }`. */
+  /** Only events whose fields, by dotted path, have these values, such as `{ tool_name: 'Edit' }` or `{ 'message.role': 'user' }`. */
   where?: Record<string, string>;
-  /** Dotted paths into the event; the whole event when absent. */
+  /** Dotted paths into the event, stepping through every item of a list on the way; the whole event when absent. */
   key?: string | readonly string[];
 } & ({ remove: true } | { truncate: number });
 

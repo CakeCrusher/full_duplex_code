@@ -45,6 +45,22 @@ test('the core applies any table: remove or truncate an event or a key, matched 
   assert.deepEqual(truncate({ a: 1 }, 100), { a: 1 }, 'a value that fits keeps its shape');
 });
 
+test('a row reaches into every item of a list, and can match a nested field', () => {
+  const context: ContextRule[] = [
+    { where: { 'message.role': 'user' }, remove: true },
+    { key: ['message.content.signature', 'message.content.args.content'], remove: true },
+    { key: 'message.content.text', truncate: 10 },
+  ];
+  const agent = { ...claude, context };
+  const event = (role: string) => ({ name: 'message_end', text: JSON.stringify({ message: { role, content: [
+    { type: 'text', text: 'abcdefghijklmnopqrstuvwxyz', signature: 's1' }, { type: 'call', args: { content: 'file', path: 'a' } }, 'plain' ] } }) });
+  assert.equal(contextData(agent, event('user')), undefined, 'matched by a field one level down');
+  assert.deepEqual(contextData(agent, event('assistant')), { message: { role: 'assistant', content: [
+    { type: 'text', text: 'abcde … [omitted: 16 chars] … vwxyz' }, { type: 'call', args: { path: 'a' } }, 'plain' ] } });
+  assert.deepEqual(contextData(agent, { name: 'x', text: JSON.stringify({ message: { role: 'user' }, other: 1 }) }), undefined);
+  assert.notEqual(contextData({ ...claude, context: [{ where: { 'message.content.type': 'text' }, remove: true }] }, event('assistant')), undefined, 'a condition never steps into a list');
+});
+
 test('only the table trims: an unlisted large result goes whole, with a short note first; prose never gets one', () => {
   const output = 'BEGIN\n' + '世界 😄 useful detail\n'.repeat(3000) + 'END';
   const large = view(newProjector(), observation('PostToolUse', { tool_name: 'Grep', tool_response: { content: output } }));
