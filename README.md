@@ -16,7 +16,7 @@ You don't have to stay at your desk. Hand off a task, go do something else, and 
 
 ## Quickstart
 
-**You need** macOS (the tested setup), Node.js 22.18 or newer, Chrome, a microphone, Claude Code, Codex 0.155 or newer, or Pi 1.0, installed and signed in, and an OpenAI API key with access to GPT Live 1.
+**You need** macOS (the tested setup), Node.js 22.18 or newer, Chrome, a microphone, Claude Code, Codex 0.155 or newer, or Pi 1.0, installed and signed in, and an OpenAI API key with access to GPT Live 1. A ChatGPT plan can't stand in for the key: Sign in with ChatGPT does not currently support GPT Live ([details](USAGE.md#sign-in-with-chatgpt)).
 
 ### 1. Install
 

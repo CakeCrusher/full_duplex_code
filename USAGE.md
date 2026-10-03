@@ -15,6 +15,10 @@ You need:
 
 The tested setup is macOS with Chrome. Other operating systems have not been validated. Claude Code must support channels and the hooks used by this application; organization policies may restrict channel access.
 
+### Sign in with ChatGPT
+
+Sign in with ChatGPT does not currently support GPT Live, so a ChatGPT plan cannot replace the API key. With a plan token, OpenAI allows only `GET /v1/models` and `POST /v1/responses`, and its preview limitations state that "Audio/video input… [is] not supported by this flow" ([OpenAI's docs](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)). GPT Live is `/v1/live/sessions` (the voice endpoint the bridge opens, in [`live-session.ts`](src/core/live-session.ts)). Tested on 2026-10-03 with a Pro plan: `POST /v1/live/sessions` (WebRTC) and its WebSocket both returned `401 rejected_by_access_enforcement` / `no_matching_rule`, while the same requests with an API key connected and talked.
+
 ## Install and configure
 
 ```sh
