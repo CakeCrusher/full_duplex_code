@@ -28,7 +28,7 @@ Rules we settled on while building Full-Duplex Code and its adapters.
 - Try the simplest thing first. A simpler rule should mean fewer lines.
 - Completeness first: miss nothing, then make it cheaper.
 - No regressions. Check against the agent's own docs and a real run, and judge changes on replayed real sessions.
-- Each adapter gets offline tests with stand-ins and one real end-to-end run.
+- Each adapter gets offline tests with stand-ins. Nothing ships without a real end-to-end run through `fdc` itself.
 - Every restriction needs a source you can point to, never an opinion.
 - Generalize; don't tune to one dataset.
 - Docs point at the code rather than retelling it. Show rather than describe.

@@ -115,7 +115,12 @@ export function synthesize(name: string, text: string): Fixture {
 }
 
 export async function connectTestVoice(harness: Harness) {
-  const ws = new WebSocket(harness.baseUrl.replace('http:', 'ws:') + '/voice', { headers: { Authorization: `Bearer ${harness.browserToken}` } });
+  return connectVoice({ baseUrl: harness.baseUrl, browserToken: harness.browserToken, runDir: harness.runDir, log: event => harness.log(event) });
+}
+
+// The page's voice connection, to any running bridge: synthesized speech in, Live's audio and events out.
+export async function connectVoice({ baseUrl, browserToken, runDir, log = () => {} }: { baseUrl: string; browserToken: string; runDir: string; log?: (event: Record<string, unknown>) => void }) {
+  const ws = new WebSocket(baseUrl.replace('http:', 'ws:') + '/voice', { headers: { Authorization: `Bearer ${browserToken}` } });
   const events: any[] = []; const outputs: Buffer[] = []; let file: Buffer | null = null; let offset = 0; let resolvePlayback: (() => void) | undefined;
   ws.on('message', (data, binary) => {
     if (binary) outputs.push(Buffer.from(data as Buffer));
@@ -137,17 +142,17 @@ export async function connectTestVoice(harness: Harness) {
     async speak(fixture: Fixture) {
       if (file) throw new Error('Test audio is already playing');
       console.log('\n\nINPUT:', fixture.text);
-      harness.log({ type: 'test.audio_started', text: fixture.text });
+      log({ type: 'test.audio_started', text: fixture.text });
       await new Promise<void>(resolve => { file = fixture.pcm; offset = 0; resolvePlayback = resolve; });
-      harness.log({ type: 'test.audio_ended', text: fixture.text });
+      log({ type: 'test.audio_ended', text: fixture.text });
     },
     async close() {
       ws.send(JSON.stringify({ type: 'stop' }));
       await until(() => events.find(e => e.type === 'voice_closed'), { timeout: 20000, label: 'final Live usage' }).catch(error => console.error(error.message));
       clearInterval(timer); ws.close();
-      fs.writeFileSync(path.join(harness.runDir, 'voice-events.json'), JSON.stringify(events, null, 2));
-      fs.writeFileSync(path.join(harness.runDir, 'output.pcm'), Buffer.concat(outputs));
-      spawnSync('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-f', 's16le', '-ar', '24000', '-ac', '1', '-i', path.join(harness.runDir, 'output.pcm'), path.join(harness.runDir, 'output.wav')]);
+      fs.writeFileSync(path.join(runDir, 'voice-events.json'), JSON.stringify(events, null, 2));
+      fs.writeFileSync(path.join(runDir, 'output.pcm'), Buffer.concat(outputs));
+      spawnSync('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-f', 's16le', '-ar', '24000', '-ac', '1', '-i', path.join(runDir, 'output.pcm'), path.join(runDir, 'output.wav')]);
     },
   };
 }
