@@ -16,7 +16,7 @@ You don't have to stay at your desk. Hand off a task, go do something else, and 
 
 ## Quickstart
 
-**You need** macOS (the tested setup), Node.js 22.18 or newer, Chrome, a microphone, Claude Code, Codex 0.155 or newer, or Pi 1.0, installed and signed in, and an OpenAI API key with access to GPT Live 1. A ChatGPT plan can't stand in for the key: Sign in with ChatGPT does not currently support GPT Live ([details](USAGE.md#sign-in-with-chatgpt)).
+**You need** macOS (the tested setup), Node.js 22.18 or newer, Chrome, a microphone, Claude Code, Codex 0.155 or newer, or Pi 1.0, installed and signed in, and an OpenAI API key with access to GPT Live 1.
 
 ### 1. Install
 
@@ -90,6 +90,10 @@ The launcher prints a phone link and a QR code once the link works. Open the pag
 - [User guide](USAGE.md): the page and its timeline, what the companion follows, resuming, costs and troubleshooting.
 - [Contributing](CONTRIBUTING.md): support another coding agent, and how changes are reviewed.
 - [Principles](PRINCIPLES.md): the rules behind the companion and its adapters.
+
+## Why an API key, not your ChatGPT plan?
+
+We'd love to let you sign in with ChatGPT and use the plan you already pay for. Today OpenAI doesn't allow it: Sign in with ChatGPT covers text requests only, and GPT Live's voice endpoint refuses plan sign-ins ([what we tested](USAGE.md#sign-in-with-chatgpt)). If you'd like voice on your plan too, please tell OpenAI on the [developer forum](https://community.openai.com/). The more people ask, the more likely it changes.
 
 ## License
 
