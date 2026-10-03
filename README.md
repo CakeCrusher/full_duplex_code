@@ -29,6 +29,8 @@ echo 'OPENAI_API_KEY=your-key-here' >> .env
 fdc doctor                                  # checks the setup; spends nothing
 ```
 
+Why a key and not your ChatGPT plan: Sign in with ChatGPT doesn't currently support GPT Live's voice endpoint, and there's nothing we can do about it on our side. If you'd like it, ask OpenAI to prioritize it on the [developer forum](https://community.openai.com/) ([more](#why-an-api-key-not-your-chatgpt-plan)).
+
 ### 2. Start your agent through `fdc`
 
 In your project's folder, put `fdc` in front of the command you normally run. Everything after the agent's name reaches it unchanged.

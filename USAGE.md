@@ -36,6 +36,8 @@ Create `.env` in the cloned repository and add your OpenAI key:
 OPENAI_API_KEY=your-key-here
 ```
 
+A ChatGPT plan can't replace the key: Sign in with ChatGPT doesn't currently support GPT Live's voice endpoint (see [Sign in with ChatGPT](#sign-in-with-chatgpt)). If you'd like it, ask OpenAI to prioritize it on the [developer forum](https://community.openai.com/).
+
 If `.env` already exists, edit it instead of replacing it. You can alternatively set `OPENAI_API_KEY` in your environment. This file is ignored by Git. The key stays on the local server; it is not sent to the browser or the Claude subprocess.
 
 Check the setup without starting a paid voice session:
