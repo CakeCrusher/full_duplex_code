@@ -40,6 +40,9 @@ async function launch(name: string, args: string[]) {
   // Run from inside Claude Code, a child Claude would belong to that session and
   // never save its own conversation, so resuming it would find nothing.
   for (const name of Object.keys(env)) if (/^CLAUDE(CODE$|_CODE_|_PID$|_EFFORT$)/.test(name)) delete env[name];
+  // Run with npm run, npm's variables would make fdc work in this checkout
+  // (it honors INIT_CWD for npm start) instead of the test project.
+  for (const name of Object.keys(env)) if (/^(npm_|INIT_CWD$)/.test(name)) delete env[name];
   const terminal = pty.spawn(fdc, ['--port', '0', agent, ...args], { name: 'xterm-256color', cols: 140, rows: 45, cwd, env });
   let raw = '', exited: number | null = null, entered = false, trusted = false, channel = false, update = false;
   terminal.onData(data => {

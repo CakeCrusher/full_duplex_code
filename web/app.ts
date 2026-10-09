@@ -5,7 +5,7 @@ import { CuePlayer, CueTracker } from './cues.js';
 import { BridgeClient, type BridgeEvent } from './bridge-client.js';
 import { AudioIO, watchMicrophones, type WorkletMessage } from './audio-io.js';
 import { WebRtcPeer } from './webrtc-peer.js';
-import { $, notice, showSpeaking, showSpeakingUpdate, showStatus } from './page-ui.js';
+import { $, notice, showStatus } from './page-ui.js';
 import { profile } from './profile.js';
 
 const token = location.hash.slice(1) || sessionStorage.getItem('fd-voice-token');
@@ -78,7 +78,6 @@ function disconnected() {
   const cue = cues.end(); if (cue) cuePlayer.play(cue);
   const hadVoice = active || starting;
   releaseAudio(); pageId = null;
-  showSpeakingUpdate({ state: 'disconnected' });
   $('connection').textContent = 'Reconnecting…'; $<HTMLButtonElement>('start').disabled = true;
   if (leaving) return;
   if (hadVoice) { voiceDropped = true; notice('The connection to the companion dropped, which ended voice. Reconnecting…'); }
@@ -161,13 +160,6 @@ function releaseAudio() {
 }
 function stop() { if (bridge.open) bridge.send({ type: 'stop' }); releaseAudio(); }
 $('start').onclick = start; $('stop').onclick = stop;
-$<HTMLInputElement>('speaking-level').oninput = e => showSpeaking(Number((e.target as HTMLInputElement).value));
-$<HTMLInputElement>('speaking-level').onchange = e => {
-  const level = Number((e.target as HTMLInputElement).value);
-  if (!bridge.open) return showSpeakingUpdate({ state: 'disconnected', level });
-  showSpeakingUpdate({ state: active ? 'pending' : starting ? 'starting' : 'next_session', level });
-  bridge.send({ type: 'speaking_level', level });
-};
 $('confirm-product').textContent = profile.product;
 $<HTMLInputElement>('confirm-deliveries').onchange = e => { if (bridge.open) bridge.send({ type: 'confirm_deliveries', on: (e.target as HTMLInputElement).checked }); };
 $<HTMLInputElement>('microphone-gate').oninput = e => {

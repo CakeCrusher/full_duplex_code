@@ -5,7 +5,6 @@ import type { AgentObserver, ObservedAgent } from './agent-observer.ts';
 import { ContextQueue, type ContextSink } from './context-queue.ts';
 import { VoiceHistory } from './voice-history.ts';
 import { ObservationFeed } from './observation-feed.ts';
-import { DEFAULT_SPEAKING_LEVEL } from './voice-policy.ts';
 import { nothingToSend, queueFailed, voiceRequest } from './prompts.ts';
 
 /** The part of a Live session the mediator uses. */
@@ -27,9 +26,9 @@ export class Mediator {
   context: ContextQueue; feed: ObservationFeed;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
-  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, speakingLevel = DEFAULT_SPEAKING_LEVEL, coalesceMs }: {
+  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, coalesceMs }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
-    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; speakingLevel?: number; coalesceMs?: number;
+    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; coalesceMs?: number;
   }) {
     this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean;
     this.agent = agent;
@@ -37,7 +36,6 @@ export class Mediator {
       this.fault(error);
       live.close(`${this.agent.profile.name} context delivery failed`);
     }, this.agent);
-    this.context.setSpeakingLevel(speakingLevel);
     // Earlier work reaches Live only through the bounded startup history; the feed
     // sends only observations that arrive from now on.
     this.feed = new ObservationFeed(this.context, log, { agent: this.agent, coalesceMs });

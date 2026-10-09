@@ -1,6 +1,6 @@
 import type { AgentProfile } from './adapter.ts';
 import { estimatedTokens, textFragments } from './text-fragments.ts';
-import { BACKGROUND_REFERENCE, milestoneReference, quietReference } from './prompts.ts';
+import { observationReference } from './prompts.ts';
 
 export type AppendKind = 'thinking' | 'commentary' | 'instructions';
 /** The part of a Live session the queue writes to. */
@@ -18,12 +18,9 @@ export class ContextQueue {
   queue: Fragment[] = [];
   inFlight = 0; inFlightTokens = 0; tokensPerSecond = 300;
   running = false; stopped = false;
-  reference = BACKGROUND_REFERENCE;
+  reference: string;
   writeTimer: NodeJS.Timeout | null = null;
-  constructor(live: ContextSink, onError: (error: Error) => void, agent: { profile: AgentProfile }) { this.live = live; this.onError = onError; this.agent = agent; }
-  setSpeakingLevel(level: number) {
-    this.reference = level === 0 ? quietReference(this.agent) : level === 1 ? milestoneReference(this.agent) : BACKGROUND_REFERENCE;
-  }
+  constructor(live: ContextSink, onError: (error: Error) => void, agent: { profile: AgentProfile }) { this.live = live; this.onError = onError; this.agent = agent; this.reference = observationReference(agent); }
   add(kind: AppendKind, text: string, delegationId: string | null = null, source = '') {
     if (this.stopped || !text) return;
     // Preserve the prepared representation. Chunking is an API transport

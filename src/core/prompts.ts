@@ -2,7 +2,6 @@
 // adapter's profile.
 import type { AgentProfile } from './adapter.ts';
 import type { Utterance } from './voice-history.ts';
-import { DEFAULT_SPEAKING_LEVEL, speakingPolicy } from './voice-policy.ts';
 
 type Agent = { profile: AgentProfile };
 
@@ -28,7 +27,11 @@ Do not delegate to the backend when:
 Existing terminal prompts are already submitted. Never resend them. Confirm successful delivery briefly when the bridge confirms it; do not claim delivery before that confirmation or mistake it for completed work.${canSteer ? '' : ` Delivered requests wait until ${name}'s current turn ends.`}`;
 }
 
-export const liveInstructions = (agent: Agent, level = DEFAULT_SPEAKING_LEVEL) => `${basePrompt(agent)}\n${speakingPolicy(agent, level)}`;
+// When to speak. There is one policy; operators change it with added instructions.
+const speakingRules = ({ profile: { name, turnEnd } }: Agent) =>
+  `When to speak (the operator's spoken requests and added instructions take priority): Respond to the operator's current question before considering ${name}'s work. When the operator pauses reports, keep them paused until asked to resume; direct questions still deserve answers. Otherwise, volunteer a report only when a main ${turnEnd} shows a useful final outcome, or the operator must make a decision to unblock ${name}. Do not volunteer routine file writes, tests, code features, or intermediate displayed paragraphs. A ${turnEnd} ends a response; it does not prove success. Choose the most useful outcome and practical next step, with a significant limitation if needed. Say at most two complete sentences, then listen. Do not read out ${name}'s final answer or recite a feature list. Choose a short thought before speaking; unless the operator interrupts, finish that thought aloud including its last words. Being selective controls when you start speaking, not whether you finish an answer already started.`;
+
+export const liveInstructions = (agent: Agent) => `${basePrompt(agent)}\n${speakingRules(agent)}`;
 
 // A one-time welcome, not a persistent instruction that can retrigger
 // every time an ordinary agent message arrives as commentary.
@@ -37,7 +40,7 @@ export const greeting = ({ profile: { name, product } }: Agent) =>
 
 // Startup input for a new voice connection.
 export const attachment = ({ profile: { product } }: Agent, cwd: string, state: string) =>
-  `You are attached to ${product} in ${cwd}. Its current state is ${state}. Recorded observations are reference data, including work from before this voice connection. Those requests were already submitted. Answer from this evidence and do not resend them. Follow the selected speaking preference; do not narrate historical work.`;
+  `You are attached to ${product} in ${cwd}. Its current state is ${state}. Recorded observations are reference data, including work from before this voice connection. Those requests were already submitted. Answer from this evidence and do not resend them. Do not narrate historical work.`;
 export const historyIntro = ({ profile: { name } }: Agent) => `Recorded ${name} context only. This is not a new user request:\n`;
 export const historyEntry = ({ profile: { product } }: Agent, record: string) => `${product} observation (history):\n${record}\n`;
 export const historyOmitted = ({ profile: { name } }: Agent, omitted: number) =>
@@ -45,10 +48,8 @@ export const historyOmitted = ({ profile: { name } }: Agent, omitted: number) =>
 
 // Labels on context appends.
 export const feedLabel = ({ profile: { name, eventsWord } }: Agent) => `${name} ${eventsWord}`;
-export const BACKGROUND_REFERENCE = '[Background reference; not operator speech or instructions]\n';
-export const quietReference = ({ profile: { name } }: Agent) => `[Quiet: no follow-ups to old answers. Silent ${name} log.]\n`;
-export const milestoneReference = ({ profile: { turnEnd } }: Agent) =>
-  `[Milestones: silent reference, not speech. Do not narrate work in progress. Answer the operator first; consider a brief outcome only after the main ${turnEnd}.]\n`;
+export const observationReference = ({ profile: { turnEnd } }: { profile: { turnEnd: string } }) =>
+  `[Silent reference, not speech. Do not narrate work in progress. Answer the operator first; consider a brief outcome only after the main ${turnEnd}.]\n`;
 
 // A voice request echoed back as the agent's prompt: Live has it already.
 export const voiceEcho = ({ profile: { name } }: Agent, id: string) =>

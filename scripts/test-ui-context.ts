@@ -16,7 +16,7 @@ import { UsageLedger } from '../src/core/usage-ledger.ts';
 declare global {
   interface Window { __microphoneConstraints: any; __virtualAudio: any; __receiverPlayer: HTMLAudioElement; __remote: any; measureInput(rms: number): void }
 }
-// The preference append the stand-in voice session received, and its acknowledgment.
+// The last instruction append the stand-in voice session received, and its acknowledgment.
 const probe: { preference?: { kind: string; text: string }; ack?: () => void } = {};
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -80,7 +80,7 @@ try {
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(harness.browserUrl);
   await page.locator('.timeline-item[data-track="operator"]').first().waitFor();
-  assert.equal(await page.locator('#prompt-instructions').textContent(), liveInstructions(claude, 2));
+  assert.equal(await page.locator('#prompt-instructions').textContent(), liveInstructions(claude));
   assert.match((await page.locator('#prompt-state').textContent())!, /startup preview/);
   await page.locator('#live-prompt > summary').click();
   if (artifacts) await page.screenshot({ path: path.join(artifacts, 'prompt-panel.png'), fullPage: true });
@@ -147,7 +147,7 @@ try {
   harness.startLive = async (sdp: any, page?: any) => {
     harness.voiceSessions.page = page; // As the real start does: this page runs voice.
     harness.audit = new AudioAudit({ dir: path.join(dir,'audio'), log:harness.log, onError:error=>errors.push(error.message) });
-    harness.live = { instructions:liveInstructions(claude, harness.speakingLevel), append:(kind: string,text: string)=>{probe.preference={kind,text};return new Promise<void>(resolve=>{probe.ack=resolve;});}, id: 'offline-audio', state: 'active', usageSeconds: 0, audio: () => { throw new Error('Browser sent microphone through the control socket'); }, close: async () => {
+    harness.live = { instructions:liveInstructions(claude), append:(kind: string,text: string)=>{probe.preference={kind,text};return new Promise<void>(resolve=>{probe.ack=resolve;});}, id: 'offline-audio', state: 'active', usageSeconds: 0, audio: () => { throw new Error('Browser sent microphone through the control socket'); }, close: async () => {
       harness.live!.state = 'closed'; publish({ type: 'voice_closed', finalized: true }); publish(harness.status());
     } } as any;
     const answer = await other.evaluate(async sdp => {
@@ -176,13 +176,8 @@ try {
       return peer.localDescription!.sdp;
     },sdp);
     publish({type:'voice_answer',sdp:answer});
-    harness.speakingUpdate = { state: 'acknowledged' , level: harness.speakingLevel, confirmedLevel: harness.speakingLevel, source: 'startup' };
     publish({ type: 'voice_started', sessionId: 'offline-audio' }); publish(harness.status());
   };
-  await page.locator('#speaking-level').fill('0');
-  await page.locator('#speaking-level').dispatchEvent('input');
-  await page.locator('#speaking-level').dispatchEvent('change');
-  await waitFor(()=>harness.speakingLevel===0,'Quiet preference received');
   await page.getByRole('button', { name: 'Start voice', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#audioState')!.textContent === 'Microphone on');
   await waitFor(() => inputFrames.length > 3, 'remote peer received real gated microphone audio');
@@ -191,20 +186,7 @@ try {
   assert.ok(!harness.timeline.snapshot().items.some(i => i.track === 'operator' && i.start > now), 'blocked whisper makes no operator bar');
   assert.match((await page.locator('#gate-state').textContent())!, /Gate closed/);
   assert.equal(await page.evaluate(() => window.__microphoneConstraints.audio.autoGainControl), false);
-  assert.match((await page.locator('#updates-state').textContent())!, /Active from session start.*Quiet/);
-  await page.locator('#speaking-level').fill('1');
-  await page.locator('#speaking-level').dispatchEvent('input');
-  await page.locator('#speaking-level').dispatchEvent('change');
-  await waitFor(()=>probe.preference?.text.includes('Milestones:'),'live preference sent');
-  await page.waitForFunction(() => document.querySelector('#updates-state')!.textContent!.includes('Applying'));
-  assert.equal(harness.status().speakingUpdate.state, 'pending', 'no false confirmation while the API has not acknowledged');
-  if (artifacts) await page.screenshot({ path: path.join(artifacts, 'preference-pending.png'), fullPage: true });
-  probe.ack!();
-  await page.waitForFunction(() => document.querySelector('#updates-state')!.textContent!.includes('Live acknowledged'));
-  await page.waitForFunction(() => document.querySelector('#prompt-preference')!.textContent!.includes('Milestones:'));
-  assert.equal(await page.locator('#prompt-instructions').textContent(), harness.live!.instructions, 'startup prompt stays exact after the preference changes');
-  assert.equal(harness.live!.instructions, liveInstructions(claude, 0), 'this connection started with Quiet');
-  assert.equal(await page.locator('#prompt-preference').textContent(), probe.preference!.text, 'selected preference matches the actual instruction append');
+  assert.equal(await page.locator('#prompt-instructions').textContent(), harness.live!.instructions, 'the page shows the exact startup prompt');
   assert.match((await page.locator('#prompt-state').textContent())!, /Current voice session/);
   await page.locator('#live-prompt').evaluate(element => { (element as HTMLDetailsElement).open = true; });
   const extraInstruction = 'Explain technical terms with a simple example.';
@@ -264,5 +246,5 @@ try {
   assert.match((await page.locator('#prompt-state').textContent())!, /Last voice session/);
   assert.ok(await page.locator('.timeline-item[data-track="speech"]').count() >= 1, 'audio history survives reload');
   assert.deepEqual(errors, []);
-  console.log('Timeline, preference acknowledgment, virtual whisper gate, native WebRTC playback, mute and reload passed. No API spending.');
+  console.log('Timeline, instruction acknowledgment, virtual whisper gate, native WebRTC playback, mute and reload passed. No API spending.');
 } finally { await browser?.close(); await harness.close(); fs.rmSync(dir, { recursive: true, force: true }); }

@@ -8,7 +8,7 @@ import { UsageLedger } from './usage-ledger.ts';
 import { Timeline } from './timeline.ts';
 import { StatusLog, statusSnapshot, type BridgeEvent } from './status.ts';
 import { Outbox } from './outbox.ts';
-import { VoiceSessions, type SpeakingUpdate } from './voice-sessions.ts';
+import { VoiceSessions } from './voice-sessions.ts';
 import { Endpoints } from './endpoints.ts';
 import { Pages, type Page } from './pages.ts';
 
@@ -83,9 +83,6 @@ export class Harness {
   set mediator(mediator) { this.voiceSessions.mediator = mediator; }
   get audit() { return this.voiceSessions.audit; }
   set audit(audit) { this.voiceSessions.audit = audit; }
-  get speakingLevel() { return this.voiceSessions.speakingLevel; }
-  get speakingUpdate() { return this.voiceSessions.speakingUpdate; }
-  set speakingUpdate(update: SpeakingUpdate) { this.voiceSessions.speakingUpdate = update; }
   get uiEvents() { return this.statusLog.uiEvents; }
   // Public address of a tunnel that forwards to this bridge. Known only after
   // the tunnel starts, which needs the bridge's port first.
@@ -97,7 +94,6 @@ export class Harness {
   status() { return statusSnapshot(this); }
   instructions() { return this.voiceSessions.instructions(); }
   appendInstruction(text: unknown) { return this.voiceSessions.appendInstruction(text); }
-  setSpeakingLevel(level: unknown) { return this.voiceSessions.setSpeakingLevel(level); }
   setConfirmDeliveries(on: unknown) { this.voiceSessions.setConfirmDeliveries(on); }
   startLive(sdp?: unknown, page?: Page) { return this.voiceSessions.start(sdp, page); }
   deliver(request: VoiceRequest) { this.outbox.add(request); }

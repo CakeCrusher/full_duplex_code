@@ -1,7 +1,7 @@
 import test from 'node:test';
 import { textFragments, estimatedTokens } from '../src/core/text-fragments.ts';
 import assert from 'node:assert/strict';
-import { BACKGROUND_REFERENCE } from '../src/core/prompts.ts';
+import { observationReference } from '../src/core/prompts.ts';
 import { ContextQueue } from '../src/core/context-queue.ts';
 import { LineReader } from '../src/core/line-reader.ts';
 import { VoiceHistory, type SpokenRequest } from '../src/core/voice-history.ts';
@@ -9,6 +9,8 @@ import { redact } from '../src/core/redact.ts';
 import { startupHistory } from '../src/core/startup-history.ts';
 import { contextData } from '../src/core/context-rules.ts';
 import { claude } from '../src/adapters/claude/index.ts';
+// Every observation append starts with this label.
+const REFERENCE = observationReference(claude);
 
 test('base64 is omitted wherever it appears, for any agent; ordinary text of any length is not', () => {
   const screenshot = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: '/9j/4AAQ'.repeat(5000) } };
@@ -59,8 +61,8 @@ test('context sends every fragment in order before any API acknowledgment', asyn
   assert.ok(sent.length>8);assert.equal(queue.queue.length,0);assert.equal(queue.inFlight,sent.length);
   for(const resolve of pending.reverse())resolve();
   await new Promise(resolve=>setImmediate(resolve));
-  assert.ok(sent.every(text=>text.startsWith(BACKGROUND_REFERENCE)));
-  assert.equal(sent.map(text=>text.slice(BACKGROUND_REFERENCE.length)).join(''),source+'new observation');
+  assert.ok(sent.every(text=>text.startsWith(REFERENCE)));
+  assert.equal(sent.map(text=>text.slice(REFERENCE.length)).join(''),source+'new observation');
   assert.equal(queue.running,false);assert.equal(queue.inFlight,0);assert.deepEqual(faults,[]);
 });
 
@@ -87,26 +89,13 @@ test('stopping delivery cancels backpressure retries and ignores late acknowledg
   assert.equal(sent,1);assert.equal(queue.queue.length,0);assert.equal(queue.running,false);
 });
 
-test('fragments blocked by the network use the current speaking mode without changing their source', async () => {
-  const sent: string[]=[],ws={bufferedAmount:70000};
-  const live={state:'active',ws,append:async(_kind: string,text: string)=>{sent.push(text);ws.bufferedAmount=70000;}};
-  const queue=new ContextQueue(live,error=>{throw error;},claude);
-  const original='let score = 10; // keep every character\n'.repeat(300);
-  queue.add('thinking',original);queue.setSpeakingLevel(0);ws.bufferedAmount=0;queue.pump();
-  assert.match(sent[0],/^\[Quiet:/);
-  queue.setSpeakingLevel(1);ws.bufferedAmount=0;queue.pump();
-  assert.match(sent[1],/^\[Milestones:/);
-  while(queue.queue.length){ws.bufferedAmount=0;queue.pump();}
-  assert.equal(sent.map(s=>s.slice(s.indexOf('\n')+1)).join(''),original);queue.stop();
-});
-
 test('out-of-order acknowledgments retain send order and a rejection stops subsequent observations', async () => {
   const sent: string[]=[],pending: { resolve: (value?: unknown) => void; reject: (error: Error) => void }[]=[],faults: string[]=[];
   const live={state:'active',append:(_kind: string,text: string)=>new Promise((resolve,reject)=>{sent.push(text);pending.push({resolve,reject});})};
   const queue=new ContextQueue(live,error=>faults.push(error.message),claude);
   for(const text of ['one','two','three','four'])queue.add('thinking',text);
   pending[1].resolve();await new Promise(resolve=>setImmediate(resolve));
-  assert.deepEqual(sent.map(s=>s.slice(BACKGROUND_REFERENCE.length)),['one','two','three','four']);
+  assert.deepEqual(sent.map(s=>s.slice(REFERENCE.length)),['one','two','three','four']);
   assert.equal(queue.inFlight,3);
   pending[0].reject(new Error('rejected first fragment'));await new Promise(resolve=>setImmediate(resolve));
   queue.add('thinking','five');pending[2].resolve();pending[3].resolve();await new Promise(resolve=>setImmediate(resolve));
@@ -187,7 +176,7 @@ test('every fragment names its originating hook and reconstructs the full UTF-8 
   queue.add('thinking',raw,null,'Claude PostToolUse');
   await new Promise(resolve=>setImmediate(resolve));
   assert.ok(sent.length>1);
-  assert.ok(sent.every(e=>e.kind==='thinking'&&e.text.startsWith(BACKGROUND_REFERENCE+'[Claude PostToolUse; part ')));
-  assert.equal(sent.map(e=>e.text.slice(BACKGROUND_REFERENCE.length).replace(/^\[Claude PostToolUse; part \d+\/\d+\]\n/,'')).join(''),raw);
+  assert.ok(sent.every(e=>e.kind==='thinking'&&e.text.startsWith(REFERENCE+'[Claude PostToolUse; part ')));
+  assert.equal(sent.map(e=>e.text.slice(REFERENCE.length).replace(/^\[Claude PostToolUse; part \d+\/\d+\]\n/,'')).join(''),raw);
   queue.stop();
 });

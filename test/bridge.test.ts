@@ -27,7 +27,6 @@ test('ledger failure allows repeated start attempts and does not hang harness sh
   await assert.rejects(h.startLive(), /Usage ledger locked/);
   const first = h.live;
   assert.equal(h.status().live, 'closed');
-  assert.equal(h.status().speakingUpdate.state, 'next_session');
   await assert.rejects(h.startLive(), /Usage ledger locked/);
   assert.notEqual(h.live, first, 'retry creates a fresh session instead of silently returning');
   assert.equal(h.live!.state, 'closed');
@@ -93,16 +92,6 @@ test('hook context keeps flowing during continuous microphone and speaker activi
   assert.deepEqual(h.observer.observations.map(o => JSON.parse(o.text)), observations, 'all original observations stay intact locally');
 });
 
-test('speaking preference updates the active model through instructions and validates values', async t => {
-  const h=await fixture(t), appends: { kind: string; text: string }[]=[];
-  const ws=new WebSocket(h.baseUrl.replace('http:','ws:')+'/voice',{headers:{Authorization:`Bearer ${h.browserToken}`}});
-  t.after(()=>ws.terminate());await new Promise(resolve=>ws.on('open',resolve));
-  h.live={state:'active',append:async(kind: string,text: string)=>appends.push({kind,text}),close:async()=>{h.live!.state='closed';}} as any;
-  ws.send(JSON.stringify({type:'speaking_level',level:0}));await new Promise(resolve=>setTimeout(resolve,20));
-  assert.equal(h.speakingLevel,0);assert.equal(appends[0].kind,'instructions');assert.match(appends[0].text,/Quiet:/);
-  ws.send(JSON.stringify({type:'speaking_level',level:20}));await new Promise(resolve=>setTimeout(resolve,20));
-  assert.equal(h.speakingLevel,0);assert.equal(appends.length,1);
-});
 test('channel delivery ends at sent and does not depend on Claude calling a tool', async t => {
   const h = await fixture(t);
   const ws = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/channel', { headers: { Authorization: `Bearer ${h.agentToken}` } });
@@ -219,43 +208,10 @@ test('the command hook preserves large structured results, new fields, and UTF-8
   assert.deepEqual(JSON.parse(observed[0].text), { ...tool, tool_response: { ...tool.tool_response, stderr: '[redacted]' }, future_field: { nested: ['retained', '[redacted]'] } });
 });
 
-test('preference status waits for the matching acknowledgment and reports failures and offline changes', async t => {
-  const h = await fixture(t), pending: { kind: string; text: string; resolve: (value?: unknown) => void; reject: (error: Error) => void }[] = [];
-  assert.equal(h.speakingLevel, 1, 'Milestones is the default');
-  assert.equal(h.status().speakingUpdate.state, 'next_session');
-  await h.setSpeakingLevel(0);
-  assert.equal(h.status().speakingUpdate.level, 0);
-  const live: any = h.live = { id: 'offline', state: 'active',
-    append: (kind: string, text: string) => new Promise((resolve, reject) => pending.push({ kind, text, resolve, reject })),
-    close: async () => { live.state = 'closed'; },
-  } as any;
-  const first = h.setSpeakingLevel(1);
-  assert.equal(h.status().speakingUpdate.state, 'pending');
-  const second = h.setSpeakingLevel(2);
-  pending[0].resolve(); await first;
-  assert.equal(h.status().speakingUpdate.state, 'pending', 'the earlier ACK cannot confirm the newest selection');
-  assert.equal(h.status().speakingUpdate.level, 1, 'legacy Walkthrough selection migrates to Milestones');
-  pending[1].resolve(); await second;
-  assert.equal(h.status().speakingUpdate.state, 'acknowledged');
-  assert.equal(h.status().speakingUpdate.confirmedLevel, 1);
-  const failed = h.setSpeakingLevel(0);
-  pending[2].reject(new Error('append timed out')); await failed;
-  assert.equal(h.status().speakingUpdate.state, 'failed');
-  assert.equal(h.status().speakingUpdate.confirmedLevel, 1);
-  assert.match(h.status().speakingUpdate.error!, /timed out/);
-  const late = h.setSpeakingLevel(1);
-  await live.close();
-  assert.equal(h.status().speakingUpdate.state, 'next_session');
-  pending[3].resolve(); await late;
-  assert.equal(h.status().speakingUpdate.state, 'next_session', 'closed-session ACK does not claim to be active');
-});
-
-test('a preference changed during startup reaches the new conversation; Quiet has no unsolicited greeting', async t => {
+test('starting voice greets once and appends no extra instructions', async t => {
   const { LiveSession } = await import('../src/core/live-session.ts');
-  let release!: () => void; const ready = new Promise<void>(resolve => { release = resolve; });
   const appends: { kind: string; text: string }[] = []; let greetings = 0;
   t.mock.method(LiveSession.prototype, 'start', async function (this: any) {
-    this.state = 'connecting'; await ready;
     this.state = 'active'; this.id = this.reservation = 'offline-startup'; this.startedAt = Date.now();
     this.emit('event', { type: 'session.started' });
   });
@@ -265,20 +221,11 @@ test('a preference changed during startup reaches the new conversation; Quiet ha
     this.state = 'closed'; this.emit('closed', { finalized: true });
   });
   const h = await fixture(t); h.agentReady = true;
-  const starting = h.startLive();
-  assert.equal(h.status().speakingUpdate.state, 'starting');
-  await h.setSpeakingLevel(0);
-  assert.equal(h.status().speakingUpdate.state, 'starting');
-  release(); await starting;
-  assert.equal(appends.length, 1); assert.equal(appends[0].kind, 'instructions');
-  assert.match(appends[0].text, /Quiet:/);
-  assert.equal(h.status().speakingUpdate.state, 'acknowledged');
-  assert.equal(h.status().speakingUpdate.confirmedLevel, 0);
-  assert.equal(greetings, 0);
+  await h.startLive();
+  assert.match(h.live!.instructions, /When to speak/);
+  assert.equal(appends.length, 0); assert.equal(greetings, 1);
   await h.live!.close(); await h.startLive();
-  assert.equal(appends.length, 1, 'preselected mode is already in startup instructions');
-  assert.equal(h.status().speakingUpdate.source, 'startup');
-  assert.equal(greetings, 0);
+  assert.equal(appends.length, 0); assert.equal(greetings, 2, 'each voice connection greets once');
 });
 
 test('additional instructions preserve the base, show exact text, and wait for an ACK', async t => {

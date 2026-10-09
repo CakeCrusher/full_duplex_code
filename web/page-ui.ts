@@ -5,32 +5,9 @@ import { profile } from './profile.js';
 // outside the timeline.
 export const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const { name } = profile;
-const speakingNames = ['Quiet', 'Milestones'];
-const speakingDescriptions = [`Answer you and confirm sent requests. Observe ${name} silently.`, 'Default: meaningful outcomes, major changes, and decisions you must make. Complete thoughts, without running commentary. Your spoken requests come first.'];
 let instructionHistory = '';
 
 export function notice(text: string) { $('notice').textContent = text; }
-export function showSpeaking(level: number) {
-  $<HTMLInputElement>('speaking-level').value = String(level);
-  $('speaking-level').setAttribute('aria-valuetext', speakingNames[level]);
-  $('speaking-label').textContent = speakingNames[level];
-  $('speaking-description').textContent = speakingDescriptions[level];
-}
-export function showSpeakingUpdate(update: { state: string; level?: number; confirmedLevel?: number; source?: string; error?: string }) {
-  const name = speakingNames[update.level!];
-  const confirmed = speakingNames[update.confirmedLevel!];
-  const states: Record<string, [string, string]> = {
-    next_session: [`Next session · ${name}`, 'This preference will be included when you start voice.'],
-    starting: [`Waiting for session · ${name}`, 'The voice connection has not confirmed this preference yet.'],
-    pending: [`Applying · ${name}…`, `Waiting for Live’s acknowledgment.${confirmed ? ` Last confirmed: ${confirmed}.` : ''}`],
-    acknowledged: [update.source === 'startup' ? `Active from session start · ${name}` : `Live acknowledged · ${name}`, 'The instructions are confirmed for this conversation. This does not guarantee when speech will reflect them.'],
-    failed: [`Not confirmed · ${name}`, `${update.error ?? 'The update failed.'} Select the mode again to retry.`],
-    disconnected: ['Disconnected', 'Reconnect before changing the speaking preference.'],
-  };
-  const [label, detail] = states[update.state] ?? states.next_session;
-  $('updates-state').textContent = label; $('updates-state').dataset.state = update.state;
-  $('updates-detail').textContent = detail;
-}
 
 // The bridge's status, sent every second and on change.
 // Which session this page belongs to, at the top and in the tab title, so that
@@ -48,7 +25,6 @@ export function showStatus(event: BridgeEvent, voice: { active: boolean; muted: 
     const texts: Record<string, string> = {
       'prompt-state': ({ preview: 'Next voice session · startup preview', session: 'Current voice session · startup instructions', previous: 'Last voice session · startup instructions' } as Record<string, string>)[event.prompt.mode],
       'prompt-instructions': event.prompt.instructions,
-      'prompt-preference': event.prompt.speakingPreference,
     };
     // Preserve text selection while the regular status updates arrive.
     for (const [id, text] of Object.entries(texts)) if ($(id).textContent !== text) $(id).textContent = text;
@@ -68,8 +44,6 @@ export function showStatus(event: BridgeEvent, voice: { active: boolean; muted: 
     }
     $<HTMLButtonElement>('instruction-append').disabled = ['new', 'connecting', 'closing'].includes(event.live) || additional.some(item => item.state === 'pending');
   }
-  if (document.activeElement !== $('speaking-level')) showSpeaking(event.speakingLevel ?? 1);
-  showSpeakingUpdate(event.speakingUpdate ?? { state: 'next_session', level: event.speakingLevel ?? 1 });
   $<HTMLInputElement>('confirm-deliveries').checked = event.confirmDeliveries !== false;
   const delivery = event.contextDelivery ?? { waiting: 0, inFlight: 0 };
   $('context-delivery').textContent = event.live !== 'active' ? `${name} observations stay saved while voice is off.`

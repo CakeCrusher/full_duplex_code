@@ -3,7 +3,6 @@ import path from 'node:path';
 import type { Timeline } from './timeline.ts';
 import type { Page, Pages } from './pages.ts';
 import type { Harness } from './bridge.ts';
-import { speakingPolicy } from './voice-policy.ts';
 
 export type BridgeEvent = Record<string, any>;
 // Events the page replays after a reload.
@@ -34,12 +33,9 @@ export function statusSnapshot(bridge: Harness) {
   const { voiceSessions: voice, observer } = bridge;
   const live = voice.live;
   const budget = bridge.ledger.summary();
-  const speakingUpdate = ['new', 'connecting', 'active'].includes(live?.state as string)
-    ? voice.speakingUpdate : { state: 'next_session', level: voice.speakingLevel };
   const prompt = {
     instructions: live?.instructions ?? voice.instructions(),
     mode: live?.id ? live.state === 'closed' ? 'previous' : 'session' : 'preview',
-    speakingPreference: speakingPolicy(bridge.agent, voice.speakingLevel),
     additional: voice.additionalInstructions.map(item => ({ ...item, state: item.sessionId === live?.id && live?.state === 'active' ? item.state : 'next_session' })),
   };
   const context = voice.mediator?.context;
@@ -51,5 +47,5 @@ export function statusSnapshot(bridge: Harness) {
     estimatedBacklogSeconds: context ? context.inFlightTokens / context.tokensPerSecond : 0 };
   // The page running voice, so that the others can offer to move it.
   const voicePage = live && live.state !== 'closed' ? voice.page?.id ?? null : null;
-  return { type: 'status', agent: observer.state, agentReady: Boolean(bridge.agentReady), live: live?.state ?? 'disconnected', voicePage, pages: bridge.pages.size, cwd: bridge.cwd, sessionId: bridge.sessionId, usageSeconds: live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: bridge.runDir, observation: bridge.observation, speakingLevel: voice.speakingLevel, speakingUpdate, confirmDeliveries: voice.confirmDeliveries, prompt, contextDelivery };
+  return { type: 'status', agent: observer.state, agentReady: Boolean(bridge.agentReady), live: live?.state ?? 'disconnected', voicePage, pages: bridge.pages.size, cwd: bridge.cwd, sessionId: bridge.sessionId, usageSeconds: live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: bridge.runDir, observation: bridge.observation, confirmDeliveries: voice.confirmDeliveries, prompt, contextDelivery };
 }
