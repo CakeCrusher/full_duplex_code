@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { UsageLedger, RATE_PER_SECOND } from '../src/core/usage-ledger.ts';
 
 function ledger(t: TestContext) {
@@ -46,4 +47,13 @@ test('open-ended sessions record cumulative reported usage without a maximum est
   assert.equal(new UsageLedger(b.file).summary().committedUsd, 2000 * RATE_PER_SECOND);
   b.update(id, 2400, { finalized: true });
   assert.equal(b.summary().committedUsd, 2400 * RATE_PER_SECOND);
+});
+
+test('a companion running beside another waits for the shared ledger lock instead of failing', t => {
+  const shared = ledger(t);
+  fs.mkdirSync(path.dirname(shared.file), { recursive: true }); fs.writeFileSync(`${shared.file}.lock`, '');
+  spawn('sh', ['-c', `sleep 0.2; rm '${shared.file}.lock'`]);
+  assert.ok(shared.reserve(null, 'second companion'), 'the lock was released within the wait');
+  fs.writeFileSync(`${shared.file}.lock`, ''); shared.lockWaitMs = 100;
+  assert.throws(() => shared.reserve(null, 'third'), /Usage ledger locked by another process/);
 });

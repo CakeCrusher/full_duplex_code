@@ -13,6 +13,8 @@ interface LedgerData { version: 1; runs: UsageRun[]; limitUsd?: number }
 // their latest reported cost (or a caller's larger estimate) until finalized.
 export class UsageLedger {
   file: string;
+  /** How long to wait for another process's lock: companions running side by side share the ledger. */
+  lockWaitMs = 2000;
   constructor(file: string) { this.file = file; }
   read(): LedgerData {
     if (!fs.existsSync(this.file)) return { version: 1, runs: [] };
@@ -25,8 +27,13 @@ export class UsageLedger {
     fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
     const lock = `${this.file}.lock`;
     let fd;
-    try { fd = fs.openSync(lock, 'wx', 0o600); }
-    catch { throw new Error('Usage ledger locked by another process; no API connection opened.'); }
+    for (const deadline = Date.now() + this.lockWaitMs; ;) {
+      try { fd = fs.openSync(lock, 'wx', 0o600); break; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || Date.now() >= deadline) throw new Error('Usage ledger locked by another process.');
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      }
+    }
     try {
       const data = this.read();
       const result = fn(data);
