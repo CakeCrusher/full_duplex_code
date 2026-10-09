@@ -197,8 +197,9 @@ try {
   await page.waitForFunction(() => document.querySelector('#instruction-history')!.textContent!.includes('Applying'));
   assert.equal(await page.locator('#instruction-history pre').textContent(), extraInstruction);
   probe.ack!();
-  await page.waitForFunction(() => document.querySelector('#instruction-history')!.textContent!.includes('Live acknowledged'));
-  assert.equal(await page.locator('#prompt-instructions').textContent(), harness.live!.instructions, 'additional instruction does not rewrite the startup audit');
+  await page.waitForFunction(text => document.querySelector('#prompt-instructions')!.textContent!.endsWith(text), extraInstruction);
+  assert.equal(await page.locator('#prompt-instructions').textContent(), `${harness.live!.instructions}\n\nAdditional operator instructions:\n${extraInstruction}`, 'an acknowledged instruction shows as part of the prompt');
+  assert.equal(await page.locator('#instruction-history pre').count(), 0, 'and leaves the in-flight list');
   await page.locator('#microphone-gate').fill('0.001');
   await page.locator('#microphone-gate').dispatchEvent('input');
   await page.locator('#microphone-gate').dispatchEvent('change');
@@ -242,7 +243,7 @@ try {
   assert.ok(fs.existsSync(path.join(dir,'timeline.json')), 'Gantt saved to disk');
   await page.reload();
   await page.getByRole('button', { name: /Claude hooks\. FileChanged/ }).waitFor();
-  assert.equal(await page.locator('#prompt-instructions').textContent(), harness.live!.instructions);
+  assert.equal(await page.locator('#prompt-instructions').textContent(), `${harness.live!.instructions}\n\nAdditional operator instructions:\n${extraInstruction}`);
   assert.match((await page.locator('#prompt-state').textContent())!, /Last voice session/);
   assert.ok(await page.locator('.timeline-item[data-track="speech"]').count() >= 1, 'audio history survives reload');
   assert.deepEqual(errors, []);

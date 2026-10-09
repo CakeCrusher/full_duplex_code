@@ -33,8 +33,11 @@ export function statusSnapshot(bridge: Harness) {
   const { voiceSessions: voice, observer } = bridge;
   const live = voice.live;
   const budget = bridge.ledger.summary();
+  // Instructions appended during a session show as part of its prompt once Live acknowledges them.
+  const appended = live?.id ? voice.additionalInstructions.filter(item => item.appended && item.state === 'acknowledged' && item.sessionId === live.id).map(item => item.text) : [];
+  const startup = live?.instructions ?? voice.instructions();
   const prompt = {
-    instructions: live?.instructions ?? voice.instructions(),
+    instructions: startup + (appended.length ? `\n\n${startup.includes('Additional operator instructions:') ? '' : 'Additional operator instructions:\n'}${appended.join('\n\n')}` : ''),
     mode: live?.id ? live.state === 'closed' ? 'previous' : 'session' : 'preview',
     additional: voice.additionalInstructions.map(item => ({ ...item, state: item.sessionId === live?.id && live?.state === 'active' ? item.state : 'next_session' })),
   };
@@ -47,5 +50,5 @@ export function statusSnapshot(bridge: Harness) {
     estimatedBacklogSeconds: context ? context.inFlightTokens / context.tokensPerSecond : 0 };
   // The page running voice, so that the others can offer to move it.
   const voicePage = live && live.state !== 'closed' ? voice.page?.id ?? null : null;
-  return { type: 'status', agent: observer.state, agentReady: Boolean(bridge.agentReady), live: live?.state ?? 'disconnected', voicePage, pages: bridge.pages.size, cwd: bridge.cwd, sessionId: bridge.sessionId, usageSeconds: live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: bridge.runDir, observation: bridge.observation, confirmDeliveries: voice.confirmDeliveries, prompt, contextDelivery };
+  return { type: 'status', agent: observer.state, agentReady: Boolean(bridge.agentReady), live: live?.state ?? 'disconnected', voicePage, pages: bridge.pages.size, cwd: bridge.cwd, sessionId: bridge.sessionId, usageSeconds: live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: bridge.runDir, observation: bridge.observation, prompt, contextDelivery };
 }

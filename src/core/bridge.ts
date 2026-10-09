@@ -94,7 +94,6 @@ export class Harness {
   status() { return statusSnapshot(this); }
   instructions() { return this.voiceSessions.instructions(); }
   appendInstruction(text: unknown) { return this.voiceSessions.appendInstruction(text); }
-  setConfirmDeliveries(on: unknown) { this.voiceSessions.setConfirmDeliveries(on); }
   startLive(sdp?: unknown, page?: Page) { return this.voiceSessions.start(sdp, page); }
   deliver(request: VoiceRequest) { this.outbox.add(request); }
   async start() {

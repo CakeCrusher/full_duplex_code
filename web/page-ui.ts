@@ -28,7 +28,8 @@ export function showStatus(event: BridgeEvent, voice: { active: boolean; muted: 
     };
     // Preserve text selection while the regular status updates arrive.
     for (const [id, text] of Object.entries(texts)) if ($(id).textContent !== text) $(id).textContent = text;
-    const additional: { state: string; text: string; error?: string }[] = event.prompt.additional ?? [];
+    // Acknowledged and saved instructions are part of the prompt text above; only those in flight or failed are listed.
+    const additional: { state: string; text: string; error?: string }[] = (event.prompt.additional ?? []).filter((item: { state: string }) => item.state === 'pending' || item.state === 'failed');
     const serialized = JSON.stringify(additional);
     if (serialized !== instructionHistory) {
       instructionHistory = serialized;
@@ -44,7 +45,6 @@ export function showStatus(event: BridgeEvent, voice: { active: boolean; muted: 
     }
     $<HTMLButtonElement>('instruction-append').disabled = ['new', 'connecting', 'closing'].includes(event.live) || additional.some(item => item.state === 'pending');
   }
-  $<HTMLInputElement>('confirm-deliveries').checked = event.confirmDeliveries !== false;
   const delivery = event.contextDelivery ?? { waiting: 0, inFlight: 0 };
   $('context-delivery').textContent = event.live !== 'active' ? `${name} observations stay saved while voice is off.`
     : delivery.observationsWaiting ? `${delivery.observationsWaiting} ${profile.eventsWord} being combined · oldest ${(delivery.oldestObservationMs / 1000).toFixed(1)}s · estimated API backlog ${delivery.estimatedBacklogSeconds.toFixed(1)}s. Full observations remain saved.`

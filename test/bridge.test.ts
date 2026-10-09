@@ -150,25 +150,17 @@ test('spoken delivery confirmation follows channel success once, independently o
   assert.ok(h.uiEvents.some(e => e.type === 'fault' && /request was sent.*voice confirmation failed/i.test(e.message)));
 });
 
-test('the operator can turn the spoken delivery confirmation off and on from the page', async t => {
+test('every delivered request is confirmed aloud once', async t => {
   const h = await fixture(t), appends: { kind: string; content: string }[] = [];
   h.live = { id: 'voice-one', state: 'active', append: async (kind: string, content: string) => appends.push({ kind, content }), close: async () => { h.live!.state = 'closed'; } } as any;
-  const page = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/voice', { headers: { Authorization: `Bearer ${h.browserToken}` } });
   const channel = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/channel', { headers: { Authorization: `Bearer ${h.agentToken}` } });
-  t.after(() => { page.terminate(); channel.terminate(); });
-  await Promise.all([page, channel].map(ws => new Promise(resolve => ws.on('open', resolve))));
+  t.after(() => channel.terminate());
+  await new Promise(resolve => channel.on('open', resolve));
   const settle = () => new Promise(resolve => setTimeout(resolve, 20));
   channel.send(JSON.stringify({ type: 'channel.ready' }));
-  assert.equal(h.status().confirmDeliveries, true, 'on by default');
-  page.send(JSON.stringify({ type: 'confirm_deliveries', on: false })); await settle();
-  assert.equal(h.status().confirmDeliveries, false);
-  h.deliver({ id: 'quiet', content: 'Present.', voiceSessionId: 'voice-one' });
-  channel.send(JSON.stringify({ type: 'channel.sent', id: 'quiet' })); await settle();
-  assert.equal(h.outbox.get('quiet')!.state, 'sent');
-  assert.equal(appends.length, 0, 'a delivery is not announced while confirmation is off');
-  page.send(JSON.stringify({ type: 'confirm_deliveries', on: true })); await settle();
-  h.deliver({ id: 'loud', content: 'Build.', voiceSessionId: 'voice-one' });
-  channel.send(JSON.stringify({ type: 'channel.sent', id: 'loud' })); await settle();
+  h.deliver({ id: 'build', content: 'Build.', voiceSessionId: 'voice-one' });
+  channel.send(JSON.stringify({ type: 'channel.sent', id: 'build' })); await settle();
+  channel.send(JSON.stringify({ type: 'channel.sent', id: 'build' })); await settle();
   assert.deepEqual(appends.map(a => a.content), ['Your request has been sent to Claude Code.']);
 });
 
@@ -265,7 +257,8 @@ test('additional instructions preserve the base, show exact text, and wait for a
   assert.equal(h.status().prompt.additional.at(-1)!.state,'pending');
   resolve();await pending;
   assert.equal(h.status().prompt.additional.at(-1)!.state,'acknowledged');
-  assert.equal(h.status().prompt.instructions,startup,'startup prompt remains an exact record');
+  assert.equal(live.instructions,startup,'startup prompt remains an exact record');
+  assert.equal(h.status().prompt.instructions,`${startup}\n\nUse an example about paper airplanes.`,'the acknowledged instruction shows as part of the prompt');
   const failed=h.appendInstruction('Use metric units.');reject(new Error('test rejection'));await failed;
   assert.equal(h.status().prompt.additional.at(-1)!.state,'failed');
   const late=h.appendInstruction('Finish the explanation.');await live.close();resolve();await late;

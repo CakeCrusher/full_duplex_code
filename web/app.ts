@@ -160,8 +160,6 @@ function releaseAudio() {
 }
 function stop() { if (bridge.open) bridge.send({ type: 'stop' }); releaseAudio(); }
 $('start').onclick = start; $('stop').onclick = stop;
-$('confirm-product').textContent = profile.product;
-$<HTMLInputElement>('confirm-deliveries').onchange = e => { if (bridge.open) bridge.send({ type: 'confirm_deliveries', on: (e.target as HTMLInputElement).checked }); };
 $<HTMLInputElement>('microphone-gate').oninput = e => {
   const threshold = Number((e.target as HTMLInputElement).value);
   $('gate-label').textContent = threshold === 0 ? 'Off' : `${(threshold * 100).toFixed(1)}%`;

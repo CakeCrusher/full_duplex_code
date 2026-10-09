@@ -10,7 +10,7 @@ import { AudioAudit } from './audio-audit.ts';
 import { startupHistory } from './startup-history.ts';
 import { attachment, deliveryConfirmation, greeting, historyIntro, liveInstructions } from './prompts.ts';
 
-export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string }
+export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean }
 
 // Voice connections one after another beside the same agent session: startup
 // instructions and history, added instructions, and
@@ -21,8 +21,6 @@ export class VoiceSessions {
   mediator?: Mediator;
   audit: AudioAudit | null = null;
   additionalInstructions: Instruction[] = [];
-  /** Speak a fixed line when a request reaches the agent. The operator can turn it off, e.g. while presenting. */
-  confirmDeliveries = true;
   lastAudioAt = 0;
   audioWatchdog?: NodeJS.Timeout;
   /** The page the current voice session belongs to: its events go there, and its microphone is the one heard. */
@@ -53,7 +51,7 @@ export class VoiceSessions {
     try {
       await live.append('instructions', text as string);
       if (this.live !== live || live.state !== 'active') return;
-      Object.assign(item, { state: 'acknowledged', acknowledgedAt: Date.now() });
+      Object.assign(item, { state: 'acknowledged', acknowledgedAt: Date.now(), appended: true });
       log({ type: 'voice.instruction_acknowledged', ...item });
     } catch (error) {
       if (this.live !== live || live.state !== 'active') return;
@@ -109,7 +107,7 @@ export class VoiceSessions {
       }
       if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
       if (event.type === 'session.started') {
-        for (const item of startupInstructions) Object.assign(item, { state: 'acknowledged', sessionId: live.id, acknowledgedAt: Date.now(), error: undefined });
+        for (const item of startupInstructions) Object.assign(item, { state: 'acknowledged', sessionId: live.id, acknowledgedAt: Date.now(), error: undefined, appended: false });
         this.audit = new AudioAudit({ dir: path.join(bridge.runDir, 'audio', live.reservation!), log: event => log({ liveRun: live.reservation, ...event }), onError: error => fault(error) });
         publish({ type: 'voice_started', sessionId: live.id }, page);
         publish(bridge.status());
@@ -128,13 +126,9 @@ export class VoiceSessions {
     this.audioWatchdog = setInterval(() => { if (Date.now() - this.lastAudioAt > 5000) live.close('Microphone audio stream stopped'); }, 1000);
     if (live.state === 'active') await live.greet(greeting(agent));
   }
-  setConfirmDeliveries(on: unknown) {
-    this.confirmDeliveries = on !== false;
-    this.bridge.log({ type: 'voice.confirm_deliveries', on: this.confirmDeliveries }); this.bridge.publish(this.bridge.status());
-  }
   confirmDelivery(task: OutboxEntry) {
     const live = this.live;
-    if (!this.confirmDeliveries || task.confirmationSent || !task.voiceSessionId || live?.state !== 'active' || task.voiceSessionId !== live.id) return;
+    if (task.confirmationSent || !task.voiceSessionId || live?.state !== 'active' || task.voiceSessionId !== live.id) return;
     task.confirmationSent = true;
     // Delivery is an operator-facing fact, independent of the observation
     // backlog. The adapter confirms its own write; this does not claim that the
