@@ -253,6 +253,8 @@ To resume a Codex session, use Codex's own `resume` in the same project folder: 
 
 When many events arrive while you speak, GPT Live sometimes answers without passing the request on: in a check, it delegated 3 of 5 requests while context arrived every 1.5 seconds, and 4 of 4 without. This affects Claude Code the same way. If a request does not show up in the timeline, say it again.
 
+When a voice session ends for any reason (you end it, the microphone stream stops, the connection drops), whatever you said since the last request GPT Live passed on goes to the agent anyway. It is marked as sent because the session ended, with the reason, so the agent knows it may be unfinished or not a request at all. Nothing is sent if everything you said had already been passed on.
+
 ## Use Pi
 
 Put `fdc` in front of your usual Pi command, in your project's folder. Pi's own options work as usual:

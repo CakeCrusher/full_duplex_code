@@ -5,7 +5,7 @@ import type { AgentObserver, ObservedAgent } from './agent-observer.ts';
 import { ContextQueue, type ContextSink } from './context-queue.ts';
 import { VoiceHistory } from './voice-history.ts';
 import { ObservationFeed } from './observation-feed.ts';
-import { nothingToSend, queueFailed, voiceRequest } from './prompts.ts';
+import { nothingToSend, queueFailed, sessionEndRequest, voiceRequest } from './prompts.ts';
 
 /** The part of a Live session the mediator uses. */
 export interface MediatedLive extends ContextSink, Pick<EventEmitter, 'on' | 'off'> {
@@ -80,6 +80,17 @@ export class Mediator {
       this.fault(error as Error);
       this.context.add('thinking', queueFailed(this.agent), delegationId);
     }
+  }
+  // When the voice session ends, speech not yet passed on goes to the agent anyway, marked as such.
+  handOff(reason: string) {
+    const request = this.history.request(Infinity);
+    if (!request) return;
+    const id = randomUUID();
+    try {
+      this.deliver({ id, content: this.clean(sessionEndRequest(reason, request.utterances)), delegationId: null, voiceSessionId: this.live.id, queuedAt: Date.now() });
+      this.history.markDelivered(request);
+      this.log({ type: 'bridge.session_end_handoff', id, reason, utterances: request.utterances.length });
+    } catch (error) { this.fault(error as Error); }
   }
   stop() {
     this.feed.stop(); this.context.stop(); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();

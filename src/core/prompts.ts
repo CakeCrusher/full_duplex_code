@@ -65,5 +65,9 @@ export const deliveryConfirmation = ({ profile: { product } }: Agent) => `Your r
 // A delegated request as the agent receives it: a note on how to read it, then
 // the conversation since the previous request, one utterance per line.
 const SPEAKERS: Record<Utterance['role'], string> = { operator: 'user', intermediary: 'voice assistant' };
+const transcript = (utterances: readonly Pick<Utterance, 'role' | 'text'>[]) => utterances.map(u => `${SPEAKERS[u.role]}: ${u.text.replace(/\s+/g, ' ').trim()}`).join('\n');
 export const voiceRequest = (utterances: readonly Pick<Utterance, 'role' | 'text'>[]) =>
-  `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.\n\n${utterances.map(u => `${SPEAKERS[u.role]}: ${u.text.replace(/\s+/g, ' ').trim()}`).join('\n')}`;
+  `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.\n\n${transcript(utterances)}`;
+// Speech the voice assistant had not passed on when the voice session ended.
+export const sessionEndRequest = (reason: string, utterances: readonly Pick<Utterance, 'role' | 'text'>[]) =>
+  `[Voice session ended: ${reason}] Sent because the voice session ended, not because the voice assistant passed it on. This is what the user said since their previous voice request, one utterance per line; it may be unfinished or not a request at all. The user's words are in the "user:" lines; "voice assistant:" lines are context.\n\n${transcript(utterances)}`;

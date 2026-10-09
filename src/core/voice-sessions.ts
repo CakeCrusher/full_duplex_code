@@ -116,7 +116,9 @@ export class VoiceSessions {
       }
     });
     live.on('closed', result => {
-      clearInterval(this.audioWatchdog); this.mediator?.stop();
+      clearInterval(this.audioWatchdog);
+      if (this.mediator?.live === live) this.mediator.handOff(result.reason);
+      this.mediator?.stop();
       publish({ type: 'voice_closed', ...result, moved: this.moved.has(live) || undefined }, page);
       if (this.live === live) this.page = undefined;
       publish(bridge.status()); bridge.saveTimeline();

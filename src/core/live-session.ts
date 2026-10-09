@@ -6,7 +6,7 @@ import type { AppendKind } from './context-queue.ts';
 
 export const SAMPLE_RATE = 24000;
 export type LiveState = 'new' | 'connecting' | 'active' | 'closing' | 'closed';
-export interface CloseResult { finalized: boolean; reserved: boolean; usageSeconds: number; sessionId?: string }
+export interface CloseResult { finalized: boolean; reserved: boolean; usageSeconds: number; sessionId?: string; reason: string }
 interface Pending { resolve: (event: any) => void; reject: (error: Error) => void }
 
 // One GPT Live session: created over HTTPS (WebRTC) or a WebSocket, then
@@ -20,7 +20,7 @@ export class LiveSession extends EventEmitter {
   closed: Promise<CloseResult>;
   resolveClosed!: (result: CloseResult) => void;
   id?: string; reservation?: string; startedAt?: number; transport?: 'webrtc' | 'websocket';
-  ws?: WebSocket; creation?: AbortController; finalEvent?: any; audioBytes?: number;
+  ws?: WebSocket; creation?: AbortController; finalEvent?: any; audioBytes?: number; closeReason?: string;
   resolveReady?: (event: any) => void; rejectReady?: (error: Error) => void;
   startTimer?: NodeJS.Timeout; closeTimer?: NodeJS.Timeout; ackTimer?: NodeJS.Timeout | null;
   constructor({ apiKey, budget, label = 'voice session', voice = 'marin', instructions = '', input = [], log = () => {}, url = 'wss://api.openai.com/v1/live/sessions' }: {
@@ -149,6 +149,7 @@ export class LiveSession extends EventEmitter {
     await this.append('commentary', text);
   }
   close(reason = 'requested'): Promise<CloseResult> {
+    this.closeReason ??= reason;
     if (this.state === 'active') {
       this.log({ type: 'bridge.closing', reason });
       this.send({ type: 'session.close', event_id: randomUUID() }); this.state = 'closing';
@@ -158,6 +159,7 @@ export class LiveSession extends EventEmitter {
   }
   abort(reason: string) {
     if (this.state === 'closed') return;
+    this.closeReason ??= reason;
     this.log({ type: 'bridge.aborted', reason });
     this.creation?.abort();
     this.rejectReady?.(new Error(reason));
@@ -170,7 +172,8 @@ export class LiveSession extends EventEmitter {
     this.rejectReady?.(new Error('Connection closed before startup'));
     for (const p of this.pending.values()) p.reject(new Error('Session closed'));
     this.pending.clear();
-    const result = { finalized: Boolean(finalized || this.finalEvent), reserved: Boolean(this.reservation), usageSeconds: this.usageSeconds, sessionId: this.id };
+    const result = { finalized: Boolean(finalized || this.finalEvent), reserved: Boolean(this.reservation), usageSeconds: this.usageSeconds, sessionId: this.id,
+      reason: this.closeReason ?? (this.finalEvent ? `closed by GPT Live (${this.finalEvent.reason ?? 'no reason given'})` : 'connection to GPT Live lost') };
     this.log({ type: 'bridge.closed', ...result }); this.resolveClosed(result); this.emit('closed', result);
   }
 }

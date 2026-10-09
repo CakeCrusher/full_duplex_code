@@ -79,6 +79,32 @@ test('a delegation sends ordinary user text once, without asking Claude to use c
   assert.doesNotMatch(f.deliveries[0].content, /acknowledge|reply|message_id|GPT Live/);
 });
 
+test('when voice ends, speech not yet passed on goes to the agent, tagged with why', async t => {
+  const f = fixture(t);
+  f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
+  f.mediator.delegate('work', 1100);
+  f.live.emit('event', { type: 'session.output_transcript.delta', delta: 'Sure, passing that on.', start_ms: 1200, end_ms: 2000 });
+  f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'And then make the header', start_ms: 5000, end_ms: 6000 });
+  f.mediator.handOff('Microphone audio stream stopped');
+  f.mediator.handOff('Microphone audio stream stopped');
+  await flush();
+  assert.equal(f.deliveries.length, 2, 'the delegated request, then one handoff');
+  assert.match(f.deliveries[1].content, /^\[Voice session ended: Microphone audio stream stopped\] Sent because the voice session ended, not because the voice assistant passed it on\./);
+  assert.match(f.deliveries[1].content, /\n\nvoice assistant: Sure, passing that on\.\nuser: And then make the header$/);
+  assert.doesNotMatch(f.deliveries[1].content, /button blue/, 'speech already delegated is not sent again');
+  assert.equal(f.deliveries[1].delegationId, null);
+});
+
+test('when voice ends with everything already passed on, nothing more is sent', async t => {
+  const f = fixture(t);
+  f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
+  f.mediator.delegate('work', 1100);
+  f.live.emit('event', { type: 'session.output_transcript.delta', delta: 'Done.', start_ms: 1200, end_ms: 1600 });
+  f.mediator.handOff('requested');
+  await flush();
+  assert.equal(f.deliveries.length, 1, 'the voice assistant speaking alone is not a request');
+});
+
 test('duplicate display hooks do not produce duplicate context; subagent hooks retain their content', async t => {
   const f = fixture(t);
   const display = { hook_event_name: 'MessageDisplay', message_id: 'same', index: 0, delta: 'One answer.' };

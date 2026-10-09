@@ -228,6 +228,27 @@ test('starting voice greets once and appends no extra instructions', async t => 
   assert.equal(appends.length, 0); assert.equal(greetings, 2, 'each voice connection greets once');
 });
 
+test('a voice session that ends sends the unsent speech to the agent with the reason', async t => {
+  const { LiveSession } = await import('../src/core/live-session.ts');
+  t.mock.method(LiveSession.prototype, 'start', async function (this: any) {
+    this.state = 'active'; this.id = this.reservation = 'offline-handoff'; this.startedAt = Date.now();
+    this.emit('event', { type: 'session.started' });
+  });
+  t.mock.method(LiveSession.prototype, 'append', async () => {});
+  t.mock.method(LiveSession.prototype, 'greet', async () => {});
+  t.mock.method(LiveSession.prototype, 'close', async function (this: any, reason: string) {
+    this.state = 'closed'; this.emit('closed', { finalized: true, reserved: true, usageSeconds: 1, reason });
+  });
+  const h = await fixture(t); h.agentReady = true;
+  await h.startLive();
+  h.live!.emit('event', { type: 'session.input_transcript.delta', delta: 'Rename the file to notes', start_ms: 0, end_ms: 900 });
+  await h.live!.close('Microphone audio stream stopped');
+  const sent = [...h.outbox.values()];
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].content, /^\[Voice session ended: Microphone audio stream stopped\]/);
+  assert.match(sent[0].content, /user: Rename the file to notes$/);
+});
+
 test('additional instructions preserve the base, show exact text, and wait for an ACK', async t => {
   const h = await fixture(t);
   await h.appendInstruction('Explain unfamiliar terms.');
