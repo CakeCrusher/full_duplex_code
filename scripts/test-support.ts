@@ -127,13 +127,20 @@ export async function connectVoice({ baseUrl, browserToken, runDir, log = () => 
     else { const e = JSON.parse(data.toString()); events.push({ at: Date.now(), ...e }); if (e.type === 'caption') process.stdout.write(e.text); if (e.type === 'fault') console.error('\nFAULT:', e.message); }
   });
   await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
+  // A microphone sends 20 ms of audio every 20 ms of real time. Timers fire late,
+  // so send every packet that is due rather than one per tick: Live's timeline
+  // follows the audio, and a slow sender would make it fall behind the clock.
+  const startedAt = Date.now(); let packets = 0;
   const timer = setInterval(() => {
-    let packet = Buffer.alloc(960);
-    if (file) {
-      const part = file.subarray(offset, offset + 960); part.copy(packet); offset += part.length;
-      if (offset >= file.length) { file = null; resolvePlayback?.(); }
+    while (packets < Math.floor((Date.now() - startedAt) / 20)) {
+      packets++;
+      let packet = Buffer.alloc(960);
+      if (file) {
+        const part = file.subarray(offset, offset + 960); part.copy(packet); offset += part.length;
+        if (offset >= file.length) { file = null; resolvePlayback?.(); }
+      }
+      if (ws.readyState === WebSocket.OPEN) ws.send(packet);
     }
-    if (ws.readyState === WebSocket.OPEN) ws.send(packet);
   }, 20);
   ws.send(JSON.stringify({ type: 'start' }));
   await until(() => events.find(e => e.type === 'voice_started'), { label: 'Live startup' });
