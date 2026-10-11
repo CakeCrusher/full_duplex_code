@@ -27,3 +27,10 @@ test('each delegated request cues once, and restored history stays silent', () =
   assert.equal(cues.cue({ type: 'task', id: 'new', state: 'sent' }), null);
   assert.equal(cues.cue({ type: 'voice_started', sessionId: 'c' }, { replaying: true }), null);
 });
+
+test('a suggested instruction cues once, with its own sound, and restored history stays silent', () => {
+  const cues = new CueTracker();
+  assert.equal(cues.cue({ type: 'instruction_suggestion', id: 'old', text: 'Keep it short.' }, { replaying: true }), null);
+  assert.equal(cues.cue({ type: 'instruction_suggestion', id: 'new', text: 'Keep it short.' }), 'suggest');
+  assert.equal(cues.cue({ type: 'instruction_suggestion', id: 'new', text: 'Keep it short.' }), null);
+});

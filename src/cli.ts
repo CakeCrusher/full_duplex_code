@@ -78,8 +78,8 @@ let session: AgentArguments;
 try { session = agent.readArgs(agentArgs); } catch (error) { refuse(`${agent.profile.id} ${agentArgs.join(' ')}: ${(error as Error).message}`); }
 if (session.direct) {
   // Help, version and subcommands are not sessions: run the agent's command as is,
-  // still without the companion's OpenAI key.
-  const env = { ...process.env }; delete env.OPENAI_API_KEY;
+  // still without the companion's API keys.
+  const env = { ...process.env }; delete env.OPENAI_API_KEY; delete env.TYPESAFE_API_KEY;
   const { command, args } = agentCommand(agent.profile.id);
   const child = spawn(command, [...args, ...agentArgs], { cwd, env, stdio: 'inherit' });
   child.on('error', error => refuse(`${agent.profile.id}: ${error.message}`));
@@ -109,7 +109,7 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
   const sessionId = session.sessionId ?? (session.assignSession ? randomUUID() : undefined);
   const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId?.slice(0, 8) ?? (session.resume ? 'resumed' : agent.profile.id)}`);
   let harness: Harness;
-  try { harness = await new Harness({ agent, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe, agentArgs }).start(); }
+  try { harness = await new Harness({ agent, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe, agentArgs, jevKey: process.env.TYPESAFE_API_KEY }).start(); }
   catch (error) { console.error(loud(`fdc: ${(error as Error).message}`)); process.exit(1); }
   if (harness.portFellBack) console.log(`\nPort ${DEFAULT_PORT} is in use, probably by another companion. This one uses ${new URL(harness.baseUrl).port}; Chrome may ask for microphone access again.`);
   let tunnel: Tunnel | undefined, child: ChildProcess | undefined, stopping = false;
@@ -148,7 +148,7 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
   if (!(await confirmStart({ profile: agent.profile }))) await exit(`quit before ${name} started`, 0);
   const launch = harness.agentLaunch!;
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...launch.env };
-  delete childEnv.OPENAI_API_KEY;
+  delete childEnv.OPENAI_API_KEY; delete childEnv.TYPESAFE_API_KEY;
   // The agent's error output passes through to the terminal, and a copy is kept.
   const { command, args, via } = agentCommand(launch.command);
   harness.log({ type: 'launcher.command', name: launch.command, command, args, via });

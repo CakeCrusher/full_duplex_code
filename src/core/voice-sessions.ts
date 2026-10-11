@@ -31,6 +31,8 @@ export class VoiceSessions {
   createLive = (options: ConstructorParameters<typeof LiveSession>[0]) => new LiveSession(options);
   constructor(bridge: Harness) {
     this.bridge = bridge;
+    // Instructions the operator chose to keep always start every voice session.
+    for (const text of bridge.kept.read()) this.additionalInstructions.push({ id: randomUUID(), text, state: 'next_session' });
   }
   instructions() {
     const additional = this.additionalInstructions.map(item => item.text).join('\n\n');
@@ -84,7 +86,7 @@ export class VoiceSessions {
     this.audit?.close(); this.audit = null;
     this.live = live; this.page = page;
     this.mediator?.stop();
-    this.mediator = new Mediator({ live, observer, agent, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean });
+    this.mediator = new Mediator({ live, observer, agent, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean, learner: bridge.learner });
     publish(bridge.status());
     live.on('fault', error => fault(error, page));
     live.on('answer', sdp => publish({ type: 'voice_answer', sdp }, page));

@@ -31,6 +31,8 @@ function handle(event: BridgeEvent) {
     showStatus(event, { active, muted, starting, elsewhere: Boolean(event.voicePage) && event.voicePage !== pageId });
   }
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
+  if (event.type === 'instruction_suggestion' && !replaying) suggest(event);
+  if (event.type === 'instruction_suggestion_done') document.getElementById(`suggestion-${event.id}`)?.remove();
   if (event.type === 'history') {
     replaying = true;
     try { for (const item of event.events) handle(item); } finally { replaying = false; }
@@ -49,6 +51,23 @@ function handle(event: BridgeEvent) {
     notice(event.moved ? 'Voice moved to another tab or device. Click Move voice here to bring it back.' : event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? `Voice session ended. ${profile.name} is still available in your terminal.` : 'Voice connection ended. Final usage was not confirmed; the last reported usage is saved and may be incomplete.');
   }
 }
+// Jev noticed something that sounds like a standing instruction: keep it only if the operator says so.
+function suggest(event: BridgeEvent) {
+  if (document.getElementById(`suggestion-${event.id}`)) return;
+  const card = document.createElement('article'); card.className = 'suggestion'; card.id = `suggestion-${event.id}`;
+  const text = document.createElement('p');
+  text.append('Keep this as an instruction for the companion? ', Object.assign(document.createElement('q'), { textContent: event.text }));
+  const choices: [string, string | false][] = [['For this session', 'session'], ['Always', 'always'], ['No', false]];
+  const actions = document.createElement('div'); actions.className = 'actions';
+  for (const [label, keep] of choices) {
+    const button = Object.assign(document.createElement('button'), { type: 'button', textContent: label, className: keep === event.scope ? 'suggested' : '' });
+    button.onclick = () => { if (bridge.open) bridge.send({ type: 'instruction_answer', id: event.id, keep }); card.remove(); };
+    actions.append(button);
+  }
+  card.append(text, actions, Object.assign(document.createElement('small'), { textContent: 'Noticed by Jev from what you said. Nothing changes unless you choose.' }));
+  $('suggestions').append(card);
+}
+
 $<HTMLFormElement>('instruction-form').onsubmit = event => {
   event.preventDefault();
   if (!bridge.open) { $('instruction-status').textContent = 'Not connected to the companion; try again once it reconnects.'; return; }
