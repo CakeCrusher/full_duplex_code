@@ -110,6 +110,8 @@ export class VoiceSessions {
       const unsaved = !this.recordFor && this.record.liveSessionId;
       this.recordFor = id;
       if (unsaved) this.save(); else { this.record = this.resumeStore.load(id) ?? emptyRecord(); this.restoreInstructions(); }
+      // Instructions added before the ID was known belong to this session's record too.
+      if (this.additionalInstructions.length) this.rememberInstructions();
     }
     return this.record;
   }
@@ -313,7 +315,7 @@ export class VoiceSessions {
     Object.assign(record, { finalized: result.finalized, endedAt: Date.now(), deliveredThrough: Number.isFinite(undelivered) ? undelivered - 1 : Date.now(), lastRecordId: mediator.feed.projector.sequence });
     this.saveRun(run);
     // Ended without anyone asking (dropped, closed by GPT Live, or its media stalled): resume on the same page, a limited number of times.
-    const unexpected = !live.requested || live.closeReason === MEDIA_STALLED, moved = this.moved.has(live);
+    const moved = this.moved.has(live), unexpected = !moved && (!live.requested || live.closeReason === MEDIA_STALLED);
     const reconnect = unexpected && this.live === live && !bridge.stopping && page?.ws.readyState === WebSocket.OPEN && this.allowReconnect();
     if (unexpected) this.lastDrop = { reason: result.reason, at: Date.now(), reconnecting: Boolean(reconnect) };
     // Speech not yet passed on goes to the session that replaces this one; otherwise to the agent now.

@@ -73,6 +73,7 @@ try {
       },
       async greet() {}, async append() {}, audio() {},
       close(reason: string) {
+        live.requested = true; live.closeReason ??= reason;
         clearInterval(live.heard);
         if (live.state !== 'closed') { live.closedFor = reason; live.state = 'closed'; live.emit('closed', { finalized: true, reserved: true, usageSeconds: 1, sessionId: live.id }); }
         return Promise.resolve();
