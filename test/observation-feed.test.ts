@@ -216,6 +216,9 @@ test('a burst waits a second, a second more per update, never past ten seconds; 
   assert.equal(f.sent.length, 4, 'urgent: at once, with what was waiting');
   f.feed.add(observation('Stop', { last_assistant_message: 'Ready.' }));
   assert.equal(f.sent.length, 4, 'a removed event sends nothing');
+  f.feed.add(observation('MessageDisplay', { delta: 'Ready.' }));
+  f.feed.add(observation('Stop', { last_assistant_message: 'Ready.' }));
+  assert.equal(f.sent.length, 5, 'but a turn end still sends the waiting message at once');
 });
 
 test('while the operator talks, and for two seconds after, a batch keeps waiting, never past ten seconds', t => {

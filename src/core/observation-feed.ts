@@ -90,13 +90,16 @@ export class ObservationFeed {
   }
   add(observation: FeedObservation) {
     if (this.stopped) return;
-    const projection = this.projector.project(observation);
-    if (!projection) return;
-    const now = Date.now(), { firstMs, perUpdateMs, longestMs } = this.hold ?? { firstMs: 0, perUpdateMs: 0, longestMs: 0 };
-    if (!this.pending.length) { this.first = now; this.due = now + firstMs; }
-    else this.due = Math.min(this.first + longestMs, this.due + perUpdateMs);
+    const projection = this.projector.project(observation), now = Date.now();
+    if (projection) {
+      const { firstMs, perUpdateMs, longestMs } = this.hold ?? { firstMs: 0, perUpdateMs: 0, longestMs: 0 };
+      if (!this.pending.length) { this.first = now; this.due = now + firstMs; }
+      else this.due = Math.min(this.first + longestMs, this.due + perUpdateMs);
+      this.pending.push({ ...projection, kind: observation.kind, receivedAt: now });
+    }
+    // An urgent event sends what is waiting, even when the table leaves the event itself out
+    // (a turn end whose text already arrived as a message).
     if (URGENT.has(observation.kind)) this.due = now;
-    this.pending.push({ ...projection, kind: observation.kind, receivedAt: now });
     this.wait();
   }
   // Sends the batch once it is due and the operator has finished, or at the longest hold.
