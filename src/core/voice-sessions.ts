@@ -12,6 +12,8 @@ import { attachment, deliveryConfirmation, disregardInstruction, greeting, histo
 import type { LearnedInstruction } from './instruction-learner.ts';
 
 export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean; /** Set for an instruction Jev learned: its short ID, such as I3. */ learned?: string }
+/** The latest voice session's span and GPT Live's usage reports, for the page's meters. */
+export interface LiveUsage { voiceSessionId: string; startedAt: number; endedAt?: number; seconds: number; ratio: number | null; points: [at: number, ratio: number][] }
 
 // Voice connections one after another beside the same agent session: startup
 // instructions and history, added instructions, and
@@ -22,6 +24,7 @@ export class VoiceSessions {
   mediator?: Mediator;
   audit: AudioAudit | null = null;
   additionalInstructions: Instruction[] = [];
+  usage?: LiveUsage;
   lastAudioAt = 0;
   audioWatchdog?: NodeJS.Timeout;
   /** The page the current voice session belongs to: its events go there, and its microphone is the one heard. */
@@ -127,8 +130,18 @@ export class VoiceSessions {
       if (event.type === 'session.started') {
         for (const item of startupInstructions) Object.assign(item, { state: 'acknowledged', sessionId: live.id, acknowledgedAt: Date.now(), error: undefined, appended: false });
         this.audit = new AudioAudit({ dir: path.join(bridge.runDir, 'audio', live.reservation!), log: event => log({ liveRun: live.reservation, ...event }), onError: error => fault(error) });
+        this.usage = { voiceSessionId: live.id!, startedAt: live.startedAt ?? Date.now(), seconds: 0, ratio: null, points: [] };
+        publish({ type: 'live_usage', ...this.usage });
         publish({ type: 'voice_started', sessionId: live.id }, page);
         publish(bridge.status());
+      }
+      // Live reports usage about every 15 seconds; the last few minutes of it are enough for the meters.
+      const usage = this.usage;
+      if (event.type === 'session.usage.updated' && usage && usage.voiceSessionId === live.id) {
+        const ratio = event.context_window?.usage_ratio;
+        if (Number.isFinite(ratio)) { usage.ratio = ratio; usage.points = [...usage.points.slice(-39), [Date.now(), ratio]]; }
+        usage.seconds = event.usage?.seconds ?? usage.seconds;
+        publish({ type: 'live_usage', ...usage });
       }
     });
     live.on('closed', result => {
@@ -136,6 +149,7 @@ export class VoiceSessions {
       if (this.mediator?.live === live) this.mediator.handOff(result.reason);
       this.mediator?.stop();
       publish({ type: 'voice_closed', ...result, moved: this.moved.has(live) || undefined }, page);
+      if (this.usage && this.usage.voiceSessionId === live.id) { this.usage.endedAt = Date.now(); publish({ type: 'live_usage', ...this.usage }); }
       if (this.live === live) this.page = undefined;
       publish(bridge.status()); bridge.saveTimeline();
     });

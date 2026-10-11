@@ -241,6 +241,30 @@ test('starting voice greets once and appends no extra instructions', async t => 
   assert.equal(appends.length, 0); assert.equal(greetings, 2, 'each voice connection greets once');
 });
 
+test('pages get GPT Live’s usage reports for the voice session, also when they connect later', async t => {
+  const { LiveSession } = await import('../src/core/live-session.ts');
+  t.mock.method(LiveSession.prototype, 'start', async function (this: any) {
+    this.state = 'active'; this.id = this.reservation = 'offline-usage'; this.startedAt = Date.now();
+    this.emit('event', { type: 'session.started' });
+  });
+  t.mock.method(LiveSession.prototype, 'append', async () => {});
+  t.mock.method(LiveSession.prototype, 'greet', async () => {});
+  t.mock.method(LiveSession.prototype, 'close', async function (this: any) {
+    this.state = 'closed'; this.emit('closed', { finalized: true });
+  });
+  const h = await fixture(t); h.agentReady = true;
+  const reports: any[] = [], publish = h.publish;
+  h.publish = (event, page) => { if (event.type === 'live_usage') reports.push(event); publish(event, page); };
+  await h.startLive();
+  assert.deepEqual([reports.length, reports[0].voiceSessionId, reports[0].ratio], [1, 'offline-usage', null]);
+  h.live!.emit('event', { type: 'session.usage.updated', usage: { seconds: 15 }, context_window: { usage_ratio: .034 } });
+  assert.deepEqual([reports.at(-1).ratio, reports.at(-1).seconds, reports.at(-1).points.length], [.034, 15, 1]);
+  assert.deepEqual(h.status().liveUsage!.points.map(([, ratio]) => ratio), [.034], 'the status carries it for a page that connects now');
+  await h.live!.close();
+  assert.ok(reports.at(-1).endedAt >= reports.at(-1).startedAt, 'the meters stop where the session ended');
+  assert.equal(h.status().liveUsage!.endedAt, reports.at(-1).endedAt);
+});
+
 test('a voice session that ends sends the unsent speech to the agent with the reason', async t => {
   const { LiveSession } = await import('../src/core/live-session.ts');
   t.mock.method(LiveSession.prototype, 'start', async function (this: any) {
