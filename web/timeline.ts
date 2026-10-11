@@ -55,6 +55,8 @@ export class TimelineView {
     if ((!item || item.text) && this.detailItem === item && this.detailSelected === this.selected) return;
     this.detailItem = item; this.detailSelected = this.selected;
     $('detail-clear').hidden = !this.selected;
+    // Outside Developer mode the inspector shows only for a pinned item.
+    $('timeline-detail').classList.toggle('pinned', Boolean(this.selected));
     $('detail-kind').textContent = item ? tracks[item.track] : 'Inspect the timeline';
     $('detail-title').textContent = item ? this.itemLabel(item) : 'Hover for a closer look.';
     $('detail-time').textContent = item ? this.timing(item) : 'Click an item to pin it. Keyboard focus and tap work too.';

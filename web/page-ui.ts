@@ -9,6 +9,20 @@ let instructionHistory = '';
 
 export function notice(text: string) { $('notice').textContent = text; }
 
+// Developer mode adds the diagnostic parts of the page. Each browser remembers
+// the choice; without storage it simply starts off.
+export function developerMode() {
+  const toggle = $<HTMLInputElement>('developer-mode');
+  const show = (on: boolean) => { document.body.classList.toggle('developer', on); toggle.checked = on; };
+  let saved = false;
+  try { saved = localStorage.getItem('fd-developer-mode') === 'on'; } catch {}
+  show(saved);
+  toggle.onchange = () => {
+    show(toggle.checked);
+    try { localStorage.setItem('fd-developer-mode', toggle.checked ? 'on' : 'off'); } catch {}
+  };
+}
+
 // The bridge's status, sent every second and on change.
 // Which session this page belongs to, at the top and in the tab title, so that
 // several companions open at once can be told apart.

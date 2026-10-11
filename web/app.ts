@@ -1,11 +1,12 @@
 // The page: wires the bridge client, audio I/O, the WebRTC peer, the page UI,
-// the timeline and the sound cues, and runs one voice connection at a time.
+// the timeline, the meters and the sound cues, and runs one voice connection at a time.
 import { TimelineView } from './timeline.js';
+import { Meters } from './meters.js';
 import { CuePlayer, CueTracker } from './cues.js';
 import { BridgeClient, type BridgeEvent } from './bridge-client.js';
 import { AudioIO, watchMicrophones, type WorkletMessage } from './audio-io.js';
 import { WebRtcPeer } from './webrtc-peer.js';
-import { $, notice, showStatus } from './page-ui.js';
+import { $, developerMode, notice, showStatus } from './page-ui.js';
 import { profile } from './profile.js';
 
 const token = location.hash.slice(1) || sessionStorage.getItem('fd-voice-token');
@@ -19,10 +20,11 @@ let pageId: string | null = null, connections = 0, attempts = 0, leaving = false
 let retry: ReturnType<typeof setTimeout> | undefined;
 const cues = new CueTracker(), cuePlayer = new CuePlayer();
 let replaying = false;
-const timeline = new TimelineView();
+developerMode();
+const timeline = new TimelineView(), meters = new Meters(timeline.items);
 
 function handle(event: BridgeEvent) {
-  timeline.handle(event);
+  timeline.handle(event); meters.handle(event);
   const cue = cues.cue(event, { replaying });
   if (cue) cuePlayer.play(cue);
   if (event.type === 'page') pageId = event.id;

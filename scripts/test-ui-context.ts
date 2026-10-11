@@ -79,6 +79,24 @@ try {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(harness.browserUrl);
+  // The default view keeps three tracks and the instructions; Developer mode adds the rest.
+  await page.locator('.timeline-item[data-track="requests"]').first().waitFor();
+  assert.equal(await page.locator('[data-lane="operator"]').isVisible(), false, 'operator audio is a developer detail');
+  assert.equal(await page.locator('#live-prompt').isVisible(), false);
+  assert.equal(await page.locator('#instruction-panel').isVisible(), true, 'instructions stay in the default view');
+  assert.equal(await page.locator('#timeline-detail').isVisible(), false, 'the inspector waits for a pinned item');
+  assert.match((await page.locator('#meters').textContent())!, /Start voice to fill these in/);
+  // The meters count the voice session's words, context and requests from the timeline.
+  harness.voiceSessions.usage = { voiceSessionId: 'fixture', startedAt: base, endedAt: base + 50000, seconds: 45, ratio: .05, points: [[base + 15000, .02], [base + 45000, .05]] };
+  publish({ type: 'live_usage', ...harness.voiceSessions.usage });
+  const meter = (key: string, part: string) => page.locator(`.meter[data-meter="${key}"] .meter-${part}`).textContent();
+  await page.waitForFunction(() => document.querySelector('.meter[data-meter="requests"] .meter-total')!.textContent === '1 passed on this session');
+  assert.equal(await meter('window', 'value'), '5%');
+  assert.equal(await meter('live', 'total'), '28 words this session');
+  assert.equal(await meter('operator', 'total'), '13 words this session');
+  assert.equal(await meter('sent', 'total'), 'About 5 tokens this session');
+  assert.match((await page.locator('#meters').textContent())!, /Last voice session/);
+  await page.locator('#developer-mode').check();
   await page.locator('.timeline-item[data-track="operator"]').first().waitFor();
   assert.equal(await page.locator('#prompt-instructions').textContent(), liveInstructions(claude));
   assert.match((await page.locator('#prompt-state').textContent())!, /startup preview/);
@@ -188,7 +206,7 @@ try {
   assert.equal(await page.evaluate(() => window.__microphoneConstraints.audio.autoGainControl), false);
   assert.equal(await page.locator('#prompt-instructions').textContent(), harness.live!.instructions, 'the page shows the exact startup prompt');
   assert.match((await page.locator('#prompt-state').textContent())!, /Current voice session/);
-  await page.locator('#live-prompt').evaluate(element => { (element as HTMLDetailsElement).open = true; });
+  await page.locator('#instruction-panel > summary').click();
   const extraInstruction = 'Explain technical terms with a simple example.';
   await page.locator('#instruction-text').fill(extraInstruction);
   await page.locator('#instruction-append').click();
@@ -243,6 +261,7 @@ try {
   assert.ok(fs.existsSync(path.join(dir,'timeline.json')), 'Gantt saved to disk');
   await page.reload();
   await page.getByRole('button', { name: /Claude hooks\. FileChanged/ }).waitFor();
+  assert.equal(await page.locator('#developer-mode').isChecked(), true, 'the browser remembers Developer mode');
   assert.equal(await page.locator('#prompt-instructions').textContent(), `${harness.live!.instructions}\n\nAdditional operator instructions:\n${extraInstruction}`);
   assert.match((await page.locator('#prompt-state').textContent())!, /Last voice session/);
   assert.ok(await page.locator('.timeline-item[data-track="speech"]').count() >= 1, 'audio history survives reload');
