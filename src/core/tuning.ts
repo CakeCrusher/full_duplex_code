@@ -45,13 +45,13 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     { value: 3000, consequence: 'Agent updates, which can prompt GPT Live to speak up, wait 3 s after the operator stops: fewer interruptions for operators who pause mid-thought, think aloud, or ask not to be cut off.' },
   ] },
   pauseMs: { min: 0, max: 2000, describe:
-    'Updates may land while the operator is actively talking and wait only once they pause this long (ms). 0 holds updates for the whole time they talk: on 54 real sessions 0.9% of batches landed while they spoke and 1.6% in the second after. 700 lets 13.6% land mid-speech, which a full-duplex model handles, but 7.7% landed in the risky second after.',
+    'Updates may land while the operator is actively talking and wait only once they pause this long (ms). Live runs on two real sessions: at 0, 3–6% of updates landed while the operator spoke (long turns reach the 10 s cap); at 700, 13–14%, but one of two spoken requests per run reached the agent 3–5 s later (4.5 and 6.4 s instead of 1.5 s) and GPT Live talked over the operator longer (6.3 and 2.3 s instead of 4.1 and 0.8 s).',
     levels: [
-    { value: 0, consequence: 'Updates wait the whole time the operator talks (default).' },
-    { value: 700, consequence: 'Updates may land while the operator is talking and wait once they pause: more updates reach GPT Live during long turns.' },
+    { value: 0, consequence: 'Updates wait the whole time the operator talks (default): requests reach the agent fastest and GPT Live talks over the operator least.' },
+    { value: 700, consequence: 'About three times as many updates land while the operator talks, for operators who want updates as they speak; some requests reach the agent a few seconds later and GPT Live talks over them a little more.' },
   ] },
   compactTokens: { min: 0, max: 1000000, describe:
-    "When one batch's tool work (calls and their outputs) is over this many tokens, it becomes a single line saying which tools ran; the agent's own words, failures, prompts and turn ends still arrive whole. Lower: more coherent speech and a context that lasts longer, but GPT Live can answer fewer of the operator's questions itself (2 Answer instead of delegating, 4 Know as much as possible). 1000000 never compacts.",
+    "When one batch's tool work (calls and their outputs) is over this many tokens, it becomes a single line saying which tools ran; the agent's own words, failures, prompts and turn ends still arrive whole. On the same 5.5 minutes of a real session, compacting at 900 halved GPT Live's unprompted talk (147 words instead of 304; 76 s of speech instead of 137) and it never started talking over the operator (twice without compaction), for 14% fewer tokens received. It can only cost questions whose answer is in tool details: 19 of the 55 real operator questions answerable from the session (36 need only the agent's own words). In replays of 19 real questions, GPT Live answered as many itself either way and was wrong less often with compaction (3 against 8). 1000000 never compacts.",
     levels: [
     { value: 900, consequence: 'Heavy tool work becomes one line: calmest speech, longest-lasting context, fewest questions answered without the agent.' },
     { value: 3000, consequence: 'Only very heavy tool work becomes one line.' },
