@@ -168,10 +168,13 @@ If Claude asks a question, you can answer by voice or in the terminal. Keep the 
 
 - **Mute microphone** stops sharing your microphone input. Voice stays connected and billable. Click **Unmute microphone** to speak again.
 - **End voice** closes the paid voice connection. Claude stays open and can continue working.
-- **Start voice** opens a new connection. Its startup context holds the most recent observations retained by this launcher, including work performed while voice was off, within a fixed size limit. Longer records are shortened to their start and end. Earlier history is not re-sent; it stays in the local log. Only observations that arrive after the connection opens are sent as they happen.
+- **Resume voice** (shown once there is a conversation to continue) picks up where voice left off. When the last voice session closed cleanly and OpenAI stored it, voice continues that session (a fork: GPT Live keeps the whole conversation and catches up on Claude's work since). Otherwise, for example after a dropped connection, a new session starts with the spoken conversation's text: the newest operator and GPT Live turns that fit in GPT Live's startup limit (128 messages, 8,192 tokens), beside the usual startup context. This also works after restarting `fdc` on the same conversation (see [Resume a conversation](#resume-a-conversation)); stored sessions can be continued for 30 days.
+- **Start fresh** (or **Start voice** when there is nothing to resume) opens a new connection without the earlier conversation. Its startup context holds the most recent observations retained by this launcher, including work performed while voice was off, within a fixed size limit. Longer records are shortened to their start and end. Earlier history is not re-sent; it stays in the local log. Only observations that arrive after the connection opens are sent as they happen.
 - Exit Claude in the terminal to stop the whole application.
 
 Closing the companion tab also closes its voice connection. A disconnected voice session does not erase Claude's conversation.
+
+When voice ends without anyone asking (the connection to GPT Live is lost, GPT Live closes it, or its audio stream stops while the page is still sending your microphone), the page reconnects by itself and resumes the conversation, at most twice in five minutes. Speech that had not been passed on to Claude goes with the next request instead of being sent when the connection drops. **End voice**, closing the tab, or moving voice to another page never reconnects. Below the voice buttons, the page shows whether it uses the local or the public link, and the last drop.
 
 ## Resume a conversation
 
@@ -183,7 +186,7 @@ fdc claude --resume CLAUDE_SESSION_ID
 
 `fdc claude --continue` and `fdc claude --resume` (Claude's picker) work too; the companion learns the session's ID from Claude's first hook. For a session launched by Full-Duplex Code, the terminal prints a **Local run** folder at startup. Open `connection.json` in that folder and copy its `sessionId` value. Use the complete ID; do not use the short suffix of the folder name. Keep the rest of that file private because it also contains connection credentials.
 
-Accept the channel notice, open the new companion link, and click **Start voice**. The companion reads saved prompts, assistant text, tool calls, and tool results from that Claude session's transcript. Like any new voice connection, it starts with only the most recent of these; the rest stays in the transcript. Transcript records supply the history; newly arriving hooks supply live observations. Private thinking is not imported. Old voice conversations are not restored independently of Claude's saved history, and the voice model has a finite context capacity.
+Accept the channel notice, open the new companion link, and click **Resume voice** to continue the earlier voice conversation, or **Start fresh**. The companion keeps each Claude session's last voice session and its spoken conversation in `.runs/voice-resume/`, readable only by you. The companion reads saved prompts, assistant text, tool calls, and tool results from that Claude session's transcript. Like any new voice connection, it starts with only the most recent of these; the rest stays in the transcript. Transcript records supply the history; newly arriving hooks supply live observations. Private thinking is not imported. The voice model has a finite context capacity.
 
 ## Add instructions to Live
 
@@ -201,6 +204,7 @@ The companion's own options go between `fdc` and the agent's name: `fdc [options
 | `--observe transcript` | Add saved-text/tool fallback observation if display hooks are unavailable. |
 | `--port 8123` | Choose the local port. The default is 8123, so the companion address and Chrome's microphone permission stay the same between launches. If 8123 is busy, for example with a second companion, the launcher uses a free port and says so. `--port 0` always chooses a free port. |
 | `--public` | Also reach the companion from a phone, through a temporary Cloudflare tunnel the launcher starts and stops. See [Use it from your phone](#use-it-from-your-phone). |
+| `--no-store` | Don't ask OpenAI to store voice sessions. By default each voice session is created with `store: true`, so that **Resume voice** can continue it exactly. OpenAI keeps stored session recordings (audio and conversation) for 30 days and offers no public way to delete them earlier; projects with Zero Data Retention, or without storage enabled, can't store them. With `--no-store`, or when OpenAI refuses storage, **Resume voice** starts a new session with the conversation's text instead. |
 
 For example:
 
@@ -305,11 +309,11 @@ The launcher starts a temporary Cloudflare tunnel, waits until the link actually
 
 You can open the page on your computer and on your phone at the same time, in any order, before or after Claude starts. Every open page follows the session, and voice runs in one of them. On another page, **Start voice** becomes **Move voice here**, which ends voice where it was and starts it on that page. A page whose connection drops, for example when the phone sleeps, reconnects by itself; voice on that page ends, and you can start it again. Each start of `fdc` makes new links, so a page opened from an earlier start's link says so.
 
-The tunnel gives the page the `https://` address a phone needs for its microphone. Voice audio does not use it: it goes directly between the phone and OpenAI, as it does from a desktop browser. Only the page and its voice connection are accepted through the tunnel; Claude's hooks and channel connection are refused unless they come from this computer directly.
+The tunnel gives the page the `https://` address a phone needs for its microphone. Voice audio does not use it: it goes directly between the phone and OpenAI, as it does from a desktop browser. The page's local audio audit copy does travel through it (about 1.3 Mbit/s); when the phone's uplink falls behind, the page drops audit audio until it catches up, and the audit records the gap. It never ends voice. Only the page and its voice connection are accepted through the tunnel; Claude's hooks and channel connection are refused unless they come from this computer directly.
 
 **Keep the link private.** The tunnel's address is new and random each run, but it is public, and the secret in the link is the only lock. Anyone with the link can direct Claude on your computer; with `--dangerously-skip-permissions`, that includes running any command.
 
-Keep the companion page in the foreground on your phone: locking the screen or switching apps can pause the microphone, and voice ends after 5 seconds without microphone audio. Your computer must stay awake while the launcher runs.
+Keep the companion page in the foreground on your phone: locking the screen or switching apps can pause the microphone, and voice ends after 5 seconds without microphone audio. Click **Resume voice** to continue. Your computer must stay awake while the launcher runs.
 
 ## Costs
 
@@ -340,14 +344,14 @@ Usage history stays in `.runs/budget.json`. Existing history is preserved; old s
 | The companion misses terminal text | Confirm Claude was started through this launcher. If hooks are unavailable, restart the same session with `--resume SESSION_ID --observe transcript`. |
 | The page says its link is from an earlier start | Each start of `fdc` makes a new link. Open the link it printed this time. |
 | Voice is on in another tab or device | Voice runs in one page at a time. Click **Move voice here** to bring it to this page. |
-| Voice disconnected | The page reconnects by itself; click Start voice again. Resolve any terminal or channel issue first. |
+| Voice disconnected | The page reconnects by itself and resumes voice, up to twice in five minutes; after that, click **Resume voice**. Resolve any terminal or channel issue first. |
 | An old launcher still reports a budget limit | Exit Claude with `/exit`, restart the launcher, and use the newly opened companion tab. |
 
-Voice closes automatically if microphone streaming stops or the Claude channel remains disconnected. This avoids leaving a paid connection running without a usable companion.
+Voice closes automatically if microphone streaming stops (or GPT Live stops receiving it; the 5 seconds start counting once GPT Live's audio has started) or the Claude channel remains disconnected. This avoids leaving a paid connection running without a usable companion.
 
 ## Local records and sharing
 
-`.runs/` contains connection details, event logs, conversation text, and the usage ledger. `.env`, `.runs/`, `.cache/`, `.scratch/`, and `docs/` are ignored by Git. Each voice connection saves private 24 kHz mono WAV files under `.runs/<run>/audio/<voice-id>/`: `microphone.wav` (microphone before the noise gate, respecting mute), `input.wav` (microphone audio received by Live and reflected over its control connection; WebRTC encoding may alter the samples), `output.wav` (Live audio received, in order), and `playback.wav` (browser-rendered audio, including silent playback gaps). These are local recordings, not OpenAI stored sessions. They use about 11.5 MB per minute combined. `events.jsonl` includes sample offsets, audio levels, playback backlog, hook events, exact context appends and acknowledgments. `timeline.json` preserves the Gantt when voice ends, the browser disconnects, or the launcher exits. Browser crashes may lose their last in-flight playback packets; audit gaps and failures are logged. Old runs without these files cannot recover audio retrospectively. Delete a run’s directory to delete its recordings.
+`.runs/` contains connection details, event logs, conversation text, and the usage ledger. `.env`, `.runs/`, `.cache/`, `.scratch/`, and `docs/` are ignored by Git. Each voice connection saves private 24 kHz mono WAV files under `.runs/<run>/audio/<voice-id>/`: `microphone.wav` (microphone before the noise gate, respecting mute), `input.wav` (microphone audio received by Live and reflected over its control connection; WebRTC encoding may alter the samples), `output.wav` (Live audio received, in order), and `playback.wav` (browser-rendered audio, including silent playback gaps). These are local recordings; OpenAI's stored sessions (see `--no-store`) are separate. They use about 11.5 MB per minute combined. `events.jsonl` includes sample offsets, audio levels, playback backlog, hook events, exact context appends and acknowledgments. `timeline.json` preserves the Gantt when voice ends, the browser disconnects, or the launcher exits. Browser crashes may lose their last in-flight playback packets; audit gaps and failures are logged. Old runs without these files cannot recover audio retrospectively. Delete a run’s directory to delete its recordings.
 
 Treat logs and companion links as private. When reporting a problem, share the error and reproduction steps after removing keys, connection tokens, and private project content.
 
