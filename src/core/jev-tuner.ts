@@ -18,8 +18,10 @@ export class JevTuner {
     this.apiKey = apiKey; this.log = log; this.fetch = fetch;
   }
   /** The settings that fit the operator's instructions; a setting Jev gives no valid level for keeps its value. */
-  async choose({ instructions, earlier, current }: { instructions: string[]; earlier: string[]; current: Tuning }): Promise<{ tuning: Tuning; changes: TuningChange[] }> {
-    const questions = Object.fromEntries(Object.entries(KNOBS).map(([name, knob]) => [name, {
+  async choose({ instructions, earlier, current, pinned = [] }: { instructions: string[]; earlier: string[]; current: Tuning; pinned?: (keyof Tuning)[] }): Promise<{ tuning: Tuning; changes: TuningChange[] }> {
+    // Settings the operator set by hand are theirs.
+    const knobs = Object.entries(KNOBS).filter(([name]) => !pinned.includes(name as keyof Tuning)) as [keyof Tuning, typeof KNOBS[keyof Tuning]][];
+    const questions = Object.fromEntries(knobs.map(([name, knob]) => [name, {
       type: 'choice',
       instructions: `${knob.describe} Which level fits the operator's instructions and preferences best? Choose the default unless they ask for something this setting changes.`,
       criteria: Object.fromEntries(knob.levels.map(level => [`level_${level.value}`, level.consequence])),
@@ -29,7 +31,7 @@ export class JevTuner {
     if (!response.ok) throw new Error(`Jev returned HTTP ${response.status}`);
     const { answers } = await response.json();
     const tuning = { ...current }, changes: TuningChange[] = [];
-    for (const [name, knob] of Object.entries(KNOBS) as [keyof Tuning, typeof KNOBS[keyof Tuning]][]) {
+    for (const [name, knob] of knobs) {
       const value = Number(String(answers?.[name]?.choice ?? '').replace(/^level_/, ''));
       if (!knob.levels.some(level => level.value === value) || value === current[name]) continue;
       changes.push({ name, from: current[name], to: value }); tuning[name] = value;

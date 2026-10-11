@@ -81,7 +81,7 @@ export class LearnedLog {
   write(entry: Record<string, unknown>) {
     try { fs.appendFileSync(this.file, JSON.stringify({ at: Date.now(), ...entry }) + '\n', { mode: 0o600 }); } catch {}
   }
-  /** The newest instructions still in force from other sessions than this one. */
+  /** The newest instructions still in force from other sessions than this one; those meant for their own session only say so. */
   earlier(session?: string, limit = 30): string[] {
     let lines: string[] = [];
     try { lines = fs.readFileSync(this.file, 'utf8').split('\n').filter(Boolean); } catch { return []; }
@@ -90,7 +90,7 @@ export class LearnedLog {
       try {
         const entry = JSON.parse(line), key = `${entry.session}:${entry.id}`;
         if (entry.session === session) continue;
-        if (entry.removed) kept.delete(key); else if (typeof entry.text === 'string') kept.set(key, entry.text);
+        if (entry.removed) kept.delete(key); else if (typeof entry.text === 'string') kept.set(key, entry.scope === 'always' ? entry.text : `(for that session only) ${entry.text}`);
       } catch {}
     }
     return [...kept.values()].slice(-limit);

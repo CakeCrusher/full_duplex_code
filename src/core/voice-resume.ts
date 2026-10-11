@@ -12,7 +12,12 @@ export interface ResumeRecord {
   liveSessionId?: string; stored: boolean; finalized: boolean; endedAt?: number;
   /** The spoken conversation since the last Start fresh, oldest first. */
   turns: Turn[];
+  /** The companion's added instructions, to list again after a restart; and those in force in the last session when it ended, which a fork inherits. */
+  instructions?: SavedInstruction[]; inForce?: SavedInstruction[];
+  /** Agent updates GPT Live had received when the last session ended (a time), and the last context record's number, which a fork continues. */
+  deliveredThrough?: number; lastRecordId?: number;
 }
+export interface SavedInstruction { id: string; text: string; learned?: string }
 // OpenAI keeps stored recordings for 30 days.
 export const RECORDING_MS = 30 * 24 * 60 * 60 * 1000;
 // Live's startup input: at most 128 messages and 8,192 tokens in all.
@@ -51,7 +56,8 @@ export class ResumeStore {
   load(sessionId: string): ResumeRecord | undefined {
     try {
       const data = JSON.parse(fs.readFileSync(this.file(sessionId), 'utf8'));
-      return Array.isArray(data.turns) && data.turns.every((t: Turn) => ['operator', 'intermediary'].includes(t?.role) && typeof t.text === 'string') ? data : undefined;
+      const instructions = (list: unknown) => list === undefined || Array.isArray(list) && list.every(i => typeof i?.id === 'string' && typeof i.text === 'string' && (i.learned === undefined || typeof i.learned === 'string'));
+      return Array.isArray(data.turns) && data.turns.every((t: Turn) => ['operator', 'intermediary'].includes(t?.role) && typeof t.text === 'string') && instructions(data.instructions) && instructions(data.inForce) ? data : undefined;
     } catch { return undefined; }
   }
   save(sessionId: string, record: ResumeRecord) {

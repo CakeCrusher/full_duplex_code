@@ -3,6 +3,8 @@
 // description says how, from measurements on replayed real sessions, so that
 // whoever sets it (a person, or Jev from the operator's instructions) knows
 // what a change costs and buys. Defaults are the measured best balance.
+import type { Hold } from './observation-feed.ts';
+
 export interface Tuning {
   holdFirstMs: number;
   holdPerUpdateMs: number;
@@ -73,3 +75,6 @@ export function tuning(overrides: unknown = {}, base: Tuning = DEFAULT_TUNING): 
   }
   return result;
 }
+
+/** The batching hold the settings describe. */
+export const holdOf = ({ holdFirstMs, holdPerUpdateMs, holdLongestMs }: Tuning): Hold => ({ firstMs: holdFirstMs, perUpdateMs: holdPerUpdateMs, longestMs: holdLongestMs });

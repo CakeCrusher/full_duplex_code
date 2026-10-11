@@ -4,12 +4,12 @@ import type { ObservedAgent } from './agent-observer.ts';
 import { estimatedTokens } from './text-fragments.ts';
 import { contextData } from './context-rules.ts';
 import { feedLabel, toolWorkLine } from './prompts.ts';
-import { DEFAULT_TUNING } from './tuning.ts';
+import { DEFAULT_TUNING, holdOf } from './tuning.ts';
 import type { Floor } from './floor.ts';
 import type { AppendKind } from './context-queue.ts';
 
 /** What the feed needs from an observation. */
-export type FeedObservation = Pick<Observation, 'kind' | 'name' | 'text' | 'state'>;
+export type FeedObservation = Pick<Observation, 'kind' | 'name' | 'text' | 'state'> & Partial<Pick<Observation, 'at'>>;
 
 // Prose is never turned into references or noted as large. Urgent kinds flush
 // without waiting for the collection window.
@@ -66,7 +66,7 @@ export interface ContextTarget { add(kind: AppendKind, text: string, delegationI
  * more updates, but not the operator.
  */
 export interface Hold { firstMs: number; perUpdateMs: number; longestMs: number }
-export const SOFT_HOLD: Hold = { firstMs: DEFAULT_TUNING.holdFirstMs, perUpdateMs: DEFAULT_TUNING.holdPerUpdateMs, longestMs: DEFAULT_TUNING.holdLongestMs };
+export const SOFT_HOLD: Hold = holdOf(DEFAULT_TUNING);
 
 // Collects observations into batches, then sends them to the context queue in order.
 export class ObservationFeed {
@@ -79,7 +79,8 @@ export class ObservationFeed {
   agent: ObservedAgent;
   projector: ObservationProjector;
   label: string;
-  pending: (Projection & { kind: string; receivedAt: number })[] = [];
+  /** Waiting to be sent: each record with when the feed got it and when the agent's event arrived. */
+  pending: (Projection & { kind: string; receivedAt: number; at: number })[] = [];
   first = 0; due = 0;
   stopped = false;
   timer: NodeJS.Timeout | null = null;
@@ -94,7 +95,7 @@ export class ObservationFeed {
       const { firstMs, perUpdateMs, longestMs } = this.hold ?? { firstMs: 0, perUpdateMs: 0, longestMs: 0 };
       if (!this.pending.length) { this.first = now; this.due = now + firstMs; }
       else this.due = Math.min(this.first + longestMs, this.due + perUpdateMs);
-      this.pending.push({ ...projection, kind: observation.kind, receivedAt: now });
+      this.pending.push({ ...projection, kind: observation.kind, receivedAt: now, at: observation.at ?? now });
     }
     // An urgent event sends what is waiting, even when the table leaves the event itself out
     // (a turn end whose text already arrived as a message).

@@ -38,7 +38,8 @@ export class VoiceHistory {
     const pcm = Buffer.from(audio, 'base64'); let peak = 0;
     for (let i = 0; i + 1 < pcm.length; i += 2) peak = Math.max(peak, Math.abs(pcm.readInt16LE(i)));
     this.heard.push({ startMs, endMs, peak });
-    while (this.heard.length && this.heard[0].endMs < endMs - 300000) this.heard.shift();
+    // About five stretches a second: the whole session is kept (resumed turns are checked at its end), up to about six hours.
+    if (this.heard.length > 120000) this.heard.splice(0, 20000);
   }
   /**
    * Whether GPT Live heard any sound around a stretch of its transcript: false only when its echo
@@ -47,10 +48,15 @@ export class VoiceHistory {
    * own context; those were never said.
    */
   audible(startMs: number, endMs: number): boolean | undefined {
-    const from = startMs - 1000, to = endMs + 1000;
-    const around = this.heard.filter(h => h.endMs > from && h.startMs < to);
-    if (around.some(h => h.peak > SOUND_PEAK)) return true;
-    const covered = around.reduce((sum, h) => sum + Math.min(h.endMs, to) - Math.max(h.startMs, from), 0);
+    const from = startMs - 1000, to = endMs + 1000, heard = this.heard;
+    // The echo arrives in order: find the first stretch that ends after `from`.
+    let low = 0, high = heard.length;
+    while (low < high) { const middle = (low + high) >> 1; if (heard[middle].endMs > from) high = middle; else low = middle + 1; }
+    let covered = 0;
+    for (let i = low; i < heard.length && heard[i].startMs < to; i++) {
+      if (heard[i].peak > SOUND_PEAK) return true;
+      covered += Math.min(heard[i].endMs, to) - Math.max(heard[i].startMs, from);
+    }
     return covered >= .9 * (to - from) ? false : undefined;
   }
   /** Operator words GPT Live transcribed from silence (see audible). */

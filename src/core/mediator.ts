@@ -6,7 +6,7 @@ import { ContextQueue, type ContextSink } from './context-queue.ts';
 import { VoiceHistory } from './voice-history.ts';
 import { ObservationFeed, type Hold } from './observation-feed.ts';
 import { Floor, operatorSpeaking, type MicrophoneLevel } from './floor.ts';
-import { DEFAULT_TUNING, type Tuning } from './tuning.ts';
+import { DEFAULT_TUNING, holdOf, type Tuning } from './tuning.ts';
 import type { InstructionLearner } from './instruction-learner.ts';
 import { CATCH_AFTER_MS, CATCH_THRESHOLD, type WorkCatcher } from './work-catcher.ts';
 import { caughtRequest, nothingToSend, queueFailed, sessionEndRequest, voiceRequest } from './prompts.ts';
@@ -36,14 +36,16 @@ export class Mediator {
   catcher?: WorkCatcher; catchTimer?: NodeJS.Timeout; delegatedAt = 0;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
-  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, catcher }: {
+  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, catcher, firstRecordId = 0 }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
     publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; catcher?: WorkCatcher;
+    /** Context records are numbered after this one: a fork's context already holds its source's. */
+    firstRecordId?: number;
   }) {
     this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.learner = learner; this.catcher = catcher;
     this.agent = agent;
     this.floor = new Floor({ thinkMs: tuning.thinkMs, pauseMs: tuning.pauseMs });
-    if (hold === undefined) hold = { firstMs: tuning.holdFirstMs, perUpdateMs: tuning.holdPerUpdateMs, longestMs: tuning.holdLongestMs };
+    if (hold === undefined) hold = holdOf(tuning);
     this.context = new ContextQueue(live, error => {
       this.fault(error);
       live.close(`${this.agent.profile.name} context delivery failed`);
@@ -51,14 +53,15 @@ export class Mediator {
     // Earlier work reaches Live only through the bounded startup history; the feed
     // sends only observations that arrive from now on.
     this.feed = new ObservationFeed(this.context, log, { agent: this.agent, hold, floor: this.floor, compactTokens: tuning.compactTokens });
+    this.feed.projector.sequence = firstRecordId;
     this.onObservation = event => this.feed.add(event);
     this.onLive = event => this.liveEvent(event);
     live.on('event', this.onLive); observer.on('observation', this.onObservation);
   }
   /** New settings take effect at once: the floor, the hold and the compaction threshold. */
-  retune(tuning: Tuning) {
+  applyTuning(tuning: Tuning) {
     Object.assign(this.floor, { thinkMs: tuning.thinkMs, pauseMs: tuning.pauseMs });
-    if (this.feed.hold) this.feed.hold = { firstMs: tuning.holdFirstMs, perUpdateMs: tuning.holdPerUpdateMs, longestMs: tuning.holdLongestMs };
+    if (this.feed.hold) this.feed.hold = holdOf(tuning);
     this.feed.compactTokens = tuning.compactTokens; this.context.holdMs = tuning.holdLongestMs;
   }
   fault(error: Error) { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: error.message }); }
@@ -91,8 +94,9 @@ export class Mediator {
   }
   // What the operator said since the last judgment, with what came before as context.
   judge() {
-    const fragments = this.history.fragments.filter(f => f.seq > this.judgedThrough);
-    const said = fragments.filter(f => f.role === 'operator' && this.history.audible(f.startMs, f.endMs) !== false).map(f => f.text).join('').trim();
+    // Speech carried over from a dropped session was judged there.
+    const fragments = this.history.fragments.filter(f => f.seq > this.judgedThrough && !f.carried);
+    const said = fragments.filter(f => f.role === 'operator' && !this.history.unheard(f)).map(f => f.text).join('').trim();
     if (!said || !this.learner) return;
     this.judgedThrough = fragments.at(-1)!.seq;
     const firstOperator = fragments.find(f => f.role === 'operator')!.seq;

@@ -41,7 +41,9 @@ export interface HarnessOptions {
 // It owns the shared state; each concern lives in its own module.
 export class Harness {
   agent: AgentDefinition; adapter: AgentAdapter; observer: AgentObserver;
-  learner?: InstructionLearner; catcher?: WorkCatcher; tuner?: JevTuner; learned: LearnedLog; retuneTimer?: NodeJS.Timeout;
+  learner?: InstructionLearner; catcher?: WorkCatcher; tuner?: JevTuner; learned: LearnedLog;
+  /** Settings the operator set by hand (FDC_TUNING), which Jev leaves alone; and Jev's pending and latest asks. */
+  pinned: (keyof Tuning)[] = []; tuneTimer?: NodeJS.Timeout; tuneAsks = 0;
   root: string; runDir: string; cwd: string; sessionId?: string; apiKey: string;
   voice: string; observation: string; port: number; portFallback: boolean;
   /** How agent updates reach GPT Live; a running voice session takes a change at once. */
@@ -73,7 +75,7 @@ export class Harness {
     this.statusLog = new StatusLog({ runDir, clean: this.clean, timeline: this.timeline, pages: this.pages });
     this.log = this.statusLog.log; this.publish = this.statusLog.publish; this.fault = this.statusLog.fault;
     this.ledger = new UsageLedger(path.join(root, '.runs', 'budget.json'));
-    this.tuning = tuning(overrides);
+    this.tuning = tuning(overrides); this.pinned = Object.keys(overrides ?? {}) as (keyof Tuning)[];
     this.learned = new LearnedLog(path.join(root, '.runs', 'learned-instructions.jsonl'));
     if (jevKey && jevTuning) this.tuner = new JevTuner({ apiKey: jevKey, log: this.log });
     if (jevKey) this.catcher = new WorkCatcher({ apiKey: jevKey, log: this.log });
@@ -127,17 +129,19 @@ export class Harness {
   deliver(request: VoiceRequest) { this.outbox.add(request); }
   /** New settings for how agent updates reach GPT Live, from now on. */
   setTuning(next: Tuning, changes: TuningChange[] = []) {
-    this.tuning = next; this.mediator?.retune(next);
+    this.tuning = next; this.mediator?.applyTuning(next);
     this.log({ type: 'tuning.changed', tuning: next, changes }); this.publish({ type: 'tuning', tuning: next, changes }); this.publish(this.status());
   }
   /** With Jev's tuning on: Jev re-reads the operator's instructions, and those from earlier sessions, and picks the settings that fit. */
-  retune() {
+  tuneFromInstructions() {
     if (!this.tuner) return;
-    clearTimeout(this.retuneTimer);
-    this.retuneTimer = setTimeout(async () => {
+    clearTimeout(this.tuneTimer);
+    this.tuneTimer = setTimeout(async () => {
+      // Only the newest ask may change the settings: an older answer arriving late would undo it.
+      const ask = ++this.tuneAsks;
       try {
-        const { tuning: next, changes } = await this.tuner!.choose({ instructions: this.voiceSessions.additionalInstructions.map(item => item.text), earlier: this.learned.earlier(this.sessionId), current: this.tuning });
-        if (changes.length && !this.stopping) this.setTuning(next, changes);
+        const { tuning: next, changes } = await this.tuner!.choose({ instructions: this.voiceSessions.additionalInstructions.map(item => item.text), earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned });
+        if (changes.length && ask === this.tuneAsks && !this.stopping) this.setTuning(next, changes);
       } catch (error) { this.log({ type: 'tuning.error', message: (error as Error).message }); }
     }, 1000);
   }
@@ -152,7 +156,7 @@ export class Harness {
     this.writeConnection();
     this.startedAt = Date.now(); this.register();
     this.statusTimer = setInterval(() => this.publish(this.status()), 1000);
-    if (this.learned.earlier(this.sessionId).length) this.retune();
+    if (this.learned.earlier(this.sessionId).length) this.tuneFromInstructions();
     this.log({ type: 'bridge.started', sessionId: this.sessionId, cwd: this.cwd, baseUrl: this.baseUrl });
     return this;
   }
@@ -174,7 +178,7 @@ export class Harness {
     if (this.stopping) return; this.stopping = true;
     if (this.startedAt) try { this.companions.remove(this.companionEntry()); } catch (error) { this.log({ type: 'companions.failed', message: (error as Error).message }); }
     const agentClosed = this.adapter.close();
-    clearInterval(this.statusTimer); clearInterval(this.voiceSessions.audioWatchdog); clearTimeout(this.agentLostTimer);
+    clearInterval(this.statusTimer); clearInterval(this.voiceSessions.audioWatchdog); clearTimeout(this.agentLostTimer); clearTimeout(this.tuneTimer);
     if (this.live) await this.live.close('harness stopped');
     this.voiceSessions.handOffCarried();
     this.mediator?.stop();
