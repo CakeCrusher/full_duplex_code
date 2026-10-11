@@ -2,6 +2,20 @@
 
 Rules we settled on while building Full-Duplex Code and its adapters.
 
+## Objectives
+
+The five [core principles](README.md#core-principles), and how each is measured on replayed real sessions:
+
+| Objective | Measured as |
+| --- | --- |
+| You come first | Times GPT Live starts talking while you speak; requests neither answered nor passed on; work requests that never reach the agent (must be zero) |
+| Answer instead of delegating | Share of your questions GPT Live answers itself, correctly (judged blind) |
+| Synthesis, not narration | Facts that matter conveyed correctly per sentence spoken, judged blind together with coherence |
+| Know as much as possible | Share of your real questions answerable from what GPT Live received, and share of the agent's output it received |
+| Fresh enough | Time from an agent event to GPT Live having it |
+
+Judge a change on all five at once. A change that gains on one objective by giving up another is a trade-off, not a win: say which, and by how much.
+
 ## The experience
 
 - You care about the outcome, not the code. The companion tells you what happened, so you never have to watch the terminal.
