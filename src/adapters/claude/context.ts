@@ -9,6 +9,10 @@ export const claudeContext: ContextRule[] = [
   // Stop repeats the text MessageDisplay already carried; PostToolBatch repeats each PostToolUse.
   { event: 'Stop', remove: true },
   { event: 'PostToolBatch', remove: true },
+  // Claude's own helpers (context compaction, recaps, suggested next prompts) report as nameless
+  // sub-agents. Their text restates or predicts the conversation, the operator's words included,
+  // and GPT Live has spoken it back as if the operator were talking.
+  { event: 'SubagentStop', where: { agent_type: '' }, remove: true },
   // Whole files: the one being written (its result repeats it, and an overwrite's patch
   // spans all of it) and the one before an edit or overwrite.
   { where: { tool_name: 'Write' }, key: ['tool_input.content', 'tool_response.content', 'tool_response.structuredPatch'], truncate: 1200 },
