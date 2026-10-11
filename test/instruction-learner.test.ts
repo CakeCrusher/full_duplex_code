@@ -5,11 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { InstructionLearner, KeptInstructions, type Suggestion } from '../src/core/instruction-learner.ts';
+import { InstructionLearner, type LearnedInstruction } from '../src/core/instruction-learner.ts';
 import { Harness } from '../src/core/bridge.ts';
 import { Mediator } from '../src/core/mediator.ts';
 import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
 import { claude } from '../src/adapters/claude/index.ts';
+import { until } from '../scripts/test-support.ts';
 
 // Jev's answer to one call, as the API returns it.
 const jev = (behave: number, design: number, lasting: string) => {
@@ -18,64 +19,61 @@ const jev = (behave: number, design: number, lasting: string) => {
   return { calls, fetch };
 };
 
-test('Jev is asked about what the operator said, with the turn before as context; a lasting instruction becomes a suggestion', async () => {
-  const { calls, fetch } = jev(.8, .2, 'always'), suggested: Suggestion[] = [];
-  const learner = new InstructionLearner({ apiKey: 'key', fetch, log: () => {}, onSuggest: s => suggested.push(s) });
-  const suggestion = await learner.consider({ utterance: "  Don't read out file paths,\n just tell me what you need. ", previous: 'What did it change?', companion: 'It edited src/core/feed.ts.' });
+test('Jev is asked about what the operator said, with the turn before as context; a lasting instruction is learned', async () => {
+  const { calls, fetch } = jev(.8, .2, 'always'), learned: LearnedInstruction[] = [];
+  const learner = new InstructionLearner({ apiKey: 'key', fetch, log: () => {}, onLearn: i => learned.push(i) });
+  const instruction = await learner.consider({ utterance: "  Don't read out file paths,\n just tell me what you need. ", previous: 'What did it change?', companion: 'It edited src/core/feed.ts.' });
   assert.equal(calls[0].url, 'https://api.typesafe.ai/v1/systemone');
   assert.equal((calls[0].init.headers as Record<string, string>).Authorization, 'Bearer key');
   assert.deepEqual([calls[0].body.state.utterance, calls[0].body.state.previous_operator_utterance, calls[0].body.state.companion_before], ["Don't read out file paths, just tell me what you need.", 'What did it change?', 'It edited src/core/feed.ts.']);
   assert.deepEqual(Object.keys(calls[0].body.questions), ['behave', 'design_talk', 'lasting']);
-  assert.deepEqual(suggested, [suggestion]);
-  assert.equal(suggestion!.scope, 'always');
-  assert.equal(learner.pending.get(suggestion!.id), suggestion);
+  assert.deepEqual(learned, [instruction]);
+  assert.deepEqual(instruction, { text: "Don't read out file paths, just tell me what you need.", scope: 'always', behave: .8, design: .2, lasting: 'always' });
 });
 
-test('no suggestion for design talk, a one-off cue, low confidence, or a few words', async () => {
+test('nothing is learned from design talk, a one-off cue, low confidence, or a few words', async () => {
   for (const [behave, design, lasting] of [[.8, .7, 'always'], [.8, .2, 'this_moment'], [.55, .1, 'this_session']] as const) {
-    const { fetch } = jev(behave, design, lasting), suggested: Suggestion[] = [];
-    const learner = new InstructionLearner({ apiKey: 'key', fetch, log: () => {}, onSuggest: s => suggested.push(s) });
+    const { fetch } = jev(behave, design, lasting), learned: LearnedInstruction[] = [];
+    const learner = new InstructionLearner({ apiKey: 'key', fetch, log: () => {}, onLearn: i => learned.push(i) });
     assert.equal(await learner.consider({ utterance: 'Please stop narrating every step from now on.' }), undefined);
-    assert.equal(suggested.length, 0);
+    assert.equal(learned.length, 0);
   }
   const { calls, fetch } = jev(.9, .1, 'always');
-  await new InstructionLearner({ apiKey: 'key', fetch, log: () => {}, onSuggest: () => {} }).consider({ utterance: 'Stop.' });
+  await new InstructionLearner({ apiKey: 'key', fetch, log: () => {}, onLearn: () => {} }).consider({ utterance: 'Stop.' });
   assert.equal(calls.length, 0, 'too short to be a standing instruction');
 });
 
-test('kept instructions are stored in the run folder, once each', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-kept-')), kept = new KeptInstructions(root);
-  assert.deepEqual(kept.read(), []);
-  kept.add('Keep it short.'); kept.add('No file paths.'); kept.add('Keep it short.');
-  assert.deepEqual(kept.read(), ['No file paths.', 'Keep it short.']);
-  assert.ok(fs.existsSync(path.join(root, '.runs', 'kept-instructions.json')));
-  fs.rmSync(root, { recursive: true, force: true });
-});
-
-test('the operator answers a suggestion: kept always joins every later companion, kept for the session only this one, dismissed nothing', async t => {
+test('a learned instruction joins this companion at once under an ID; removing it tells a running session to disregard it and leaves it out of later ones; both are logged', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-learn-'));
   const harness = await new Harness({ agent: claude, root, runDir: path.join(root, 'run'), cwd: root, sessionId: randomUUID(), apiKey: 'unused', jevKey: 'jev-key' }).start();
   t.after(async () => { await harness.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const published: any[] = [], publish = harness.publish; harness.publish = (event, page) => { published.push(event); publish(event, page); };
-  harness.learner!.fetch = jev(.9, .1, 'always').fetch;
-  const always = await harness.learner!.consider({ utterance: 'Never read file paths out loud to me.' });
-  const session = await harness.learner!.consider({ utterance: 'For this task, only tell me when it is done.' });
-  const dismissed = await harness.learner!.consider({ utterance: 'From now on, keep every answer to one sentence.' });
-  assert.equal(published.filter(e => e.type === 'instruction_suggestion').length, 3);
-  await harness.answerSuggestion(always!.id, 'always');
-  await harness.answerSuggestion(session!.id, 'session');
-  await harness.answerSuggestion(dismissed!.id, false);
-  await harness.answerSuggestion('unknown', 'always');
-  assert.deepEqual(harness.voiceSessions.additionalInstructions.map(i => i.text), ['Never read file paths out loud to me.', 'For this task, only tell me when it is done.']);
-  assert.deepEqual(harness.kept.read(), ['Never read file paths out loud to me.']);
-  assert.equal(published.filter(e => e.type === 'instruction_suggestion_done').length, 3);
-  assert.doesNotMatch(fs.readFileSync(path.join(root, 'run', 'events.jsonl'), 'utf8'), /jev-key/, 'the key never reaches the log');
-  // A later companion in the same folder starts with what was kept always.
-  const next = await new Harness({ agent: claude, root, runDir: path.join(root, 'run2'), cwd: root, sessionId: randomUUID(), apiKey: 'unused' }).start();
-  try {
-    assert.deepEqual(next.voiceSessions.additionalInstructions.map(i => [i.text, i.state]), [['Never read file paths out loud to me.', 'next_session']]);
-    assert.match(next.voiceSessions.instructions(), /Never read file paths out loud to me\./);
-  } finally { await next.close(); }
+  harness.learner!.fetch = jev(.9, .1, 'this_session').fetch;
+  // Before voice starts, it waits for the next voice session.
+  await harness.learner!.consider({ utterance: 'Never read file paths out loud to me.' });
+  await until(() => harness.voiceSessions.additionalInstructions.length === 1);
+  assert.deepEqual(harness.voiceSessions.additionalInstructions.map(i => [i.learned, i.text, i.state]), [['I1', 'I1: Never read file paths out loud to me.', 'next_session']]);
+  assert.match(harness.voiceSessions.instructions(), /I1: Never read file paths out loud to me\./);
+  // During voice, it goes into the running session at once.
+  const appended: [string, string][] = [];
+  harness.voiceSessions.live = { state: 'active', id: 'live_test', append: async (kind: string, text: string) => { appended.push([kind, text]); } } as any;
+  await harness.learner!.consider({ utterance: 'From now on, keep every answer to one sentence.' });
+  await until(() => published.filter(e => e.type === 'instruction_learned').length === 2);
+  assert.deepEqual(appended[0], ['instructions', 'I2: From now on, keep every answer to one sentence.']);
+  assert.deepEqual(published.filter(e => e.type === 'instruction_learned').map(e => e.id), ['I1', 'I2']);
+  // Removing: the running session is told to disregard it; later sessions leave it out.
+  await harness.removeInstruction('I2');
+  assert.deepEqual(appended[1], ['instructions', 'Disregard instruction I2 ("From now on, keep every answer to one sentence."): the operator removed it, so it no longer applies.']);
+  assert.deepEqual(harness.voiceSessions.additionalInstructions.map(i => i.learned), ['I1']);
+  assert.doesNotMatch(harness.voiceSessions.instructions(), /I2/);
+  assert.ok(published.some(e => e.type === 'instruction_removed' && e.id === 'I2'));
+  await harness.removeInstruction('I9'); await harness.removeInstruction(undefined);
+  assert.equal(appended.length, 2, 'an unknown ID changes nothing');
+  harness.voiceSessions.live = undefined;
+  const log = fs.readFileSync(path.join(root, 'run', 'events.jsonl'), 'utf8');
+  assert.match(log, /"type":"instruction\.learned","id":"I1","text":"Never read file paths out loud to me\.","scope":"session","behave":0\.9/);
+  assert.match(log, /"type":"instruction\.removed","id":"I2"/);
+  assert.doesNotMatch(log, /jev-key/, 'the key never reaches the log');
 });
 
 test('once the operator pauses, the mediator asks Jev about what they said, with what the companion said before', async t => {

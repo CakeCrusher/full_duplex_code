@@ -5,7 +5,7 @@ import type { AgentAdapter, AgentDefinition, AgentLaunch, VoiceRequest } from '.
 import type { AgentObserver } from './agent-observer.ts';
 import { redact } from './redact.ts';
 import { withoutBinary } from './context-rules.ts';
-import { InstructionLearner, KeptInstructions } from './instruction-learner.ts';
+import { InstructionLearner } from './instruction-learner.ts';
 import { UsageLedger } from './usage-ledger.ts';
 import { Timeline } from './timeline.ts';
 import { StatusLog, statusSnapshot, type BridgeEvent } from './status.ts';
@@ -21,7 +21,7 @@ export interface HarnessOptions {
   /** The agent session's ID; when unknown, it is learned from the agent's first event. */
   sessionId?: string;
   voice?: string; observation?: string; port?: number; portFallback?: boolean; publicUrl?: string;
-  /** A TypeSafe API key: Jev then suggests keeping the operator's standing instructions (instruction-learner.ts). */
+  /** A TypeSafe API key: Jev then learns the operator's standing instructions (instruction-learner.ts). */
   jevKey?: string;
   /** The agent's own command-line arguments. */
   agentArgs?: string[];
@@ -31,7 +31,7 @@ export interface HarnessOptions {
 // It owns the shared state; each concern lives in its own module.
 export class Harness {
   agent: AgentDefinition; adapter: AgentAdapter; observer: AgentObserver;
-  learner?: InstructionLearner; kept: KeptInstructions;
+  learner?: InstructionLearner;
   root: string; runDir: string; cwd: string; sessionId?: string; apiKey: string;
   voice: string; observation: string; port: number; portFallback: boolean;
   browserToken = randomBytes(32).toString('hex');
@@ -58,9 +58,8 @@ export class Harness {
     this.statusLog = new StatusLog({ runDir, clean: this.clean, timeline: this.timeline, pages: this.pages });
     this.log = this.statusLog.log; this.publish = this.statusLog.publish; this.fault = this.statusLog.fault;
     this.ledger = new UsageLedger(path.join(root, '.runs', 'budget.json'));
-    this.kept = new KeptInstructions(root);
     this.voiceSessions = new VoiceSessions(this);
-    if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log, onSuggest: suggestion => this.publish({ type: 'instruction_suggestion', ...suggestion }) });
+    if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log, onLearn: instruction => { this.voiceSessions.learn(instruction).catch(error => this.fault(error as Error)); } });
     this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,
       publish: event => this.publish(event), fault: error => this.fault(error), onSent: entry => this.voiceSessions.confirmDelivery(entry) });
     this.adapter = agent.create({ root, runDir, cwd, sessionId, observation, agentArgs, clean: this.clean, log: this.log });
@@ -105,17 +104,8 @@ export class Harness {
   appendInstruction(text: unknown) { return this.voiceSessions.appendInstruction(text); }
   startLive(sdp?: unknown, page?: Page) { return this.voiceSessions.start(sdp, page); }
   deliver(request: VoiceRequest) { this.outbox.add(request); }
-  /** The operator's answer to a suggested instruction: keep it for this companion (and, with 'always', every later one), or not. */
-  async answerSuggestion(id: unknown, keep: 'session' | 'always' | false) {
-    const suggestion = typeof id === 'string' ? this.learner?.pending.get(id) : undefined;
-    if (!suggestion) return;
-    this.learner!.pending.delete(suggestion.id);
-    this.log({ type: 'instruction.answered', id: suggestion.id, keep });
-    this.publish({ type: 'instruction_suggestion_done', id: suggestion.id });
-    if (!keep) return;
-    if (keep === 'always') this.kept.add(suggestion.text);
-    await this.voiceSessions.appendInstruction(suggestion.text);
-  }
+  /** The operator removes an instruction Jev learned, by its ID. */
+  removeInstruction(id: unknown) { return this.voiceSessions.removeLearned(id); }
   async start() {
     const port = await this.endpoints.listen(this.port, this.portFallback);
     this.baseUrl = `http://127.0.0.1:${port}`;

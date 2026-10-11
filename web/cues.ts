@@ -3,7 +3,7 @@
 
 // Decides which cue an incoming bridge event deserves. Kept free of audio so it
 // can be tested without a browser.
-export type Cue = 'start' | 'end' | 'delegate' | 'suggest';
+export type Cue = 'start' | 'end' | 'delegate' | 'learned';
 
 export class CueTracker {
   session: string | null = null;
@@ -16,11 +16,11 @@ export class CueTracker {
       return 'start';
     }
     if (event.type === 'voice_closed') return this.end();
-    // An instruction worth keeping: once, and never from restored history.
-    if (event.type === 'instruction_suggestion' && typeof event.id === 'string') {
-      if (replaying || this.tasks.has(event.id)) return null;
-      this.tasks.add(event.id);
-      return 'suggest';
+    // An instruction Jev added: once, and never from restored history.
+    if (event.type === 'instruction_learned' && typeof event.id === 'string') {
+      if (replaying || this.tasks.has(`learned-${event.id}`)) return null;
+      this.tasks.add(`learned-${event.id}`);
+      return 'learned';
     }
     if (event.type === 'task' && typeof event.id === 'string') {
       if (this.tasks.has(event.id)) return null;
@@ -38,13 +38,13 @@ export class CueTracker {
 }
 
 // Notes as [frequency Hz, start s, duration s]. Start rises, end falls,
-// delegation is a quick double tick, and a suggested instruction is a soft
-// three-note question, so none can be mistaken for another.
+// delegation is a quick double tick, and an instruction Jev added is a soft
+// three-note rise, so none can be mistaken for another.
 const PATTERNS: Record<Cue, { type: OscillatorType; gain: number; notes: [number, number, number][] }> = {
   start: { type: 'sine', gain: .16, notes: [[660, 0, .11], [990, .11, .16]] },
   end: { type: 'sine', gain: .16, notes: [[990, 0, .11], [590, .11, .2]] },
   delegate: { type: 'triangle', gain: .09, notes: [[1320, 0, .05], [1320, .09, .05]] },
-  suggest: { type: 'triangle', gain: .1, notes: [[784, 0, .08], [988, .1, .08], [1319, .2, .14]] },
+  learned: { type: 'triangle', gain: .1, notes: [[784, 0, .08], [988, .1, .08], [1319, .2, .14]] },
 };
 
 export class CuePlayer {

@@ -1,18 +1,12 @@
-import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
-
 // Learning the operator's standing instructions, optional: on when TYPESAFE_API_KEY
 // is set. After each thing the operator says, Jev (TypeSafe System One, a calibrated
 // judge) estimates whether it tells the voice companion how to behave toward them
-// from now on. If so, the page asks whether to keep it, for this session or always;
-// nothing changes without the operator's yes. Kept-always instructions load into
-// every later voice session. In an offline test on 291 hand-judged utterances
-// (thresholds tuned on one half, measured on the other), about two thirds of what
-// it flags is a lasting instruction (nine in ten counting borderline cases), and it
-// finds about two thirds of them.
+// from now on. If so, the instruction joins this companion's instructions right away
+// (voice-sessions.ts gives it an ID the operator can remove it by). Run on all 869
+// recorded utterances, it added 20; checked against the 291 labeled by hand, it
+// added 14 of 24 lasting instructions, 5 borderline ones and nothing else.
 
-export interface Suggestion { id: string; text: string; scope: 'session' | 'always'; confidence: number }
+export interface LearnedInstruction { text: string; scope: 'session' | 'always'; behave: number; design: number; lasting: string }
 export interface Utterances { utterance: string; previous?: string; companion?: string }
 type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
 
@@ -50,13 +44,12 @@ const BEHAVE = .6, DESIGN = .5;
 export class InstructionLearner {
   apiKey: string; fetch: Fetch;
   log: (event: Record<string, unknown>) => void;
-  onSuggest: (suggestion: Suggestion) => void;
-  pending = new Map<string, Suggestion>();
-  constructor({ apiKey, onSuggest, log, fetch = globalThis.fetch as unknown as Fetch }: { apiKey: string; onSuggest: (suggestion: Suggestion) => void; log: (event: Record<string, unknown>) => void; fetch?: Fetch }) {
-    this.apiKey = apiKey; this.onSuggest = onSuggest; this.log = log; this.fetch = fetch;
+  onLearn: (instruction: LearnedInstruction) => void;
+  constructor({ apiKey, onLearn, log, fetch = globalThis.fetch as unknown as Fetch }: { apiKey: string; onLearn: (instruction: LearnedInstruction) => void; log: (event: Record<string, unknown>) => void; fetch?: Fetch }) {
+    this.apiKey = apiKey; this.onLearn = onLearn; this.log = log; this.fetch = fetch;
   }
-  /** Asks Jev about one utterance; suggests keeping it when it is a lasting instruction to the companion. */
-  async consider({ utterance, previous = '', companion = '' }: Utterances): Promise<Suggestion | undefined> {
+  /** Asks Jev about one utterance; learns it when it is a lasting instruction to the companion. */
+  async consider({ utterance, previous = '', companion = '' }: Utterances): Promise<LearnedInstruction | undefined> {
     const text = utterance.replace(/\s+/g, ' ').trim();
     if (text.split(' ').length < 3) return;
     const state = { setting: SETTING, utterance: text.slice(0, 600), previous_operator_utterance: previous.slice(0, 400), companion_before: companion.slice(0, 400) };
@@ -68,22 +61,8 @@ export class InstructionLearner {
     if (!(behave >= BEHAVE && design < DESIGN && lasting !== 'this_moment')) return;
     // What gets kept is the operator's own words, within an appended instruction's size limit.
     let kept = text; while (Buffer.byteLength(kept) > 400) kept = kept.slice(0, -10);
-    const suggestion: Suggestion = { id: randomUUID(), text: kept === text ? text : `${kept.trim()}…`, scope: lasting === 'always' ? 'always' : 'session', confidence: behave };
-    this.pending.set(suggestion.id, suggestion);
-    this.onSuggest(suggestion);
-    return suggestion;
-  }
-}
-
-/** Instructions the operator chose to keep always, in the companion's own run folder. */
-export class KeptInstructions {
-  file: string;
-  constructor(root: string) { this.file = path.join(root, '.runs', 'kept-instructions.json'); }
-  items(): { text: string; keptAt?: string }[] { try { const items = JSON.parse(fs.readFileSync(this.file, 'utf8')); return Array.isArray(items) ? items.filter(item => typeof item?.text === 'string') : []; } catch { return []; } }
-  read(): string[] { return this.items().map(item => item.text); }
-  add(text: string) {
-    const items = [...this.items().filter(item => item.text !== text), { text, keptAt: new Date().toISOString() }];
-    fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(this.file, JSON.stringify(items, null, 2) + '\n', { mode: 0o600 });
+    const instruction: LearnedInstruction = { text: kept === text ? text : `${kept.trim()}…`, scope: lasting === 'always' ? 'always' : 'session', behave, design, lasting };
+    this.onLearn(instruction);
+    return instruction;
   }
 }

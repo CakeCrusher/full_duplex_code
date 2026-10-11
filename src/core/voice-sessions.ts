@@ -8,9 +8,10 @@ import { LiveSession } from './live-session.ts';
 import { Mediator } from './mediator.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { startupHistory } from './startup-history.ts';
-import { attachment, deliveryConfirmation, greeting, historyIntro, liveInstructions } from './prompts.ts';
+import { attachment, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions } from './prompts.ts';
+import type { LearnedInstruction } from './instruction-learner.ts';
 
-export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean }
+export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean; /** Set for an instruction Jev learned: its short ID, such as I3. */ learned?: string }
 
 // Voice connections one after another beside the same agent session: startup
 // instructions and history, added instructions, and
@@ -29,16 +30,30 @@ export class VoiceSessions {
   moved = new WeakSet<LiveSession>(); moving = false;
   /** Opens each voice connection; tests replace it. */
   createLive = (options: ConstructorParameters<typeof LiveSession>[0]) => new LiveSession(options);
-  constructor(bridge: Harness) {
-    this.bridge = bridge;
-    // Instructions the operator chose to keep always start every voice session.
-    for (const text of bridge.kept.read()) this.additionalInstructions.push({ id: randomUUID(), text, state: 'next_session' });
-  }
+  /** How many instructions Jev has learned in this companion, for their IDs. */
+  learnedCount = 0;
+  constructor(bridge: Harness) { this.bridge = bridge; }
   instructions() {
     const additional = this.additionalInstructions.map(item => item.text).join('\n\n');
     return liveInstructions(this.bridge.agent) + (additional ? `\n\nAdditional operator instructions:\n${additional}` : '');
   }
-  async appendInstruction(text: unknown) {
+  /** An instruction Jev learned from the operator: it joins this companion's instructions at once, under an ID the operator can remove it by. */
+  async learn({ text, ...judged }: LearnedInstruction) {
+    const id = `I${++this.learnedCount}`;
+    this.bridge.log({ type: 'instruction.learned', id, text, ...judged });
+    const item = await this.appendInstruction(`${id}: ${text}`, id).catch(error => { this.bridge.log({ type: 'instruction.error', id, message: (error as Error).message }); return undefined; });
+    if (item) this.bridge.publish({ type: 'instruction_learned', id, text, state: item.state });
+  }
+  /** Removes a learned instruction: later voice sessions leave it out, and a running one is told to disregard it, since an instruction already given cannot be taken back. */
+  async removeLearned(id: unknown) {
+    const index = this.additionalInstructions.findIndex(item => item.learned !== undefined && item.learned === id);
+    if (index < 0) return;
+    const [item] = this.additionalInstructions.splice(index, 1), live = this.live;
+    this.bridge.log({ type: 'instruction.removed', id: item.learned, text: item.text });
+    this.bridge.publish({ type: 'instruction_removed', id: item.learned }); this.bridge.publish(this.bridge.status());
+    if (live?.state === 'active' && item.appended) await live.append('instructions', disregardInstruction(item.learned!, item.text.replace(`${item.learned}: `, ''))).catch(error => this.bridge.fault(error as Error));
+  }
+  async appendInstruction(text: unknown, learned?: string) {
     const { clean, log, publish, fault } = this.bridge;
     if (typeof text !== 'string' || !text.trim()) throw new Error('Enter an instruction first.');
     text = clean(text.trim());
@@ -46,21 +61,22 @@ export class VoiceSessions {
     if (this.additionalInstructions.reduce((size, item) => size + Buffer.byteLength(item.text), 0) + Buffer.byteLength(text as string) > 16000) throw new Error('This companion already has many additional instructions. Start a new companion to add more.');
     const live = this.live;
     if (['new', 'connecting', 'closing'].includes(live?.state as string)) throw new Error('Wait for the voice connection to settle, then append your instruction.');
-    const item: Instruction = { id: randomUUID(), text: text as string, state: live?.state === 'active' ? 'pending' : 'next_session', sessionId: live?.state === 'active' ? live.id : undefined };
+    const item: Instruction = { id: randomUUID(), text: text as string, state: live?.state === 'active' ? 'pending' : 'next_session', sessionId: live?.state === 'active' ? live.id : undefined, learned };
     this.additionalInstructions.push(item);
     log({ type: 'voice.instruction', ...item }); publish(this.bridge.status());
-    if (live?.state !== 'active') return;
+    if (live?.state !== 'active') return item;
     try {
       await live.append('instructions', text as string);
-      if (this.live !== live || live.state !== 'active') return;
+      if (this.live !== live || live.state !== 'active') return item;
       Object.assign(item, { state: 'acknowledged', acknowledgedAt: Date.now(), appended: true });
       log({ type: 'voice.instruction_acknowledged', ...item });
     } catch (error) {
-      if (this.live !== live || live.state !== 'active') return;
+      if (this.live !== live || live.state !== 'active') return item;
       Object.assign(item, { state: 'failed', error: clean((error as Error).message) });
       fault(error as Error);
     }
     publish(this.bridge.status());
+    return item;
   }
   async start(sdp?: unknown, page?: Page) {
     const bridge = this.bridge, { agent, observer, log, publish, fault, clean } = bridge, { name } = agent.profile;

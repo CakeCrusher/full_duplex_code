@@ -28,7 +28,7 @@ export class Mediator {
   context: ContextQueue; feed: ObservationFeed;
   /** Whether the operator is talking: agent updates wait for them. */
   floor = new Floor();
-  /** Suggests keeping the operator's standing instructions, when Jev is configured. */
+  /** Learns the operator's standing instructions, when Jev is configured. */
   learner?: InstructionLearner; judgedThrough = -1; judgeTimer?: NodeJS.Timeout; previousUtterance = '';
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;

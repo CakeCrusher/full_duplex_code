@@ -31,8 +31,8 @@ function handle(event: BridgeEvent) {
     showStatus(event, { active, muted, starting, elsewhere: Boolean(event.voicePage) && event.voicePage !== pageId });
   }
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
-  if (event.type === 'instruction_suggestion' && !replaying) suggest(event);
-  if (event.type === 'instruction_suggestion_done') document.getElementById(`suggestion-${event.id}`)?.remove();
+  if (event.type === 'instruction_learned') learned(event);
+  if (event.type === 'instruction_removed') removed(event.id);
   if (event.type === 'history') {
     replaying = true;
     try { for (const item of event.events) handle(item); } finally { replaying = false; }
@@ -51,25 +51,23 @@ function handle(event: BridgeEvent) {
     notice(event.moved ? 'Voice moved to another tab or device. Click Move voice here to bring it back.' : event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? `Voice session ended. ${profile.name} is still available in your terminal.` : 'Voice connection ended. Final usage was not confirmed; the last reported usage is saved and may be incomplete.');
   }
 }
-// Jev noticed something that sounds like a standing instruction: keep it only if the operator says so.
-function suggest(event: BridgeEvent) {
-  if (document.getElementById(`suggestion-${event.id}`)) return;
-  // The same words twice need one question; and only the three newest wait for an answer.
-  const waiting = [...$('suggestions').children] as HTMLElement[];
-  if (waiting.some(card => card.dataset.text === event.text)) return;
-  for (const old of waiting.slice(0, Math.max(0, waiting.length - 2))) old.remove();
-  const card = document.createElement('article'); card.className = 'suggestion'; card.id = `suggestion-${event.id}`; card.dataset.text = event.text;
+// Jev heard a standing instruction and added it: show what was added, under its ID, with a way to remove it.
+function learned(event: BridgeEvent) {
+  if (document.getElementById(`learned-${event.id}`)) return;
+  const card = document.createElement('article'); card.className = 'learned'; card.id = `learned-${event.id}`;
   const text = document.createElement('p');
-  text.append('Keep this as an instruction for the companion? ', Object.assign(document.createElement('q'), { textContent: event.text }));
-  const choices: [string, string | false][] = [['For this session', 'session'], ['Always', 'always'], ['No', false]];
-  const actions = document.createElement('div'); actions.className = 'actions';
-  for (const [label, keep] of choices) {
-    const button = Object.assign(document.createElement('button'), { type: 'button', textContent: label, className: keep === event.scope ? 'suggested' : '' });
-    button.onclick = () => { if (bridge.open) bridge.send({ type: 'instruction_answer', id: event.id, keep }); card.remove(); };
-    actions.append(button);
-  }
-  card.append(text, actions, Object.assign(document.createElement('small'), { textContent: 'Noticed by Jev from what you said. Nothing changes unless you choose.' }));
-  $('suggestions').append(card);
+  text.append(`Added instruction ${event.id}: `, Object.assign(document.createElement('q'), { textContent: event.text }));
+  const remove = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Remove' });
+  remove.onclick = () => { if (bridge.open) { bridge.send({ type: 'instruction_remove', id: event.id }); remove.disabled = true; } };
+  card.append(text, remove, Object.assign(document.createElement('small'), { textContent: 'Heard by Jev from what you said. Removing it tells this voice session to disregard it, and later sessions leave it out.' }));
+  $('learned').prepend(card);
+}
+function removed(id: unknown) {
+  const card = document.getElementById(`learned-${id}`);
+  if (!card) return;
+  card.classList.add('removed');
+  card.querySelector('p')!.prepend('Removed. ');
+  card.querySelector('button')?.remove();
 }
 
 $<HTMLFormElement>('instruction-form').onsubmit = event => {
