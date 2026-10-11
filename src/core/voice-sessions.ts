@@ -102,7 +102,7 @@ export class VoiceSessions {
     this.audit?.close(); this.audit = null;
     this.live = live; this.page = page;
     this.mediator?.stop();
-    this.mediator = new Mediator({ live, observer, agent, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean, learner: bridge.learner });
+    this.mediator = new Mediator({ live, observer, agent, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean, learner: bridge.learner, tuning: bridge.tuning });
     publish(bridge.status());
     live.on('fault', error => fault(error, page));
     live.on('answer', sdp => publish({ type: 'voice_answer', sdp }, page));

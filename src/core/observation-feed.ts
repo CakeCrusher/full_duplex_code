@@ -4,6 +4,7 @@ import type { ObservedAgent } from './agent-observer.ts';
 import { estimatedTokens } from './text-fragments.ts';
 import { contextData } from './context-rules.ts';
 import { feedLabel, toolWorkLine } from './prompts.ts';
+import { DEFAULT_TUNING } from './tuning.ts';
 import type { Floor } from './floor.ts';
 import type { AppendKind } from './context-queue.ts';
 
@@ -65,17 +66,15 @@ export interface ContextTarget { add(kind: AppendKind, text: string, delegationI
  * more updates, but not the operator.
  */
 export interface Hold { firstMs: number; perUpdateMs: number; longestMs: number }
-export const SOFT_HOLD: Hold = { firstMs: 1000, perUpdateMs: 1000, longestMs: 10000 };
-// Tool work in one batch above this many tokens becomes a single line saying what
-// ran: Live learns that the work happened, and the agent's own words, failures,
-// prompts and turn ends still arrive whole.
-const COMPACT_TOKENS = 900;
+export const SOFT_HOLD: Hold = { firstMs: DEFAULT_TUNING.holdFirstMs, perUpdateMs: DEFAULT_TUNING.holdPerUpdateMs, longestMs: DEFAULT_TUNING.holdLongestMs };
 
 // Collects observations into batches, then sends them to the context queue in order.
 export class ObservationFeed {
   context: ContextTarget;
   log: (event: Record<string, unknown>) => void;
   hold: Hold | null;
+  /** Tool work in one batch above this many tokens becomes a single line saying what ran (Tuning.compactTokens). */
+  compactTokens: number;
   floor?: Floor;
   agent: ObservedAgent;
   projector: ObservationProjector;
@@ -84,8 +83,8 @@ export class ObservationFeed {
   first = 0; due = 0;
   stopped = false;
   timer: NodeJS.Timeout | null = null;
-  constructor(context: ContextTarget, log: (event: Record<string, unknown>) => void, { agent, hold = SOFT_HOLD, floor }: { agent: ObservedAgent; hold?: Hold | null; floor?: Floor }) {
-    this.context = context; this.log = log; this.hold = hold; this.floor = floor; this.agent = agent;
+  constructor(context: ContextTarget, log: (event: Record<string, unknown>) => void, { agent, hold = SOFT_HOLD, floor, compactTokens = DEFAULT_TUNING.compactTokens }: { agent: ObservedAgent; hold?: Hold | null; floor?: Floor; compactTokens?: number }) {
+    this.context = context; this.log = log; this.hold = hold; this.floor = floor; this.agent = agent; this.compactTokens = compactTokens;
     this.projector = new ObservationProjector(agent); this.label = feedLabel(agent);
   }
   add(observation: FeedObservation) {
@@ -116,7 +115,7 @@ export class ObservationFeed {
     if (this.stopped || !this.pending.length) return;
     const records = this.pending.splice(0), tools = records.filter(record => record.kind === 'tool');
     let lines = records.map(record => record.text);
-    if (tools.reduce((sum, record) => sum + record.tokens, 0) > COMPACT_TOKENS) {
+    if (tools.reduce((sum, record) => sum + record.tokens, 0) > this.compactTokens) {
       const at = records.indexOf(tools[0]);
       lines = records.flatMap((record, i) => i === at ? [toolWork(this.agent, tools)] : record.kind === 'tool' ? [] : [record.text]);
     }

@@ -13,6 +13,7 @@ import { Outbox } from './outbox.ts';
 import { VoiceSessions } from './voice-sessions.ts';
 import { Endpoints } from './endpoints.ts';
 import { Pages, type Page } from './pages.ts';
+import { tuning, type Tuning } from './tuning.ts';
 
 export interface HarnessOptions {
   /** The coding agent, from src/adapters. */
@@ -23,6 +24,8 @@ export interface HarnessOptions {
   voice?: string; observation?: string; port?: number; portFallback?: boolean; publicUrl?: string;
   /** A TypeSafe API key: Jev then learns the operator's standing instructions (instruction-learner.ts). */
   jevKey?: string;
+  /** Overrides of the low-level settings for how agent updates reach GPT Live (tuning.ts). */
+  tuning?: Partial<Tuning>;
   /** The agent's own command-line arguments. */
   agentArgs?: string[];
 }
@@ -34,6 +37,8 @@ export class Harness {
   learner?: InstructionLearner;
   root: string; runDir: string; cwd: string; sessionId?: string; apiKey: string;
   voice: string; observation: string; port: number; portFallback: boolean;
+  /** How agent updates reach GPT Live; a change applies from the next voice session. */
+  tuning: Tuning;
   browserToken = randomBytes(32).toString('hex');
   // Authenticates the agent's side: hooks and adapter sockets.
   agentToken = randomBytes(32).toString('hex');
@@ -47,7 +52,7 @@ export class Harness {
   statusLog: StatusLog; log: (event: BridgeEvent) => void; publish: (event: BridgeEvent, page?: Page) => void; fault: (error: Error, page?: Page) => void;
   ledger: UsageLedger; timeline: Timeline; outbox: Outbox; voiceSessions: VoiceSessions; endpoints: Endpoints;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
-  constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey }: HarnessOptions) {
+  constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides }: HarnessOptions) {
     this.agent = agent; this.root = root; this.runDir = runDir; this.cwd = cwd; this.sessionId = sessionId; this.apiKey = apiKey;
     this.voice = voice; this.observation = observation; this.port = port; this.portFallback = portFallback;
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
@@ -58,6 +63,7 @@ export class Harness {
     this.statusLog = new StatusLog({ runDir, clean: this.clean, timeline: this.timeline, pages: this.pages });
     this.log = this.statusLog.log; this.publish = this.statusLog.publish; this.fault = this.statusLog.fault;
     this.ledger = new UsageLedger(path.join(root, '.runs', 'budget.json'));
+    this.tuning = tuning(overrides);
     this.voiceSessions = new VoiceSessions(this);
     if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log, onLearn: instruction => { this.voiceSessions.learn(instruction).catch(error => this.fault(error as Error)); } });
     this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,

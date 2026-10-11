@@ -3,13 +3,13 @@
 // GPT Live to decide whether to pass a request on. The feed and the context
 // queue ask; they never wait longer than their own hold allows.
 export class Floor {
-  thinkMs: number;
+  thinkMs: number; pauseMs: number;
   heardAt = -Infinity;
-  constructor({ thinkMs = 2000 }: { thinkMs?: number } = {}) { this.thinkMs = thinkMs; }
+  constructor({ thinkMs = 2000, pauseMs = 0 }: { thinkMs?: number; pauseMs?: number } = {}) { this.thinkMs = thinkMs; this.pauseMs = pauseMs; }
   /** The operator was heard at this moment: their microphone, or GPT Live's transcript of them. */
   hear(at = Date.now()) { if (at > this.heardAt) this.heardAt = at; }
-  /** The operator is talking, or stopped less than the thinking time ago. */
-  held(now = Date.now()) { return now < this.heardAt + this.thinkMs; }
+  /** The operator stopped less than the thinking time ago (with a pause time, at least that long ago: updates may land while they talk). */
+  held(now = Date.now()) { const since = now - this.heardAt; return since < this.thinkMs && since >= this.pauseMs; }
 }
 
 /** The microphone level the page reports: speech when the gate passes audio louder than its threshold. */

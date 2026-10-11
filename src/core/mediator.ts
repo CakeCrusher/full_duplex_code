@@ -6,6 +6,7 @@ import { ContextQueue, type ContextSink } from './context-queue.ts';
 import { VoiceHistory } from './voice-history.ts';
 import { ObservationFeed, type Hold } from './observation-feed.ts';
 import { Floor, operatorSpeaking, type MicrophoneLevel } from './floor.ts';
+import { DEFAULT_TUNING, type Tuning } from './tuning.ts';
 import type { InstructionLearner } from './instruction-learner.ts';
 import { nothingToSend, queueFailed, sessionEndRequest, voiceRequest } from './prompts.ts';
 
@@ -27,24 +28,26 @@ export class Mediator {
   history = new VoiceHistory(); seenDelegations = new Set<string>(); timers = new Set<NodeJS.Timeout>();
   context: ContextQueue; feed: ObservationFeed;
   /** Whether the operator is talking: agent updates wait for them. */
-  floor = new Floor();
+  floor: Floor;
   /** Learns the operator's standing instructions, when Jev is configured. */
   learner?: InstructionLearner; judgedThrough = -1; judgeTimer?: NodeJS.Timeout; previousUtterance = '';
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
-  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, hold, learner }: {
+  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
-    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; hold?: Hold | null; learner?: InstructionLearner;
+    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner;
   }) {
     this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.learner = learner;
     this.agent = agent;
+    this.floor = new Floor({ thinkMs: tuning.thinkMs, pauseMs: tuning.pauseMs });
+    if (hold === undefined) hold = { firstMs: tuning.holdFirstMs, perUpdateMs: tuning.holdPerUpdateMs, longestMs: tuning.holdLongestMs };
     this.context = new ContextQueue(live, error => {
       this.fault(error);
       live.close(`${this.agent.profile.name} context delivery failed`);
-    }, this.agent, { floor: this.floor });
+    }, this.agent, { floor: this.floor, holdMs: tuning.holdLongestMs });
     // Earlier work reaches Live only through the bounded startup history; the feed
     // sends only observations that arrive from now on.
-    this.feed = new ObservationFeed(this.context, log, { agent: this.agent, hold, floor: this.floor });
+    this.feed = new ObservationFeed(this.context, log, { agent: this.agent, hold, floor: this.floor, compactTokens: tuning.compactTokens });
     this.onObservation = event => this.feed.add(event);
     this.onLive = event => this.liveEvent(event);
     live.on('event', this.onLive); observer.on('observation', this.onObservation);
