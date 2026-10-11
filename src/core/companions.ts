@@ -92,7 +92,8 @@ export function summarize(entry: CompanionEntry, status: Record<string, any> | u
 /** Every running companion, oldest first, as the page that asked may see them. */
 export async function listCompanions(bridge: Harness, local: boolean, timeoutMs = 1000): Promise<CompanionSummary[]> {
   const own = bridge.companionEntry();
-  const entries = [own, ...bridge.companions.list().filter(entry => entry.pid !== own.pid || entry.port !== own.port)].sort((a, b) => a.startedAt - b.startedAt || a.port - b.port);
+  // Through the tunnel, only companions that are public themselves: a local-only one's folder and state stay on this computer too.
+  const entries = [own, ...bridge.companions.list().filter(entry => (entry.pid !== own.pid || entry.port !== own.port) && (local || entry.publicUrl))].sort((a, b) => a.startedAt - b.startedAt || a.port - b.port);
   return Promise.all(entries.map(async entry => entry === own ? summarize(own, bridge.status(), { current: true, local })
     : summarize(entry, await statusOf(entry, timeoutMs), { current: false, local })));
 }

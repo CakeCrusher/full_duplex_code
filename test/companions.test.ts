@@ -75,13 +75,13 @@ test('each bridge registers while it runs, and a local page gets every companion
   assert.deepEqual((await request(alpha)).list.map(c => c.folder), ['alpha'], 'a stopped companion removes its entry');
 });
 
-test('through the tunnel, a page gets only the public links of public companions', async t => {
+test('through the tunnel, a page sees only companions that are public, by their public links', async t => {
   const start = companions(t), alpha = await start('alpha'), beta = await start('beta');
   alpha.setPublicUrl('https://alpha-sample.trycloudflare.com');
   const remote = await request(alpha, tunnel(alpha.publicOrigin!));
   assert.equal(remote.status, 200);
-  assert.deepEqual(remote.list.map(c => [c.folder, c.public, c.link]), [['alpha', true, alpha.publicBrowserUrl], ['beta', false, null]]);
-  assert.ok(!remote.body.includes(beta.browserToken), "a local-only companion's token never leaves through the tunnel");
+  assert.deepEqual(remote.list.map(c => [c.folder, c.public, c.link]), [['alpha', true, alpha.publicBrowserUrl]]);
+  assert.ok(!remote.body.includes(beta.browserToken) && !remote.body.includes('beta'), "a local-only companion never shows through the tunnel");
   assert.ok(!remote.body.includes('127.0.0.1'));
   beta.setPublicUrl('https://beta-sample.trycloudflare.com');
   assert.deepEqual((await request(alpha, tunnel(alpha.publicOrigin!))).list.map(c => c.link), [alpha.publicBrowserUrl, beta.publicBrowserUrl]);

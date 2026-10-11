@@ -25,8 +25,6 @@ function chip(c: Companion) {
   const name = element('span', 'companion-name');
   name.append(element('i', 'companion-dot'), element('strong', '', c.folder));
   if (c.public) name.append(element('b', 'companion-public', 'Public'));
-  // Seen through the tunnel, a companion that is not public cannot be opened from here.
-  else if (!c.current && !c.link && c.reachable) name.append(element('b', 'companion-public local', 'Not public'));
   button.append(name, element('span', 'companion-meta', [c.agent, c.sessionId, LABELS[state]].filter(Boolean).join(' · ')));
   // The link holds the other page's token: navigate from here rather than show it as an address on hover.
   if (c.current) button.setAttribute('aria-current', 'page');
