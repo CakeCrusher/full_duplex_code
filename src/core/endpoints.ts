@@ -8,6 +8,7 @@ import { pageFile } from './page.ts';
 import { voiceProvenance } from './prompts.ts';
 import { attachPage } from './browser-socket.ts';
 import { Pages } from './pages.ts';
+import { listCompanions } from './companions.ts';
 
 const equal = (a: unknown, b: string) => typeof a === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 async function body(req: http.IncomingMessage, maxBytes = 1024 * 1024) {
@@ -86,9 +87,11 @@ export class Endpoints {
       const reply = bridge.agent.vouch?.(event, id => bridge.outbox.has(id), voiceProvenance());
       res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(reply ?? {}));
     }
-    if (req.url === '/api/status' && req.method === 'GET') {
+    // The companions list carries links, and so tokens: local ones only for a request from this computer.
+    if ((req.url === '/api/status' || req.url === '/api/companions') && req.method === 'GET') {
       if (!equal(req.headers.authorization, `Bearer ${bridge.browserToken}`)) { res.writeHead(403); return res.end(); }
-      res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(bridge.status()));
+      const result = req.url === '/api/status' ? bridge.status() : { companions: await listCompanions(bridge, local) };
+      res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(result));
     }
     const file = req.method === 'GET' ? pageFile(bridge.root, req.url ?? '', bridge.agent.profile) : undefined;
     if (!file) { res.writeHead(404); return res.end(); }

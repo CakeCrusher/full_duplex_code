@@ -14,6 +14,7 @@ import { VoiceSessions } from './voice-sessions.ts';
 import { Endpoints } from './endpoints.ts';
 import { Pages, type Page } from './pages.ts';
 import { tuning, type Tuning } from './tuning.ts';
+import { CompanionRegistry, type CompanionEntry } from './companions.ts';
 
 export interface HarnessOptions {
   /** The coding agent, from src/adapters. */
@@ -45,6 +46,9 @@ export class Harness {
   publicOrigin: string | null = null; publicBrowserUrl: string | null = null;
   baseUrl = ''; browserUrl = ''; portFellBack = false;
   agentReady = false; stopping = false;
+  /** When this companion started serving; 0 until then. */
+  startedAt = 0;
+  companions: CompanionRegistry;
   /** Every open companion page. */
   pages: Pages;
   agentLaunch?: AgentLaunch;
@@ -64,6 +68,7 @@ export class Harness {
     this.log = this.statusLog.log; this.publish = this.statusLog.publish; this.fault = this.statusLog.fault;
     this.ledger = new UsageLedger(path.join(root, '.runs', 'budget.json'));
     this.tuning = tuning(overrides);
+    this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
     this.voiceSessions = new VoiceSessions(this);
     if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log, onLearn: instruction => { this.voiceSessions.learn(instruction).catch(error => this.fault(error as Error)); } });
     this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,
@@ -85,7 +90,7 @@ export class Harness {
       this.publish(this.status());
     });
     this.adapter.on('delivery', ({ id }) => this.outbox.confirm(id));
-    this.adapter.on('session', id => { this.sessionId = id; if (this.baseUrl) this.writeConnection(); this.publish(this.status()); });
+    this.adapter.on('session', id => { this.sessionId = id; if (this.baseUrl) this.writeConnection(); this.register(); this.publish(this.status()); });
     this.adapter.on('update', () => this.publish(this.status()));
     this.adapter.on('fault', error => this.fault(error));
     this.endpoints = new Endpoints(this);
@@ -103,6 +108,7 @@ export class Harness {
   setPublicUrl(url: string) {
     this.publicOrigin = new URL(url).origin;
     this.publicBrowserUrl = `${this.publicOrigin}/#${this.browserToken}`;
+    this.register();
   }
   saveTimeline() { this.statusLog.saveTimeline(); }
   status() { return statusSnapshot(this); }
@@ -119,6 +125,7 @@ export class Harness {
     try { this.agentLaunch = await this.adapter.launch({ baseUrl: this.baseUrl, token: this.agentToken }); }
     catch (error) { await this.close(); throw error; }
     this.writeConnection();
+    this.startedAt = Date.now(); this.register();
     this.statusTimer = setInterval(() => this.publish(this.status()), 1000);
     this.log({ type: 'bridge.started', sessionId: this.sessionId, cwd: this.cwd, baseUrl: this.baseUrl });
     return this;
@@ -127,8 +134,19 @@ export class Harness {
   writeConnection() {
     fs.writeFileSync(path.join(this.runDir, 'connection.json'), JSON.stringify({ baseUrl: this.baseUrl, browserToken: this.browserToken, sessionId: this.sessionId, cwd: this.cwd }, null, 2), { mode: 0o600 });
   }
+  // This companion as the others list it and switch to it.
+  companionEntry(): CompanionEntry {
+    return { pid: process.pid, port: Number(new URL(this.baseUrl).port), token: this.browserToken, cwd: this.cwd, agent: this.agent.profile.product,
+      sessionId: this.sessionId, startedAt: this.startedAt, publicUrl: this.publicOrigin ?? undefined };
+  }
+  // Once started, and until stopping; the switcher is a convenience, so a registry that fails is only logged.
+  register() {
+    if (!this.startedAt || this.stopping) return;
+    try { this.companions.register(this.companionEntry()); } catch (error) { this.log({ type: 'companions.failed', message: (error as Error).message }); }
+  }
   async close() {
     if (this.stopping) return; this.stopping = true;
+    if (this.startedAt) try { this.companions.remove(this.companionEntry()); } catch (error) { this.log({ type: 'companions.failed', message: (error as Error).message }); }
     const agentClosed = this.adapter.close();
     clearInterval(this.statusTimer); clearInterval(this.voiceSessions.audioWatchdog); clearTimeout(this.agentLostTimer);
     if (this.live) await this.live.close('harness stopped');
