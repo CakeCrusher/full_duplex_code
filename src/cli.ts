@@ -65,6 +65,11 @@ billing and leaves the agent running.
 ${list.map(agent => agent.usage.notes).join('\n\n')}`);
   process.exit(0);
 }
+// Settings set by hand for how agent updates reach GPT Live (src/core/tuning.ts).
+function tuningOverrides() {
+  try { return process.env.FDC_TUNING ? JSON.parse(process.env.FDC_TUNING) : undefined; }
+  catch { throw new Error('FDC_TUNING must be JSON, for example {"compactTokens":3000}.'); }
+}
 if (command === 'usage') { console.log(JSON.stringify(new UsageLedger(path.join(root, '.runs/budget.json')).summary(), null, 2)); process.exit(0); }
 if (command === 'doctor') {
   // One agent when named; otherwise every agent, and any one of them ready is enough.
@@ -111,7 +116,7 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
   const sessionId = session.sessionId ?? (session.assignSession ? randomUUID() : undefined);
   const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId?.slice(0, 8) ?? (session.resume ? 'resumed' : agent.profile.id)}`);
   let harness: Harness;
-  try { harness = await new Harness({ agent, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe, agentArgs, jevKey: process.env.TYPESAFE_API_KEY, tuning: process.env.FDC_TUNING ? JSON.parse(process.env.FDC_TUNING) : undefined, jevTuning: process.env.FDC_JEV_TUNING === '1', store: !values['no-store'] }).start(); }
+  try { harness = await new Harness({ agent, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe, agentArgs, jevKey: process.env.TYPESAFE_API_KEY, tuning: tuningOverrides(), jevTuning: process.env.FDC_JEV_TUNING === '1', store: !values['no-store'] }).start(); }
   catch (error) { console.error(loud(`fdc: ${(error as Error).message}`)); process.exit(1); }
   if (harness.portFellBack) console.log(`\nPort ${DEFAULT_PORT} is in use, probably by another companion. This one uses ${new URL(harness.baseUrl).port}; Chrome may ask for microphone access again.`);
   let tunnel: Tunnel | undefined, child: ChildProcess | undefined, stopping = false;
@@ -146,7 +151,8 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
     console.log(`Anyone with this link can direct ${name} on this computer. Don't share it. The tunnel closes when you exit ${name}.`);
   }
   // The launcher only prints the link; open it in Chrome or another Chromium browser.
-  console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nOpen this link in Chrome, then click Start voice when the ${transport} is ready.\nLocal run: ${runDir}\n`);
+  console.log(`\nFull-Duplex Code: ${harness.browserUrl}\nOpen this link in Chrome, then click Start voice when the ${transport} is ready.\nLocal run: ${runDir}`);
+  console.log(values['no-store'] ? '' : 'OpenAI keeps voice sessions for 30 days so that Resume voice can continue them; --no-store turns that off.\n');
   if (!(await confirmStart({ profile: agent.profile }))) await exit(`quit before ${name} started`, 0);
   const launch = harness.agentLaunch!;
   const childEnv: NodeJS.ProcessEnv = { ...process.env, ...launch.env };
