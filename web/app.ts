@@ -8,6 +8,7 @@ import { AudioIO, watchMicrophones, type WorkletMessage } from './audio-io.js';
 import { WebRtcPeer } from './webrtc-peer.js';
 import { $, developerMode, notice, showStatus } from './page-ui.js';
 import { profile } from './profile.js';
+import { mountCompanions } from './companions.js';
 
 const token = location.hash.slice(1) || sessionStorage.getItem('fd-voice-token');
 if (location.hash) { sessionStorage.setItem('fd-voice-token', token!); history.replaceState(null, '', location.pathname); }
@@ -200,4 +201,5 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 addEventListener('pagehide', () => { leaving = true; clearTimeout(retry); stop(); bridge.close(); });
 // A page restored from the back/forward cache connects again.
 addEventListener('pageshow', event => { if (event.persisted) { leaving = false; connect(); } });
+mountCompanions($('companions'), token, () => active || starting);
 connect();
