@@ -54,7 +54,11 @@ function handle(event: BridgeEvent) {
 // Jev noticed something that sounds like a standing instruction: keep it only if the operator says so.
 function suggest(event: BridgeEvent) {
   if (document.getElementById(`suggestion-${event.id}`)) return;
-  const card = document.createElement('article'); card.className = 'suggestion'; card.id = `suggestion-${event.id}`;
+  // The same words twice need one question; and only the three newest wait for an answer.
+  const waiting = [...$('suggestions').children] as HTMLElement[];
+  if (waiting.some(card => card.dataset.text === event.text)) return;
+  for (const old of waiting.slice(0, Math.max(0, waiting.length - 2))) old.remove();
+  const card = document.createElement('article'); card.className = 'suggestion'; card.id = `suggestion-${event.id}`; card.dataset.text = event.text;
   const text = document.createElement('p');
   text.append('Keep this as an instruction for the companion? ', Object.assign(document.createElement('q'), { textContent: event.text }));
   const choices: [string, string | false][] = [['For this session', 'session'], ['Always', 'always'], ['No', false]];
