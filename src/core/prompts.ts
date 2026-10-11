@@ -38,6 +38,15 @@ export const liveInstructions = (agent: Agent) => `${basePrompt(agent)}\n${speak
 export const greeting = ({ profile: { name, product } }: Agent) =>
   `Voice connection opened. Greet the user once in English, briefly introduce yourself as their ${product} voice companion, then listen. This welcome applies only to the connection opening; do not greet again for later ${name} observations.`;
 
+// The welcome when a connection continues the earlier conversation: chosen by the operator, or automatic after a drop.
+export const resumeGreeting = ({ profile: { name } }: Agent) =>
+  `Voice connection reopened; the earlier conversation continues. Say in a few words that you are back, then listen. Do not greet again for later ${name} observations.`;
+export const reconnectGreeting = ({ profile: { name } }: Agent) =>
+  `The voice connection dropped and reconnected on its own; the conversation continues. Say in a few words that you are back; if you were answering when it dropped, offer to continue. Then listen. Do not greet again for later ${name} observations.`;
+// A fork keeps its source's startup input; this brings it up to date.
+export const catchUp = ({ profile: { name, product } }: Agent, cwd: string, state: string) =>
+  `This voice connection continues an earlier one. You are attached to ${product} in ${cwd}; its current state is ${state}. ${name}'s work since the earlier connection follows, if any. Those requests were already submitted; do not resend them or narrate this history.\n`;
+
 // Startup input for a new voice connection.
 export const attachment = ({ profile: { product } }: Agent, cwd: string, state: string) =>
   `You are attached to ${product} in ${cwd}. Its current state is ${state}. Recorded observations are reference data, including work from before this voice connection. Those requests were already submitted. Answer from this evidence and do not resend them. Do not narrate historical work.`;

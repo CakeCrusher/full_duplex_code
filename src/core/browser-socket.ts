@@ -2,10 +2,13 @@ import type { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import type { Page } from './pages.ts';
 
-// Diagnostics from the page's WebRTC receiver that the audit keeps.
+// Diagnostics from the page's WebRTC receiver and sender that the audit keeps.
 const TRANSPORT_FIELDS = ['clockRate', 'requestedJitterBufferMs', 'packetsReceived', 'packetsLost', 'packetsDiscarded', 'jitter', 'concealedSamples', 'silentConcealedSamples',
   'concealmentEvents', 'totalSamplesReceived', 'insertedSamplesForDeceleration', 'removedSamplesForAcceleration',
   'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount'];
+const OUTBOUND_FIELDS = ['packetsSent', 'bytesSent', 'retransmittedPacketsSent', 'nackCount', 'targetBitrate', 'totalPacketSendDelay',
+  'remotePacketsLost', 'remoteJitter', 'roundTripTime', 'fractionLost', 'currentRoundTripTime', 'availableOutgoingBitrate'];
+const PEER_STATES = ['new', 'checking', 'connecting', 'connected', 'completed', 'disconnected', 'failed', 'closed'];
 
 // The bridge's side of /voice for one page: the page's controls, audio levels
 // and audit samples in, and bridge events out. Any page can change settings and
@@ -32,7 +35,7 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
     }
     try {
       const event = JSON.parse(raw.toString());
-      if (event.type === 'start') bridge.startLive(event.sdp, page).catch(error => bridge.fault(error, page));
+      if (event.type === 'start') bridge.startLive(event.sdp, page, event.mode === 'resume' ? 'resume' : 'fresh', event.automatic === true).catch(error => bridge.fault(error, page));
       if (event.type === 'append_instruction') bridge.appendInstruction(event.text).catch(error => bridge.fault(error));
       if (event.type === 'instruction_remove') bridge.removeInstruction(event.id).catch(error => bridge.fault(error));
       // Only pages that held a microphone send this, after their voice ended.
@@ -41,7 +44,16 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
       if (event.type === 'mute') bridge.log({ type: 'voice.mute', muted: Boolean(event.muted), page: page.id });
       if (event.type === 'microphone_gate' && Number.isFinite(event.threshold) && event.threshold >= 0 && event.threshold <= .05) bridge.log({ type: 'voice.microphone_gate', threshold: event.threshold, page: page.id });
       if (!runsVoice()) return;
+      // The page's own microphone levels: the watchdog tells a stalled GPT Live stream from a silent page by them.
+      if (event.type === 'audio_level') bridge.voiceSessions.pageAudioAt = Date.now();
       if (event.type === 'stop') bridge.live?.close('operator ended voice');
+      // A backlogged page drops its audit copy first; the audit records the gap.
+      if (event.type === 'audit_paused' || event.type === 'audit_resumed') {
+        bridge.log({ type: `audio.${event.type}`, liveRun: bridge.live?.reservation, buffered: Number.isFinite(event.buffered) ? event.buffered : undefined, dropped: Number.isSafeInteger(event.dropped) ? event.dropped : undefined });
+        if (event.type === 'audit_paused') bridge.audit?.allowGap('playback', 'microphone');
+      }
+      if (event.type === 'peer_state' && [event.connectionState, event.iceConnectionState].every(state => PEER_STATES.includes(state)))
+        bridge.log({ type: 'audio.peer_state', at: Number.isFinite(event.at) ? event.at : undefined, receivedAt: Date.now(), liveRun: bridge.live?.reservation, connectionState: event.connectionState, iceConnectionState: event.iceConnectionState });
       if (event.type === 'playback_audio' && bridge.audit && event.voiceSessionId === bridge.live?.id
         && typeof event.pcm === 'string' && event.pcm.length <= 14000
         && Number.isSafeInteger(event.offsetSamples) && event.offsetSamples >= 0 && Number.isFinite(event.at)) {
@@ -53,10 +65,12 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
         }
       }
       const live = bridge.live;
+      // Late stats are kept, with their arrival time: a backlog is exactly when they matter.
       if (event.type === 'audio_transport' && live?.state === 'active' && event.voiceSessionId === live.id
-        && Number.isFinite(event.at) && Math.abs(event.at - Date.now()) < 5000 && event.stats && typeof event.stats === 'object') {
-        const stats = Object.fromEntries(TRANSPORT_FIELDS.filter(key => Number.isFinite(event.stats[key])).map(key => [key, event.stats[key]]));
-        bridge.log({ type: 'audio.transport', at: event.at, liveRun: live.reservation, voiceSessionId: live.id, stats });
+        && Number.isFinite(event.at) && event.stats && typeof event.stats === 'object') {
+        const outbound = event.direction === 'outbound', fields = outbound ? OUTBOUND_FIELDS : TRANSPORT_FIELDS;
+        const stats = Object.fromEntries(fields.filter(key => Number.isFinite(event.stats[key])).map(key => [key, event.stats[key]]));
+        bridge.log({ type: 'audio.transport', at: event.at, receivedAt: Date.now(), direction: outbound ? 'outbound' : undefined, liveRun: live.reservation, voiceSessionId: live.id, stats });
       }
       if (event.type === 'audio_level' && [event.at, event.durationMs, event.inputRms, event.outputRms].every(Number.isFinite)
         && Math.abs(event.at - Date.now()) < 5000 && event.durationMs > 0 && event.durationMs <= 500

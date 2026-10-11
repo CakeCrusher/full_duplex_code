@@ -32,6 +32,8 @@ export interface HarnessOptions {
   jevTuning?: boolean;
   /** The agent's own command-line arguments. */
   agentArgs?: string[];
+  /** Ask OpenAI to store voice sessions so that Resume voice can fork them (default true; --no-store turns it off). */
+  store?: boolean;
 }
 
 // The bridge: one local process between the page, GPT Live and the agent.
@@ -59,7 +61,7 @@ export class Harness {
   statusLog: StatusLog; log: (event: BridgeEvent) => void; publish: (event: BridgeEvent, page?: Page) => void; fault: (error: Error, page?: Page) => void;
   ledger: UsageLedger; timeline: Timeline; outbox: Outbox; voiceSessions: VoiceSessions; endpoints: Endpoints;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
-  constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides, jevTuning = false }: HarnessOptions) {
+  constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides, jevTuning = false, store = true }: HarnessOptions) {
     this.agent = agent; this.root = root; this.runDir = runDir; this.cwd = cwd; this.sessionId = sessionId; this.apiKey = apiKey;
     this.voice = voice; this.observation = observation; this.port = port; this.portFallback = portFallback;
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
@@ -74,7 +76,7 @@ export class Harness {
     this.learned = new LearnedLog(path.join(root, '.runs', 'learned-instructions.jsonl'));
     if (jevKey && jevTuning) this.tuner = new JevTuner({ apiKey: jevKey, log: this.log });
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
-    this.voiceSessions = new VoiceSessions(this);
+    this.voiceSessions = new VoiceSessions(this, { store });
     if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log, onLearn: instruction => { this.voiceSessions.learn(instruction).catch(error => this.fault(error as Error)); } });
     this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,
       publish: event => this.publish(event), fault: error => this.fault(error), onSent: entry => this.voiceSessions.confirmDelivery(entry) });
@@ -119,7 +121,7 @@ export class Harness {
   status() { return statusSnapshot(this); }
   instructions() { return this.voiceSessions.instructions(); }
   appendInstruction(text: unknown) { return this.voiceSessions.appendInstruction(text); }
-  startLive(sdp?: unknown, page?: Page) { return this.voiceSessions.start(sdp, page); }
+  startLive(sdp?: unknown, page?: Page, mode: 'resume' | 'fresh' = 'fresh', automatic = false) { return this.voiceSessions.start(sdp, page, mode, automatic); }
   deliver(request: VoiceRequest) { this.outbox.add(request); }
   /** New settings for how agent updates reach GPT Live, from now on. */
   setTuning(next: Tuning, changes: TuningChange[] = []) {
@@ -172,6 +174,7 @@ export class Harness {
     const agentClosed = this.adapter.close();
     clearInterval(this.statusTimer); clearInterval(this.voiceSessions.audioWatchdog); clearTimeout(this.agentLostTimer);
     if (this.live) await this.live.close('harness stopped');
+    this.voiceSessions.handOffCarried();
     this.mediator?.stop();
     this.audit?.close(); this.saveTimeline();
     this.pages.close();

@@ -4,10 +4,10 @@ import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
 // the name is the agent's own command line, passed through unchanged.
 const options = {
   voice: { type: 'string', default: 'marin' }, observe: { type: 'string' },
-  port: { type: 'string' }, public: { type: 'boolean', default: false }, help: { type: 'boolean', short: 'h' },
+  port: { type: 'string' }, public: { type: 'boolean', default: false }, 'no-store': { type: 'boolean', default: false }, help: { type: 'boolean', short: 'h' },
 } satisfies ParseArgsOptionsConfig;
 
-export interface LaunchValues { voice: string; observe?: string; port?: string; public: boolean; help?: boolean }
+export interface LaunchValues { voice: string; observe?: string; port?: string; public: boolean; 'no-store': boolean; help?: boolean }
 export interface LaunchCommand { values: LaunchValues; command?: 'doctor' | 'usage'; agent?: string; agentArgs: string[] }
 /** A mistake in the command line, reported without a stack trace. */
 export class UsageError extends Error {}

@@ -6,14 +6,18 @@ import type { AppendKind } from './context-queue.ts';
 
 export const SAMPLE_RATE = 24000;
 export type LiveState = 'new' | 'connecting' | 'active' | 'closing' | 'closed';
-export interface CloseResult { finalized: boolean; reserved: boolean; usageSeconds: number; sessionId?: string; reason: string }
+export interface CloseResult { finalized: boolean; reserved: boolean; usageSeconds: number; sessionId?: string; reason: string; closeCode?: number }
 interface Pending { resolve: (event: any) => void; reject: (error: Error) => void }
 
-// One GPT Live session: created over HTTPS (WebRTC) or a WebSocket, then
-// controlled through its sideband socket.
+// One GPT Live session: created over HTTPS (WebRTC) or a WebSocket, or forked
+// from a stored one, then controlled through its sideband socket.
 export class LiveSession extends EventEmitter {
   apiKey: string; budget: UsageLedger; label: string; voice: string; instructions: string; input: unknown[];
   log: (event: Record<string, unknown>) => void; url: string;
+  /** Whether OpenAI keeps the session for forking, as asked and as confirmed at startup; and the stored session this one forks. */
+  store: boolean; stored = false; fork?: string;
+  /** Someone asked for the close (rather than GPT Live or the connection ending it), and the page has the media answer. */
+  requested = false; answered = false; socketClose?: { code: number; reason: string };
   state: LiveState = 'new';
   pending = new Map<string, Pending>();
   usageSeconds = 0;
@@ -23,12 +27,13 @@ export class LiveSession extends EventEmitter {
   ws?: WebSocket; creation?: AbortController; finalEvent?: any; audioBytes?: number; closeReason?: string;
   resolveReady?: (event: any) => void; rejectReady?: (error: Error) => void;
   startTimer?: NodeJS.Timeout; closeTimer?: NodeJS.Timeout; ackTimer?: NodeJS.Timeout | null;
-  constructor({ apiKey, budget, label = 'voice session', voice = 'marin', instructions = '', input = [], log = () => {}, url = 'wss://api.openai.com/v1/live/sessions' }: {
+  constructor({ apiKey, budget, label = 'voice session', voice = 'marin', instructions = '', input = [], log = () => {}, url = 'wss://api.openai.com/v1/live/sessions', store = false, fork }: {
     apiKey: string; budget: UsageLedger; label?: string; voice?: string; instructions?: string; input?: unknown[];
-    log?: (event: Record<string, unknown>) => void; url?: string;
+    log?: (event: Record<string, unknown>) => void; url?: string; store?: boolean; fork?: string;
   }) {
     super();
     this.apiKey = apiKey; this.budget = budget; this.label = label; this.voice = voice; this.instructions = instructions; this.input = input; this.log = log; this.url = url;
+    this.store = store; this.fork = fork;
     this.closed = new Promise(resolve => { this.resolveClosed = resolve; });
   }
   async start(sdp?: string) {
@@ -45,18 +50,23 @@ export class LiveSession extends EventEmitter {
     this.state = 'connecting';
     this.transport = sdp ? 'webrtc' : 'websocket';
     let answer: any;
-    let socketUrl = this.url;
+    // A fork inherits the model, instructions, input and conversation; only storage (and the WebSocket audio format) may change.
+    const forkPath = this.fork ? `/${encodeURIComponent(this.fork)}/fork` : '';
+    let socketUrl = this.url + forkPath;
     if (sdp) {
       this.creation = new AbortController();
       try {
-        const response = await fetch(this.url.replace(/^ws/, 'http'), {
+        const response = await fetch(this.url.replace(/^ws/, 'http') + forkPath, {
           method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session: { model: 'gpt-live-1', instructions: this.instructions, input: this.input,
-            audio: { output: { voice: this.voice } }, delegation: { type: 'client' }, store: false },
+          body: JSON.stringify({ session: this.fork ? { store: this.store } : { model: 'gpt-live-1', instructions: this.instructions, input: this.input,
+            audio: { output: { voice: this.voice } }, delegation: { type: 'client' }, store: this.store },
           transport: { type: 'webrtc', sdp } }),
           signal: AbortSignal.any([this.creation.signal, AbortSignal.timeout(15000)]),
         });
-        if (!response.ok) throw new Error(`OpenAI voice connection failed (HTTP ${response.status}).`);
+        if (!response.ok) {
+          const detail = await response.json().then(body => body?.error?.message, () => undefined);
+          throw new Error(`OpenAI voice connection failed (HTTP ${response.status}${typeof detail === 'string' ? `: ${detail.slice(0, 300)}` : ''}).`);
+        }
         answer = await response.json();
         if (!answer.session?.id || !answer.transport?.sdp) throw new Error('OpenAI returned an incomplete voice connection.');
         this.id = answer.session.id;
@@ -67,23 +77,33 @@ export class LiveSession extends EventEmitter {
     const ws = this.ws = new WebSocket(socketUrl, { headers: { Authorization: `Bearer ${this.apiKey}` }, handshakeTimeout: 15000, maxPayload: 4 * 1024 * 1024 });
     const ready = new Promise((resolve, reject) => { this.resolveReady = resolve; this.rejectReady = reject; });
     this.startTimer = setTimeout(() => this.abort('session startup timed out'), 20000);
-    ws.on('open', () => answer ? this.emit('answer', answer.transport.sdp) : ws.send(JSON.stringify({ type: 'session.start', event_id: randomUUID(), session: {
-      model: 'gpt-live-1', instructions: this.instructions, input: this.input,
-      audio: { format: { type: 'audio/pcm', rate: SAMPLE_RATE }, output: { voice: this.voice } },
-      delegation: { type: 'client' }, store: false,
-    } })));
+    const format = { type: 'audio/pcm', rate: SAMPLE_RATE };
+    ws.on('open', () => {
+      if (answer) { this.answered = true; this.emit('answer', answer.transport.sdp); return; }
+      ws.send(JSON.stringify({ type: 'session.start', event_id: randomUUID(), session: this.fork ? { store: this.store, audio: { format } } : {
+        model: 'gpt-live-1', instructions: this.instructions, input: this.input,
+        audio: { format, output: { voice: this.voice } }, delegation: { type: 'client' }, store: this.store,
+      } }));
+    });
     ws.on('message', raw => {
       try { this.receive(JSON.parse(raw.toString())); }
       catch (err) { this.emit('fault', err); this.abort((err as Error).message); }
     });
     ws.on('error', err => { this.emit('fault', err); this.abort(err.message); });
-    ws.on('close', () => this.finish(false));
+    ws.on('close', (code, reason) => {
+      this.socketClose = { code, reason: reason.toString() };
+      this.log({ type: 'bridge.live_socket_closed', code, reason: this.socketClose.reason || undefined });
+      this.finish(false);
+    });
     return ready;
   }
   receive(event: any) {
     if (!['session.output_audio.delta', 'session.input_audio.append'].includes(event.type)) this.log({ direction: 'received', ...event });
     if (event.type === 'session.started') {
       clearTimeout(this.startTimer); this.state = 'active'; this.id = event.session.id; this.startedAt = Date.now();
+      // OpenAI says whether it keeps the session; a fork reports the instructions it inherited.
+      this.stored = event.session.store ?? this.store;
+      if (this.fork && typeof event.session.instructions === 'string') this.instructions = event.session.instructions;
       this.budget.update(this.reservation!, 0, { sessionId: this.id });
       this.resolveReady!(event);
     }
@@ -149,7 +169,7 @@ export class LiveSession extends EventEmitter {
     await this.append('commentary', text);
   }
   close(reason = 'requested'): Promise<CloseResult> {
-    this.closeReason ??= reason;
+    this.closeReason ??= reason; this.requested = true;
     if (this.state === 'active') {
       this.log({ type: 'bridge.closing', reason });
       this.send({ type: 'session.close', event_id: randomUUID() }); this.state = 'closing';
@@ -173,7 +193,7 @@ export class LiveSession extends EventEmitter {
     for (const p of this.pending.values()) p.reject(new Error('Session closed'));
     this.pending.clear();
     const result = { finalized: Boolean(finalized || this.finalEvent), reserved: Boolean(this.reservation), usageSeconds: this.usageSeconds, sessionId: this.id,
-      reason: this.closeReason ?? (this.finalEvent ? `closed by GPT Live (${this.finalEvent.reason ?? 'no reason given'})` : 'connection to GPT Live lost') };
+      reason: this.closeReason ?? (this.finalEvent ? `closed by GPT Live (${this.finalEvent.reason ?? 'no reason given'})` : 'connection to GPT Live lost'), closeCode: this.socketClose?.code };
     this.log({ type: 'bridge.closed', ...result }); this.resolveClosed(result); this.emit('closed', result);
   }
 }

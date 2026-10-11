@@ -2,12 +2,16 @@
 const TRANSPORT_FIELDS = ['packetsReceived', 'packetsLost', 'packetsDiscarded', 'jitter', 'concealedSamples', 'silentConcealedSamples',
   'concealmentEvents', 'totalSamplesReceived', 'insertedSamplesForDeceleration', 'removedSamplesForAcceleration',
   'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount'];
+const OUTBOUND_FIELDS = ['packetsSent', 'bytesSent', 'retransmittedPacketsSent', 'nackCount', 'targetBitrate', 'totalPacketSendDelay'];
+const pick = (stat: any, fields: string[]): Record<string, number | undefined> => Object.fromEntries(fields.filter(key => Number.isFinite(stat?.[key])).map(key => [key, stat[key]]));
 
 export interface PeerHandlers {
   /** Whether receiver diagnostics are wanted now, and whether they can be sent. */
   active(): boolean;
   connected(): boolean;
-  sendStats(stats: Record<string, number | undefined>): void;
+  sendStats(stats: Record<string, number | undefined>, direction?: 'outbound'): void;
+  /** Connection and ICE state changes, so a stalled media path shows in the log. */
+  sendState(state: { connectionState: string; iceConnectionState: string }): void;
   /** Whether the audio graph can play a received track, and playing it. */
   canPlay(): boolean;
   play(received: MediaStream): void;
@@ -32,8 +36,14 @@ export class WebRtcPeer {
         const report = await connection.getStats();
         if (!handlers.active() || this.connection !== connection || !handlers.connected()) return;
         for (const stat of report.values()) {
+          // What leaves the browser, what OpenAI reports receiving, and the network path, beside what arrives.
+          if (stat.type === 'outbound-rtp' && stat.kind === 'audio') {
+            const remote = report.get(stat.remoteId), pair = [...report.values()].find(item => item.type === 'candidate-pair' && item.nominated && item.state === 'succeeded');
+            handlers.sendStats({ ...pick(stat, OUTBOUND_FIELDS), remotePacketsLost: remote?.packetsLost, remoteJitter: remote?.jitter, roundTripTime: remote?.roundTripTime,
+              fractionLost: remote?.fractionLost, currentRoundTripTime: pair?.currentRoundTripTime, availableOutgoingBitrate: pair?.availableOutgoingBitrate }, 'outbound');
+          }
           if (stat.type !== 'inbound-rtp' || stat.kind !== 'audio') continue;
-          const stats: Record<string, number | undefined> = Object.fromEntries(TRANSPORT_FIELDS.filter(key => Number.isFinite(stat[key])).map(key => [key, stat[key]]));
+          const stats = pick(stat, TRANSPORT_FIELDS);
           stats.clockRate = report.get(stat.codecId)?.clockRate;
           stats.requestedJitterBufferMs = (connection.getReceivers().find(receiver => receiver.track.kind === 'audio') as (RTCRtpReceiver & { jitterBufferTarget?: number }) | undefined)?.jitterBufferTarget;
           handlers.sendStats(stats);
@@ -54,7 +64,10 @@ export class WebRtcPeer {
       remoteAudio.play().catch(error => { if (this.connection === connection) handlers.fail(error.message); });
       handlers.play(received);
     };
+    const reportState = () => { if (this.connection === connection) handlers.sendState({ connectionState: connection.connectionState, iceConnectionState: connection.iceConnectionState }); };
+    connection.oniceconnectionstatechange = reportState;
     connection.onconnectionstatechange = () => {
+      reportState();
       if (this.connection === connection && connection.connectionState === 'failed') handlers.fail('The voice media connection failed. Start voice again to reconnect.');
     };
     for (const track of microphone.getAudioTracks()) connection.addTrack(track, microphone);

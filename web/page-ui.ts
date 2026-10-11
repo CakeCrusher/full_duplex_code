@@ -8,6 +8,19 @@ const { name } = profile;
 let instructionHistory = '';
 
 export function notice(text: string) { $('notice').textContent = text; }
+/** Whether Start continues the earlier conversation: Resume voice. */
+export const resumable = (event?: BridgeEvent) => Boolean(event?.resume && event.resume.plan !== 'fresh');
+const local = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+// Local or public link, the last time voice ended on its own and whether it reconnected, and how Resume works.
+function showConnection({ connection, resume }: BridgeEvent) {
+  const drop = connection?.lastDrop;
+  const facts = [local ? 'Local link' : 'Public link (tunnel)',
+    drop && `Last drop ${clock(drop.at)}: ${drop.reason}${drop.reconnecting ? ', reconnecting automatically' : ''}`,
+    connection?.reconnects && `${connection.reconnects} automatic reconnect${connection.reconnects === 1 ? '' : 's'} in 5 min (at most 2)`,
+    resume && !resume.store && 'Voice sessions aren’t stored, so Resume continues from the conversation’s text'].filter(Boolean).join(' · ');
+  if ($('connection-facts').textContent !== facts) $('connection-facts').textContent = facts;
+}
 
 // Developer mode adds the diagnostic parts of the page. Each browser remembers
 // the choice; without storage it simply starts off.
@@ -69,7 +82,12 @@ export function showStatus(event: BridgeEvent, voice: { active: boolean; muted: 
   // Voice running in another page can be moved here; one still connecting or closing cannot.
   const movable = voice.elsewhere && event.live === 'active';
   $<HTMLButtonElement>('start').disabled = voice.starting || voice.active || !event.agentReady || ['connecting', 'closing'].includes(event.live) || (event.live === 'active' && !movable) || event.agent === 'exited';
-  $('start').textContent = movable ? 'Move voice here' : 'Start voice';
+  // Resume voice continues the conversation; Start fresh starts without it.
+  const resume = !movable && resumable(event);
+  $('start').textContent = movable ? 'Move voice here' : resume ? 'Resume voice' : 'Start voice';
+  $('start').title = resume ? event.resume.plan === 'fork' ? 'Continues the last voice session where it left off' : 'Starts voice with the conversation so far' : '';
+  $('fresh').hidden = !resume; $<HTMLButtonElement>('fresh').disabled = $<HTMLButtonElement>('start').disabled;
+  showConnection(event);
   $('project').textContent = event.cwd;
   showSession(event.cwd, event.sessionId);
   $('usage').textContent = voice.active ? `${Math.floor(event.usageSeconds / 60)}m ${event.usageSeconds % 60}s · $${(event.usageSeconds * 0.05 / 60).toFixed(3)}` : 'Not connected · $0.05/min';

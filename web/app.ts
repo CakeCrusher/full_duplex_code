@@ -6,7 +6,7 @@ import { CuePlayer, CueTracker } from './cues.js';
 import { BridgeClient, type BridgeEvent } from './bridge-client.js';
 import { AudioIO, watchMicrophones, type WorkletMessage } from './audio-io.js';
 import { WebRtcPeer } from './webrtc-peer.js';
-import { $, developerMode, notice, showStatus } from './page-ui.js';
+import { $, developerMode, notice, resumable, showStatus } from './page-ui.js';
 import { profile } from './profile.js';
 import { mountCompanions } from './companions.js';
 
@@ -16,6 +16,8 @@ const bridge = new BridgeClient(), audio = new AudioIO(), peer = new WebRtcPeer(
 let active = false, starting = false, muted = false, currentStatus: BridgeEvent | undefined;
 let voiceSessionId: string | null = null;
 let generation = 0;
+// The audit copy pauses while the bridge connection is backlogged, and how many packets it dropped.
+let auditPaused = false, auditDropped = 0;
 // This page's identity on the bridge, and its connection: it reconnects by itself.
 let pageId: string | null = null, connections = 0, attempts = 0, leaving = false, voiceDropped = false;
 let retry: ReturnType<typeof setTimeout> | undefined;
@@ -47,12 +49,14 @@ function handle(event: BridgeEvent) {
   if (event.type === 'voice_started') {
     voiceSessionId = event.sessionId;
     audio.auditStart(event.sessionId);
-    active = true; starting = false; notice('');
+    active = true; starting = false; notice(event.automatic ? 'Reconnected. The conversation continues.' : '');
     $<HTMLButtonElement>('mute').disabled = false; $<HTMLButtonElement>('stop').disabled = false; $('audioState').textContent = 'Microphone on';
   }
   if (event.type === 'voice_closed') {
     releaseAudio();
-    notice(event.moved ? 'Voice moved to another tab or device. Click Move voice here to bring it back.' : event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? `Voice session ended. ${profile.name} is still available in your terminal.` : 'Voice connection ended. Final usage was not confirmed; the last reported usage is saved and may be incomplete.');
+    // Voice that ended on its own resumes by itself, a limited number of times.
+    if (event.reconnect) { notice(`Voice dropped (${event.reason}). Reconnecting…`); start('resume', true); return; }
+    notice(event.dropped ? `Voice dropped (${event.reason}). Click Resume voice to continue the conversation.` : event.moved ? 'Voice moved to another tab or device. Click Move voice here to bring it back.' : event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? `Voice session ended. ${profile.name} is still available in your terminal.` : 'Voice connection ended. Final usage was not confirmed; the last reported usage is saved and may be incomplete.');
   }
 }
 // Jev heard a standing instruction and added it: show what was added, under its ID, with a way to remove it.
@@ -111,7 +115,7 @@ function disconnected() {
   const cue = cues.end(); if (cue) cuePlayer.play(cue);
   const hadVoice = active || starting;
   releaseAudio(); pageId = null;
-  $('connection').textContent = 'Reconnecting…'; $<HTMLButtonElement>('start').disabled = true;
+  $('connection').textContent = 'Reconnecting…'; $<HTMLButtonElement>('start').disabled = true; $<HTMLButtonElement>('fresh').disabled = true;
   if (leaving) return;
   if (hadVoice) { voiceDropped = true; notice('The connection to the companion dropped, which ended voice. Reconnecting…'); }
   reconnect();
@@ -139,7 +143,14 @@ async function reachability(): Promise<'reachable' | 'refused' | 'unreachable'> 
 // Audit samples and levels measured by the worklet.
 function measured(data: WorkletMessage) {
   if (data.type === 'playback' && bridge.open) {
-    if (bridge.bufferedAmount > 128000) { notice('The audio audit connection fell behind. Please reconnect.'); stop(); return; }
+    // Voice matters more than its audit: a backlogged connection drops audit audio
+    // until it drains (the bridge records the gap), and never ends voice.
+    if (bridge.bufferedAmount > (auditPaused ? 32000 : 128000)) {
+      auditDropped++;
+      if (!auditPaused) { auditPaused = true; bridge.send({ type: 'audit_paused', buffered: bridge.bufferedAmount }); }
+      return;
+    }
+    if (auditPaused) { auditPaused = false; bridge.send({ type: 'audit_resumed', dropped: auditDropped }); auditDropped = 0; }
     bridge.send({ type: 'playback_audio', voiceSessionId: data.sessionId, offsetSamples: data.offsetSamples,
       at: audio.audioEpoch + data.startTime * 1000, pcm: btoa(String.fromCharCode(...new Uint8Array(data.pcm))),
       microphone: data.microphone ? btoa(String.fromCharCode(...new Uint8Array(data.microphone))) : undefined });
@@ -150,8 +161,9 @@ function measured(data: WorkletMessage) {
     if (bridge.open && active) bridge.send({ type: 'audio_level', at: audio.audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, outputRms: data.outputRms });
   }
 }
-async function start() {
-  if (active || starting) return; starting = true; $<HTMLButtonElement>('start').disabled = true; notice('');
+async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false) {
+  if (active || starting) return; starting = true; $<HTMLButtonElement>('start').disabled = true; $<HTMLButtonElement>('fresh').disabled = true;
+  if (!automatic) notice('');
   cuePlayer.unlock(); // Start voice is the user gesture that allows audio cues.
   const attempt = ++generation, current = () => attempt === generation;
   // The input is captured once per voice connection; change it after End voice.
@@ -164,13 +176,14 @@ async function start() {
     bridge.send({ type: 'microphone_gate', threshold: gate });
     const sdp = await peer.offer(microphone, {
       active: () => active, connected: () => bridge.open,
-      sendStats: stats => bridge.send({ type: 'audio_transport', voiceSessionId, at: Date.now(), stats }),
+      sendStats: (stats, direction) => bridge.send({ type: 'audio_transport', voiceSessionId, direction, at: Date.now(), stats }),
+      sendState: state => bridge.send({ type: 'peer_state', at: Date.now(), ...state }),
       canPlay: () => audio.running, play: received => audio.play(received),
       fail: message => { notice(message); stop(); },
     });
     if (!current()) return;
     muted = false; $('mute').textContent = 'Mute microphone'; $('mute').setAttribute('aria-pressed', 'false');
-    bridge.send({ type: 'start', sdp });
+    bridge.send({ type: 'start', sdp, mode, automatic });
     $<HTMLButtonElement>('stop').disabled = false; $('audioState').textContent = 'Connecting voice…';
   } catch (error) {
     if (!current()) return; releaseAudio();
@@ -192,7 +205,8 @@ function releaseAudio() {
   $<HTMLSelectElement>('microphone-device').disabled = false;
 }
 function stop() { if (bridge.open) bridge.send({ type: 'stop' }); releaseAudio(); }
-$('start').onclick = start; $('stop').onclick = stop;
+// Start continues the conversation when there is one (Resume voice); Start fresh never does.
+$('start').onclick = () => start(resumable(currentStatus) ? 'resume' : 'fresh'); $('fresh').onclick = () => start('fresh'); $('stop').onclick = stop;
 $<HTMLInputElement>('microphone-gate').oninput = e => {
   const threshold = Number((e.target as HTMLInputElement).value);
   $('gate-label').textContent = threshold === 0 ? 'Off' : `${(threshold * 100).toFixed(1)}%`;

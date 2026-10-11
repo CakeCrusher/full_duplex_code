@@ -17,6 +17,8 @@ function header(bytes: number) {
 export class AudioAudit {
   dir: string; log: (event: Record<string, unknown>) => void; onError: (error: Error) => void;
   tracks = new Map<string, TrackFile>(); closed = false;
+  /** Browser tracks whose next packet may follow a long gap: the page dropped audit audio while its connection was backlogged. */
+  gaps = new Set<Track>();
   constructor({ dir, log, onError }: { dir: string; log: (event: Record<string, unknown>) => void; onError: (error: Error) => void }) {
     this.dir = dir; this.log = log; this.onError = onError;
     try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); }
@@ -38,9 +40,10 @@ export class AudioAudit {
       const offset = metadata.offsetSamples ?? apiOffset ?? file.samples;
       // A missing browser packet is visible in the log and remains silence in
       // the recording; never silently squeeze time out of rendered playback.
-      if (!Number.isSafeInteger(offset) || offset < file.samples || (apiOffset === undefined && offset > file.samples + RATE * 5)) throw new Error('Playback audit sample discontinuity');
+      const paused = this.gaps.delete(track);
+      if (!Number.isSafeInteger(offset) || offset < file.samples || (apiOffset === undefined && offset > file.samples + RATE * (paused ? 3600 : 5))) throw new Error('Playback audit sample discontinuity');
       if (offset !== file.samples) this.log({ type: 'audio.audit_gap', track, expected: file.samples, actual: offset,
-        reason: apiOffset !== undefined ? `missing_api_${track}` : 'missing_audit_samples',
+        reason: apiOffset !== undefined ? `missing_api_${track}` : paused ? 'audit_paused' : 'missing_audit_samples',
         startMs: file.samples * 1000 / RATE, endMs: offset * 1000 / RATE,
         durationMs: (offset - file.samples) * 1000 / RATE });
       fs.writeSync(file.fd, pcm, 0, pcm.length, 44 + offset * 2);
@@ -49,6 +52,7 @@ export class AudioAudit {
       this.log({ type: 'audio.packet', track, ...metadata, offsetSamples: offset, samples: pcm.length / 2 });
     } catch (error) { this.fail(error as Error); }
   }
+  allowGap(...tracks: Track[]) { for (const track of tracks) this.gaps.add(track); }
   fail(error: Error) { this.close(); this.onError(new Error(`Local audio audit failed: ${error.message}`)); }
   close() {
     if (this.closed) return;

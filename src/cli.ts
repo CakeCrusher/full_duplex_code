@@ -48,6 +48,8 @@ Options, before the agent's name:
   --port 8123           Local port (default 8123; 0 chooses a free port)
   --public              Also reach the companion from a phone, through a temporary
                         Cloudflare tunnel this launcher starts and stops (needs cloudflared)
+  --no-store            Don't ask OpenAI to keep voice sessions (kept 30 days) for
+                        Resume voice; it then continues from the conversation's text
   -h, --help            Show this help
 Commands:
   fdc doctor [agent]    Check local prerequisites without API spending
@@ -109,7 +111,7 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
   const sessionId = session.sessionId ?? (session.assignSession ? randomUUID() : undefined);
   const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId?.slice(0, 8) ?? (session.resume ? 'resumed' : agent.profile.id)}`);
   let harness: Harness;
-  try { harness = await new Harness({ agent, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe, agentArgs, jevKey: process.env.TYPESAFE_API_KEY, tuning: process.env.FDC_TUNING ? JSON.parse(process.env.FDC_TUNING) : undefined, jevTuning: process.env.FDC_JEV_TUNING === '1' }).start(); }
+  try { harness = await new Harness({ agent, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe, agentArgs, jevKey: process.env.TYPESAFE_API_KEY, tuning: process.env.FDC_TUNING ? JSON.parse(process.env.FDC_TUNING) : undefined, jevTuning: process.env.FDC_JEV_TUNING === '1', store: !values['no-store'] }).start(); }
   catch (error) { console.error(loud(`fdc: ${(error as Error).message}`)); process.exit(1); }
   if (harness.portFellBack) console.log(`\nPort ${DEFAULT_PORT} is in use, probably by another companion. This one uses ${new URL(harness.baseUrl).port}; Chrome may ask for microphone access again.`);
   let tunnel: Tunnel | undefined, child: ChildProcess | undefined, stopping = false;

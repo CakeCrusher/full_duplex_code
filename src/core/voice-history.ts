@@ -1,10 +1,24 @@
 export interface TranscriptDelta { type: string; delta: string; start_ms: number; end_ms: number }
-export interface TranscriptFragment { seq: number; role: 'operator' | 'intermediary'; text: string; startMs: number; endMs: number; receivedAt: number }
+export interface TranscriptFragment { seq: number; role: 'operator' | 'intermediary'; text: string; startMs: number; endMs: number; receivedAt: number; carried?: boolean }
 /** One speaker's speech until they pause for over 2 seconds. */
 export type Utterance = Pick<TranscriptFragment, 'role' | 'text' | 'endMs'>;
+/** A spoken turn as kept for resuming the conversation. */
+export type Turn = Pick<Utterance, 'role' | 'text'>;
 export interface SpokenRequest { utterances: Utterance[]; through: number; unheard?: string[] }
 // Any sample louder than this is sound; the page's gate sends exact silence, which echoes back at about 1.
 const SOUND_PEAK = 64;
+
+// Each speaker's speech joins until they pause, so the other speaker's
+// backchannels never split it.
+function utterances(fragments: readonly TranscriptFragment[]): Utterance[] {
+  const joined: Utterance[] = [], open = new Map<Utterance['role'], Utterance>();
+  for (const { role, text, startMs, endMs } of fragments) {
+    const last = open.get(role);
+    if (last && startMs - last.endMs <= 2000) { last.text += text; last.endMs = endMs; }
+    else { const next = { role, text, endMs }; joined.push(next); open.set(role, next); }
+  }
+  return joined.filter(u => u.text.trim());
+}
 
 // Transcripts of one voice connection, and how far they have been delegated.
 export class VoiceHistory {
@@ -39,26 +53,26 @@ export class VoiceHistory {
     const covered = around.reduce((sum, h) => sum + Math.min(h.endMs, to) - Math.max(h.startMs, from), 0);
     return covered >= .9 * (to - from) ? false : undefined;
   }
+  /** Operator words GPT Live transcribed from silence (see audible). */
+  unheard(fragment: TranscriptFragment) { return fragment.role === 'operator' && !fragment.carried && this.audible(fragment.startMs, fragment.endMs) === false; }
   // The conversation since the previous delegation: anything said before it went
   // with the previous request. Transcript arrival can lag the delegation event,
   // so the caller waits briefly before taking this snapshot, and speech starting
   // more than 3 s after the delegation is left for the next request.
   request(offsetMs: number): SpokenRequest | null {
     const all = this.fragments.filter(f => f.seq > this.delegatedThrough && f.startMs <= offsetMs + 3000);
-    const unheard = all.filter(f => f.role === 'operator' && this.audible(f.startMs, f.endMs) === false);
-    const since = all.filter(f => !unheard.includes(f));
-    // Each speaker's speech joins until they pause, so the other speaker's
-    // backchannels never split it.
-    const utterances: Utterance[] = [], open = new Map<Utterance['role'], Utterance>();
-    for (const { role, text, startMs, endMs } of since) {
-      const last = open.get(role);
-      if (last && startMs - last.endMs <= 2000) { last.text += text; last.endMs = endMs; }
-      else { const next = { role, text, endMs }; utterances.push(next); open.set(role, next); }
-    }
-    const spoken = utterances.filter(u => u.text.trim());
-    const through = all.at(-1)?.seq ?? this.delegatedThrough;
+    const unheard = all.filter(f => this.unheard(f));
+    const spoken = utterances(all.filter(f => !unheard.includes(f)));
     if (!spoken.some(u => u.role === 'operator')) return null;
-    return { utterances: spoken, through, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
+    return { utterances: spoken, through: all.at(-1)!.seq, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
   }
   markDelivered(request: SpokenRequest) { this.delegatedThrough = Math.max(this.delegatedThrough, request.through); }
+  /** This connection's own conversation, for resuming it in a later one. */
+  turns(): Turn[] { return utterances(this.fragments.filter(f => !f.carried && !this.unheard(f))).map(({ role, text }) => ({ role, text: text.replace(/\s+/g, ' ').trim() })); }
+  /** Speech a dropped connection had not passed on, placed before this one's so that its next request includes it. */
+  carry(from: VoiceHistory) {
+    const pending = from.fragments.filter(f => f.seq > from.delegatedThrough && !from.unheard(f));
+    const shift = (pending.at(-1)?.endMs ?? 0) + 5000;
+    for (const f of pending) this.fragments.push({ ...f, seq: this.fragments.length, startMs: f.startMs - shift, endMs: f.endMs - shift, carried: true });
+  }
 }

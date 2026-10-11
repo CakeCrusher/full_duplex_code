@@ -21,7 +21,9 @@ export class Pages {
   add(ws: WebSocket, via: Page['via']): Page {
     const page: Page = { id: randomUUID(), ws, via, alive: true };
     this.all.set(ws, page);
+    // Messages still arriving count as an answer: a pong queued behind a page's backlog arrives late.
     ws.on('pong', () => { page.alive = true; });
+    ws.on('message', () => { page.alive = true; });
     this.log({ type: 'page.connected', page: page.id, via, pages: this.all.size });
     return page;
   }
