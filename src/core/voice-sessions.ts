@@ -186,7 +186,7 @@ export class VoiceSessions {
     this.audit?.close(); this.audit = null; this.failed = undefined;
     this.live = live; this.page = page;
     this.mediator?.stop();
-    const mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean, learner: bridge.learner, tuning: bridge.tuning });
+    const mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean, learner: bridge.learner, catcher: bridge.catcher, tuning: bridge.tuning });
     if (this.carried) mediator.history.carry(this.carried.mediator.history);
     if (plan === 'fork') mediator.context.add('thinking', catchUp(agent, bridge.cwd, observer.state) + (history.text ? historyIntro(agent) + history.text : ''));
     log({ type: 'voice.starting', plan, automatic, from: sourceId, seededTurns: plan === 'seed' ? input.length - (history.text ? 2 : 1) : undefined, store: this.store });

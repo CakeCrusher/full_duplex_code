@@ -7,6 +7,7 @@ import { redact } from './redact.ts';
 import { withoutBinary } from './context-rules.ts';
 import { InstructionLearner, LearnedLog } from './instruction-learner.ts';
 import { JevTuner, type TuningChange } from './jev-tuner.ts';
+import { WorkCatcher } from './work-catcher.ts';
 import { UsageLedger } from './usage-ledger.ts';
 import { Timeline } from './timeline.ts';
 import { StatusLog, statusSnapshot, type BridgeEvent } from './status.ts';
@@ -40,7 +41,7 @@ export interface HarnessOptions {
 // It owns the shared state; each concern lives in its own module.
 export class Harness {
   agent: AgentDefinition; adapter: AgentAdapter; observer: AgentObserver;
-  learner?: InstructionLearner; tuner?: JevTuner; learned: LearnedLog; retuneTimer?: NodeJS.Timeout;
+  learner?: InstructionLearner; catcher?: WorkCatcher; tuner?: JevTuner; learned: LearnedLog; retuneTimer?: NodeJS.Timeout;
   root: string; runDir: string; cwd: string; sessionId?: string; apiKey: string;
   voice: string; observation: string; port: number; portFallback: boolean;
   /** How agent updates reach GPT Live; a running voice session takes a change at once. */
@@ -75,6 +76,7 @@ export class Harness {
     this.tuning = tuning(overrides);
     this.learned = new LearnedLog(path.join(root, '.runs', 'learned-instructions.jsonl'));
     if (jevKey && jevTuning) this.tuner = new JevTuner({ apiKey: jevKey, log: this.log });
+    if (jevKey) this.catcher = new WorkCatcher({ apiKey: jevKey, log: this.log });
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
     this.voiceSessions = new VoiceSessions(this, { store });
     if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log, onLearn: instruction => { this.voiceSessions.learn(instruction).catch(error => this.fault(error as Error)); } });
