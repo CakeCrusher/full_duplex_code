@@ -18,6 +18,8 @@ export const piContext: ContextRule[] = [
   // When Pi cuts a tool's output short, it keeps a copy of the output it kept, beside
   // the facts of the cut (bash, read, grep, find, ls). The output itself is in content.
   { key: 'result.details.truncation.content', remove: true },
+  // Pi's compaction summary restates the conversation, the operator's words included; the event says it happened.
+  { event: 'session_compact', key: ['compactionEntry.summary', 'compactionEntry.details'], remove: true },
   // A model is a long definition; its name comes first.
   { event: 'model_select', key: ['model', 'previousModel'], truncate: 200 },
   // The whole file being written, and the text of a file read.

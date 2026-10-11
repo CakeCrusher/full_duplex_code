@@ -13,6 +13,8 @@ export const claudeContext: ContextRule[] = [
   // sub-agents. Their text restates or predicts the conversation, the operator's words included,
   // and GPT Live has spoken it back as if the operator were talking.
   { event: 'SubagentStop', where: { agent_type: '' }, remove: true },
+  // The same compaction summary again, after the compaction; the event itself says it happened.
+  { event: 'PostCompact', key: 'compact_summary', remove: true },
   // Whole files: the one being written (its result repeats it, and an overwrite's patch
   // spans all of it) and the one before an edit or overwrite.
   { where: { tool_name: 'Write' }, key: ['tool_input.content', 'tool_response.content', 'tool_response.structuredPatch'], truncate: 1200 },

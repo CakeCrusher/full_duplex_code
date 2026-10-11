@@ -9,6 +9,7 @@ import { redact } from '../src/core/redact.ts';
 import { startupHistory } from '../src/core/startup-history.ts';
 import { contextData } from '../src/core/context-rules.ts';
 import { claude } from '../src/adapters/claude/index.ts';
+import { pi } from '../src/adapters/pi/index.ts';
 // Every observation append starts with this label.
 
 test('base64 is omitted wherever it appears, for any agent; ordinary text of any length is not', () => {
@@ -161,6 +162,12 @@ test('words GPT Live transcribed from the silence it heard are not passed on as 
   h.add({ type: 'session.input_transcript.delta', delta: 'Ship it.', start_ms: 30000, end_ms: 30600 });
   assert.deepEqual(said(h.request(30700)), ['operator: Ship it.'], 'without an echo of that stretch, the words are kept');
   assert.equal(h.audible(3800, 4400), true, 'a second either side counts');
+});
+test('compaction summaries do not reach GPT Live; the compaction itself does', () => {
+  const claudeData: any = contextData(claude, { name: 'PostCompact', text: JSON.stringify({ hook_event_name: 'PostCompact', trigger: 'auto', compact_summary: 'The user said "ship it".' }) });
+  assert.deepEqual(claudeData, { trigger: 'auto' });
+  const piData: any = contextData(pi, { name: 'session_compact', text: JSON.stringify({ type: 'session_compact', reason: 'threshold', compactionEntry: { type: 'compaction', summary: 'The user said "ship it".', tokensBefore: 90000, details: {} } }) });
+  assert.equal(piData.compactionEntry.summary, undefined); assert.equal(piData.reason, 'threshold');
 });
 test('the nameless sub-agents of Claude\'s own helpers do not reach GPT Live; real sub-agents do', () => {
   const stop = (agent_type: string) => contextData(claude, { name: 'SubagentStop', text: JSON.stringify({ hook_event_name: 'SubagentStop', agent_type, last_assistant_message: 'Summary: the user said "ship it".' }) });
