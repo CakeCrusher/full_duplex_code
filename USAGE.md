@@ -83,7 +83,11 @@ You do not need to wait for Claude to finish before speaking. Interrupting the c
 
 ## Read the live timeline
 
-The browser shows six tracks on one clock:
+The page shows the essentials: the voice controls, the live meters, and three tracks on one clock: the transcript, the agent's events and the requests passed on. **Developer mode** (top right, remembered in this browser) adds the other three tracks, the inspector's JSON, the GPT Live prompt, the microphone threshold and the delivery details.
+
+**Live meters** show the current voice session over the last five minutes, each with a session total: tokens sent to GPT Live per minute, how full its context window is (as GPT Live reports it, about every 15 s), its words and yours per minute, and requests passed on to the agent.
+
+With Developer mode, the browser shows six tracks:
 
 | Track | What it shows |
 | --- | --- |
@@ -106,7 +110,7 @@ Where supported, the browser requests a 200 ms target for WebRTC’s existing ne
 
 Click a voice request to see the **full channel message**. **Copy message** copies that text. Expand **Channel notification JSON** for the content and metadata sent by the channel. Once Claude's `UserPromptSubmit` hook arrives, the inspector shows the captured prompt and checks that its contents match the sent message. Until then, delivery is not presented as verified receipt. A mismatch is shown explicitly.
 
-Each request carries the voice conversation since the previous request, one utterance per line: yours marked `user:`, Live's marked `voice assistant:`. A one-sentence note at the top tells the agent that the request is in your lines and Live's lines are context. Speech from before the previous request went with it and is not sent again. The bridge does not rewrite transcription mistakes; the inspector shows what was actually sent.
+Each request carries the voice conversation since the previous request, one utterance per line (words GPT Live transcribed from stretches where it heard only silence are left out, and logged as `bridge.unheard_transcript`): yours marked `user:`, Live's marked `voice assistant:`. A one-sentence note at the top tells the agent that the request is in your lines and Live's lines are context. Speech from before the previous request went with it and is not sent again. The bridge does not rewrite transcription mistakes; the inspector shows what was actually sent.
 
 The timeline remains available across page reloads while the launcher is running. It starts fresh with a new launcher. All hooks remain visible. The Context to Live row shows actual sends and acknowledgments separately from hook receipt, so delivery delays are visible.
 
@@ -117,6 +121,10 @@ There is one speaking policy, at the end of the startup prompt: listen during ro
 Your spoken requests and added instructions take priority over the default: asking a question, changing topic, or asking Live to stop discussing something should lead the conversation. Claude’s observations are background reference material. Live decides whether an unsolicited update is useful; the bridge does not schedule speech cues or promote progress into commentary. The prompt asks Live to finish its current thought despite new observations, while yielding to you. These are model instructions, not a guarantee of exact spoken behavior. The bounded feed and lifecycle-aware prompt are tested together; exact spoken wording remains model-driven. Input ASR can still produce spurious text during silence, so recorded input audio is the source of truth when diagnosing interruptions.
 
 **Learning your standing instructions (optional).** With `TYPESAFE_API_KEY` in `.env` or your environment, the companion asks Jev (TypeSafe's judgment API) about each thing you say once you pause: is it an instruction to the voice companion about how to behave toward you from now on, such as "don't read file paths out loud", rather than a task, a one-off "stop" or talk about the tool's design? When it is, the instruction is added to this companion at once, in your own words, under an ID such as I3: the running voice session gets it right away and later voice sessions start with it. The page plays a short three-note sound and shows what was added, with a **Remove** button. Removing it tells the running session to disregard I3 (an instruction already given can only be countermanded) and leaves it out of later sessions. Every addition and removal is recorded in the run's log with Jev's scores. Nothing is kept beyond this companion. What you said, with the turn before it as context, goes to TypeSafe for each check (about 0.2 s, fractions of a cent); without the key nothing is sent. Replayed on 869 recorded utterances, it added 20; against the 291 labeled by hand, it caught 14 of 24 lasting instructions and added nothing that wasn't an instruction.
+
+**How agent updates reach Live (advanced).** Updates wait while you talk and for a moment after, gather into batches, and heavy tool work in a batch becomes one line. The settings and what each one costs and buys, measured on real sessions, are in `src/core/tuning.ts`; override them with `FDC_TUNING` as JSON, for example `FDC_TUNING='{"compactTokens":3000}' fdc claude`.
+
+**Jev tuning those settings (optional).** With `TYPESAFE_API_KEY` and `FDC_JEV_TUNING=1`, whenever your instructions change (one Jev learned, one you added or removed), Jev reads them, with the instructions it learned in your earlier sessions, and picks a level for each setting from what that level costs and buys. The running voice session takes the change at once, and the page shows what changed. Without it, nothing about the companion depends on Jev.
 
 Open **GPT Live prompt** beneath the sliders to read the startup instructions. Before connecting, it previews the next session. During or after a connection, it preserves that session’s startup text. The base prompt and the speaking policy are in `src/core/prompts.ts`, worded from the agent adapter's profile. Workspace/history, the one-time welcome, and later context appends are supplied separately. The browser page is the **voice companion dashboard**, and its Gantt chart is the **live session timeline**.
 
@@ -280,6 +288,10 @@ How it connects:
 Refused, with the reason: `-p` / `--print` and `--mode json` or `rpc` (no interactive session). `fdc pi --help`, `--version` and subcommands such as `fdc pi mcp list` run Pi directly. Pi Durable's coding agent loads no extensions, so the companion cannot reach it.
 
 The launcher finds every agent's command as your shell does: on your PATH, or else as an alias in your interactive shell, which it reads once and runs directly. A shell function is not followed.
+
+## Several sessions at once
+
+With more than one `fdc` running from this installation, a strip at the top of the page lists them all: folder, agent and session, whether voice is on, the agent connected and ready, or unreachable, and which are public. Click one to switch this tab to it. Switching ends voice in the session you leave. A page opened through `--public` lists only companions that are public too, and never another's local link.
 
 ## Use it from your phone
 
