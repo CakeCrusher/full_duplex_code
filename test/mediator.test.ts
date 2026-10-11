@@ -179,3 +179,22 @@ test('a failed delegation is factual context for the conversation, without a com
   assert.match(content(f, 'thinking'), /request was not delivered/);
   assert.equal(content(f, 'commentary'), '');
 });
+
+test('agent updates wait while the operator talks: heard by the microphone, or by GPT Live\'s transcript', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const f = fixture(t);
+  f.mediator.hear({ at: Date.now(), inputRms: .05, rawInputRms: .05, gateThreshold: .008 });
+  f.hook({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: 'a.txt' }, tool_response: { content: 'alpha' } });
+  assert.equal(f.appends.length, 0, 'the operator is talking');
+  t.mock.timers.tick(2000);
+  assert.equal(f.appends.length, 1, 'two seconds after the last sound');
+  f.mediator.hear({ at: Date.now(), inputRms: 0, rawInputRms: .05, gateThreshold: .008 });
+  f.mediator.hear({ at: Date.now(), inputRms: .001, rawInputRms: .002, gateThreshold: 0 });
+  f.hook({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: 'b.txt' }, tool_response: { content: 'beta' } });
+  assert.equal(f.appends.length, 2, 'a closed gate or room noise is not speech');
+  f.live.emit('event', { type: 'session.input_transcript.delta', delta: ' wait' });
+  f.hook({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: 'c.txt' }, tool_response: { content: 'gamma' } });
+  assert.equal(f.appends.length, 2, 'the transcript of the operator also holds updates');
+  t.mock.timers.tick(2000);
+  assert.equal(f.appends.length, 3);
+});
