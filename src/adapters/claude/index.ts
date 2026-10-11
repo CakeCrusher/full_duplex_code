@@ -52,6 +52,11 @@ export const claude: AgentDefinition = {
   observationModes: ['hooks', 'transcript'],
   receivedRequest,
   toolCall: (event: string, data: any) => /^PostToolUse(Failure)?$/.test(event) && typeof data?.tool_name === 'string' ? data.tool_name : undefined,
+  // Claude's UserPromptSubmit hook adds context to the prompt it reports.
+  vouch: (event: Record<string, any>, delivered: (id: string) => boolean, note: string) => {
+    const request = event.hook_event_name === 'UserPromptSubmit' && typeof event.prompt === 'string' ? receivedRequest(event.prompt) : undefined;
+    return request && delivered(request.id) ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: note } } : undefined;
+  },
   wire: (request: VoiceRequest) => channelNotification(request),
   create: session => new ClaudeAdapter(session),
   doctor,

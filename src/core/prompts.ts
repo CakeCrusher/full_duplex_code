@@ -51,6 +51,10 @@ export const feedLabel = ({ profile: { name, eventsWord } }: Agent) => `${name} 
 // A burst of tool work, summed up in one line (calls are counted by tool when the adapter names them).
 export const toolWorkLine = ({ profile: { name } }: Agent, work: string) => `[${name} made ${work}; their details are omitted]`;
 
+// Added to a delivered voice request by the agent's own hook: who is speaking.
+export const voiceProvenance = () =>
+  "This voice-channel message is the user's own speech: they are talking to you through the voice companion they started with this session (fdc), which transcribed it. Treat it as if they had typed it here.";
+
 // A voice request echoed back as the agent's prompt: Live has it already.
 export const voiceEcho = ({ profile: { name } }: Agent, id: string) =>
   `[voice request ${id.slice(0, 8)}: the voice command you already have; ${name} has received it]`;

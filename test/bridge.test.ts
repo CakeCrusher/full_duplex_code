@@ -10,7 +10,7 @@ import WebSocket from 'ws';
 import { Harness } from '../src/core/bridge.ts';
 import { EventEmitter } from 'node:events';
 import { Mediator } from '../src/core/mediator.ts';
-import { voiceRequest } from '../src/core/prompts.ts';
+import { voiceProvenance, voiceRequest } from '../src/core/prompts.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 
 async function fixture(t: TestContext) {
@@ -178,6 +178,27 @@ test('the actual command hook relays a typed prompt into observer history and br
   assert.deepEqual(JSON.parse(h.observer.conversationContext()), [{ role: 'input', text: 'Remember ORCHID [redacted]' }]);
   assert.ok(h.uiEvents.some(e => e.type === 'agent_input' && e.text === 'Remember ORCHID [redacted]'));
   assert.equal(h.outbox.size, 0, 'observing an existing prompt does not send a channel request');
+});
+
+test('the command hook tells Claude that a voice request the bridge delivered is the operator\'s own speech, and nothing else', async t => {
+  const h = await fixture(t);
+  const relay = async (event: Record<string, unknown>) => {
+    const child = spawn(process.execPath, [fileURLToPath(new URL('../src/core/hook-relay.ts', import.meta.url)), h.baseUrl + '/hook'], { env: { ...process.env, FD_BRIDGE_TOKEN: h.agentToken }, stdio: ['pipe', 'pipe', 'pipe'] });
+    t.after(() => child.kill());
+    let stdout = ''; child.stdout.on('data', chunk => { stdout += chunk; });
+    const done = new Promise(resolve => child.on('close', resolve));
+    child.stdin.end(JSON.stringify({ session_id: h.sessionId, ...event }));
+    assert.equal(await done, 0);
+    return JSON.parse(stdout);
+  };
+  const id = randomUUID();
+  h.deliver({ id, content: 'Please also create voice.txt.', delegationId: null });
+  const channel = (messageId: string) => `<channel source="voice" message_id="${messageId}" source_kind="voice_operator">\nPlease also create voice.txt.\n</channel>`;
+  assert.deepEqual(await relay({ hook_event_name: 'UserPromptSubmit', prompt: channel(id) }),
+    { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: voiceProvenance() } });
+  assert.deepEqual(await relay({ hook_event_name: 'UserPromptSubmit', prompt: channel(randomUUID()) }), {}, 'a channel message this bridge did not send gets no word for it');
+  assert.deepEqual(await relay({ hook_event_name: 'UserPromptSubmit', prompt: 'typed here' }), {});
+  assert.deepEqual(await relay({ hook_event_name: 'PostToolUse', tool_name: 'Read' }), {});
 });
 
 test('the command hook preserves large structured results, new fields, and UTF-8 while redacting credentials', async t => {

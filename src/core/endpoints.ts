@@ -5,6 +5,7 @@ import { WebSocketServer } from 'ws';
 import type { Harness } from './bridge.ts';
 import { MAX_HOOK_BYTES } from './limits.ts';
 import { pageFile } from './page.ts';
+import { voiceProvenance } from './prompts.ts';
 import { attachPage } from './browser-socket.ts';
 import { Pages } from './pages.ts';
 
@@ -81,7 +82,9 @@ export class Endpoints {
       // Never wait for a model or a network append before returning to the agent.
       // The observer refuses events from another agent session.
       if (!bridge.observer.hook(event)) { res.writeHead(409); return res.end('{}'); }
-      res.setHeader('Content-Type', 'application/json'); return res.end('{}');
+      // The hook's answer: nothing, except for a voice request this bridge delivered (see AgentDefinition.vouch).
+      const reply = bridge.agent.vouch?.(event, id => bridge.outbox.has(id), voiceProvenance());
+      res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(reply ?? {}));
     }
     if (req.url === '/api/status' && req.method === 'GET') {
       if (!equal(req.headers.authorization, `Bearer ${bridge.browserToken}`)) { res.writeHead(403); return res.end(); }

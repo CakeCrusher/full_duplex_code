@@ -123,6 +123,13 @@ export interface AgentDefinition {
   receivedRequest(prompt: string): ReceivedRequest | undefined;
   /** The tool whose call an event reports finished (by event name and the event's context data), so a burst of tool work can be summed up by tool. */
   toolCall?(event: string, data: any): string | undefined;
+  /**
+   * What the agent's command hook answers for an event that delivers a voice request this bridge
+   * sent (`delivered` checks a request ID): how this agent is told the request is the operator's
+   * own speech, as `note`. Claude labels channel messages as external input and often declines
+   * them mid-turn without it. Undefined: the hook answers nothing.
+   */
+  vouch?(event: Record<string, any>, delivered: (id: string) => boolean, note: string): unknown;
   /** The exact message deliver() sends for a request, shown in the request inspector. */
   wire(request: VoiceRequest): unknown;
   create(session: AgentSession): AgentAdapter;
