@@ -66,6 +66,7 @@ You can keep typing to the agent too, and ask the companion about it: "What did 
 ### 4. Stop
 
 - **End voice** closes the voice connection and its billing, about $0.05 a minute. The agent keeps working.
+- **Resume voice** picks the conversation up where it left off, even after restarting `fdc`; **Start fresh** begins a new one. If the voice connection drops, it reconnects by itself.
 - Exiting the agent stops everything: `/exit` in Claude Code, Ctrl-C twice in Codex or Pi.
 
 ## From your phone
