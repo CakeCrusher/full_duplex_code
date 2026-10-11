@@ -33,6 +33,7 @@ function handle(event: BridgeEvent) {
   if (event.type === 'page') pageId = event.id;
   if (event.type === 'status') {
     currentStatus = event;
+    for (const item of event.prompt?.additional ?? []) if (item.learned) learned({ type: 'instruction_learned', id: item.learned, text: item.text.replace(`${item.learned}: `, '') });
     showStatus(event, { active, muted, starting, elsewhere: Boolean(event.voicePage) && event.voicePage !== pageId });
   }
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
