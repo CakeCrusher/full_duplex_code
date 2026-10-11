@@ -147,6 +147,26 @@ test('only a delegation consumes a request, and repeating it cannot resend the s
   h.add({ type: 'session.input_transcript.delta', delta: 'Use JavaScript.', start_ms: 300, end_ms: 400 });
   assert.deepEqual(said(h.request(420)), ['operator: Use JavaScript.']);
 });
+test('words GPT Live transcribed from the silence it heard are not passed on as the operator\'s', () => {
+  const h = new VoiceHistory();
+  const echo = (start_ms: number, end_ms: number, level: number) => h.hearAudio({ start_ms, end_ms, audio: Buffer.from(new Int16Array((end_ms - start_ms) * 24).fill(level).buffer).toString('base64') });
+  for (let ms = 0; ms < 20000; ms += 200) echo(ms, ms + 200, ms >= 2000 && ms < 4000 ? 9000 : 1);
+  h.add({ type: 'session.input_transcript.delta', delta: 'Add a test.', start_ms: 2200, end_ms: 3600 });
+  h.add({ type: 'session.input_transcript.delta', delta: 'a brief outcome only', start_ms: 9000, end_ms: 9400 });
+  const request = h.request(9500)!;
+  assert.deepEqual(said(request), ['operator: Add a test.']); assert.deepEqual(request.unheard, ['a brief outcome only']);
+  h.markDelivered(request);
+  h.add({ type: 'session.input_transcript.delta', delta: 'the', start_ms: 15000, end_ms: 15200 });
+  assert.equal(h.request(15300), null, 'nothing heard, nothing to send');
+  h.add({ type: 'session.input_transcript.delta', delta: 'Ship it.', start_ms: 30000, end_ms: 30600 });
+  assert.deepEqual(said(h.request(30700)), ['operator: Ship it.'], 'without an echo of that stretch, the words are kept');
+  assert.equal(h.audible(3800, 4400), true, 'a second either side counts');
+});
+test('the nameless sub-agents of Claude\'s own helpers do not reach GPT Live; real sub-agents do', () => {
+  const stop = (agent_type: string) => contextData(claude, { name: 'SubagentStop', text: JSON.stringify({ hook_event_name: 'SubagentStop', agent_type, last_assistant_message: 'Summary: the user said "ship it".' }) });
+  assert.equal(stop(''), undefined);
+  assert.match(JSON.stringify(stop('general-purpose')), /ship it/);
+});
 test('known credentials and likely API keys are scrubbed', () => {
   assert.equal(redact('token abcdefghijk', ['abcdefghijk']), 'token [redacted]');
   assert.equal(redact('sk-proj-' + 'a'.repeat(32)), '[redacted API key]');

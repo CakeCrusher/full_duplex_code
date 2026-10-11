@@ -58,6 +58,7 @@ export class Mediator {
       // Once the operator pauses, Jev judges what they said.
       if (this.learner) { clearTimeout(this.judgeTimer); this.judgeTimer = setTimeout(() => this.judge(), 2500); }
     }
+    if (event.type === 'session.input_audio.append' && typeof event.audio === 'string') this.history.hearAudio(event);
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
       const fragment = this.history.add(event);
       this.publish({ type: 'caption', ...fragment, voiceSessionId: this.live.id, voiceStartedAt: this.live.startedAt });
@@ -78,7 +79,7 @@ export class Mediator {
   // What the operator said since the last judgment, with what came before as context.
   judge() {
     const fragments = this.history.fragments.filter(f => f.seq > this.judgedThrough);
-    const said = fragments.filter(f => f.role === 'operator').map(f => f.text).join('').trim();
+    const said = fragments.filter(f => f.role === 'operator' && this.history.audible(f.startMs, f.endMs) !== false).map(f => f.text).join('').trim();
     if (!said || !this.learner) return;
     this.judgedThrough = fragments.at(-1)!.seq;
     const firstOperator = fragments.find(f => f.role === 'operator')!.seq;
@@ -98,6 +99,7 @@ export class Mediator {
       this.context.add('thinking', nothingToSend(this.agent), delegationId);
       return;
     }
+    if (request.unheard) this.log({ type: 'bridge.unheard_transcript', delegationId, text: request.unheard });
     const content = this.clean(voiceRequest(request.utterances));
     try {
       this.deliver({ id: randomUUID(), content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now() });
