@@ -334,3 +334,16 @@ test('a tunnel public URL admits the page and /voice, but never hooks or the cha
   assert.equal(await open({ ...tunnel, Origin: 'https://evil.example' }), 'refused');
   assert.equal(await open({ ...tunnel, Authorization: `Bearer ${h.agentToken}` }, '/channel', []), 'refused', 'the channel is local only');
 });
+
+test('pages get agent observations without their binary data, which stays in the local log', async t => {
+  const h = await fixture(t);
+  const image = 'iVBORw0KGgo' + 'A'.repeat(1_400_000), published: any[] = [];
+  const publish = h.publish; h.publish = (event, page) => { published.push(event); publish(event, page); };
+  const hook = { session_id: h.sessionId, hook_event_name: 'PostToolUse', tool_name: 'Read', tool_response: { file: { base64: image } } };
+  assert.equal((await fetch(h.baseUrl + '/hook', { method: 'POST', headers: { Authorization: `Bearer ${h.agentToken}` }, body: JSON.stringify(hook) })).status, 200);
+  const observation = published.find(e => e.type === 'agent_observation');
+  assert.ok(observation.text.length < 2000, 'a 1.4 MB image does not reach the page');
+  assert.match(observation.text, /\[omitted: 1,400,011 chars\]/);
+  assert.equal(observation.raw, undefined);
+  assert.ok(h.observer.observations[0].text.includes(image), 'the local record keeps every byte');
+});

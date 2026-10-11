@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import type { AgentAdapter, AgentDefinition, AgentLaunch, VoiceRequest } from './adapter.ts';
 import type { AgentObserver } from './agent-observer.ts';
 import { redact } from './redact.ts';
+import { withoutBinary } from './context-rules.ts';
 import { UsageLedger } from './usage-ledger.ts';
 import { Timeline } from './timeline.ts';
 import { StatusLog, statusSnapshot, type BridgeEvent } from './status.ts';
@@ -60,7 +61,9 @@ export class Harness {
     const observer = this.observer = this.adapter.observations;
     observer.on('input', event => { this.log({ type: 'agent.input', ...event }); this.publish({ type: 'agent_input', ...event }); });
     observer.on('text', event => { this.log({ type: 'agent.text', ...event }); this.publish({ type: 'agent_text', ...event }); });
-    observer.on('observation', event => this.publish({ type: 'agent_observation', ...event }));
+    // Pages show observations without their binary data, which stays in the local log: an image
+    // read can be over a megabyte, and a page connection backed up with it looks like slow playback.
+    observer.on('observation', ({ raw, ...event }) => this.publish({ type: 'agent_observation', ...event, text: withoutBinary(event.text) }));
     observer.on('status', event => { this.log({ type: 'agent.status', ...event }); this.publish({ type: 'agent_status', ...event }); });
     observer.on('fault', error => this.fault(error));
     const { name, transport } = agent.profile;

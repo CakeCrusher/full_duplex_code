@@ -19,6 +19,9 @@ export function truncate(value: unknown, max: number): unknown {
   return [chars.slice(0, half).join(''), omitted(chars.length - 2 * half), chars.slice(chars.length - half).join('')].filter(Boolean).join(' … ');
 }
 
+/** Text without its binary data (images, PDFs, audio as base64), each run replaced by a note of its size. */
+export const withoutBinary = (text: string) => text.replace(EMBEDDED, bytes => omitted(bytes.length));
+
 // The two rules every agent shares, on each string of an event.
 function shared(agent: ObservedAgent, value: unknown): unknown {
   if (typeof value === 'string') {
