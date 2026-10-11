@@ -1,6 +1,5 @@
 import type { AgentProfile } from './adapter.ts';
 import { estimatedTokens, textFragments } from './text-fragments.ts';
-import { observationReference } from './prompts.ts';
 import type { Floor } from './floor.ts';
 
 export type AppendKind = 'thinking' | 'commentary' | 'instructions';
@@ -19,12 +18,11 @@ export class ContextQueue {
   queue: Fragment[] = [];
   inFlight = 0; inFlightTokens = 0; tokensPerSecond = 300;
   running = false; stopped = false;
-  reference: string;
   writeTimer: NodeJS.Timeout | null = null;
   /** While the operator holds the floor, agent context waits, at most `holdMs` from when it was queued. */
   floor?: Floor; holdMs: number;
   constructor(live: ContextSink, onError: (error: Error) => void, agent: { profile: AgentProfile }, { floor, holdMs = 10000 }: { floor?: Floor; holdMs?: number } = {}) {
-    this.live = live; this.onError = onError; this.agent = agent; this.reference = observationReference(agent); this.floor = floor; this.holdMs = holdMs;
+    this.live = live; this.onError = onError; this.agent = agent; this.floor = floor; this.holdMs = holdMs;
   }
   add(kind: AppendKind, text: string, delegationId: string | null = null, source = '') {
     if (this.stopped || !text) return;
@@ -32,7 +30,7 @@ export class ContextQueue {
     // requirement; overload decisions belong in the feed, before this queue.
     // Budget the label too; six-digit fragment counts leave room for any event
     // permitted by the local transport limit. Never split a Unicode character.
-    const prefix = (kind === 'thinking' ? this.reference : '') + (source ? `[${source}; part 999999/999999]\n` : '');
+    const prefix = source ? `[${source}; part 999999/999999]\n` : '';
     const parts = textFragments(text, prefix);
     const queuedAt = Date.now();
     for (const [index, content] of parts.entries()) this.queue.push({ kind, content, delegationId, source: source ? `[${source}; part ${index + 1}/${parts.length}]\n` : '', queuedAt });
@@ -59,7 +57,7 @@ export class ContextQueue {
       this.inFlight++; this.running = true;
       // Each append can be a fragment of code or first-person assistant text.
       // Keep its source clear even when the observation header is far behind.
-      const framed = kind === 'thinking' ? this.reference + source + content : content;
+      const framed = source + content;
       const tokens = estimatedTokens(framed); this.inFlightTokens += tokens;
       this.live.append(kind, framed, delegationId).then(ack => {
         const { start_ms, end_ms } = (ack ?? {}) as { start_ms?: number; end_ms?: number };

@@ -1,7 +1,6 @@
 import test from 'node:test';
 import { textFragments, estimatedTokens } from '../src/core/text-fragments.ts';
 import assert from 'node:assert/strict';
-import { observationReference } from '../src/core/prompts.ts';
 import { ContextQueue } from '../src/core/context-queue.ts';
 import { Floor } from '../src/core/floor.ts';
 import { LineReader } from '../src/core/line-reader.ts';
@@ -11,7 +10,6 @@ import { startupHistory } from '../src/core/startup-history.ts';
 import { contextData } from '../src/core/context-rules.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 // Every observation append starts with this label.
-const REFERENCE = observationReference(claude);
 
 test('base64 is omitted wherever it appears, for any agent; ordinary text of any length is not', () => {
   const screenshot = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: '/9j/4AAQ'.repeat(5000) } };
@@ -62,8 +60,7 @@ test('context sends every fragment in order before any API acknowledgment', asyn
   assert.ok(sent.length>8);assert.equal(queue.queue.length,0);assert.equal(queue.inFlight,sent.length);
   for(const resolve of pending.reverse())resolve();
   await new Promise(resolve=>setImmediate(resolve));
-  assert.ok(sent.every(text=>text.startsWith(REFERENCE)));
-  assert.equal(sent.map(text=>text.slice(REFERENCE.length)).join(''),source+'new observation');
+  assert.equal(sent.join(''),source+'new observation','agent context goes as it is, with no stamp on each part');
   assert.equal(queue.running,false);assert.equal(queue.inFlight,0);assert.deepEqual(faults,[]);
 });
 
@@ -126,7 +123,7 @@ test('out-of-order acknowledgments retain send order and a rejection stops subse
   const queue=new ContextQueue(live,error=>faults.push(error.message),claude);
   for(const text of ['one','two','three','four'])queue.add('thinking',text);
   pending[1].resolve();await new Promise(resolve=>setImmediate(resolve));
-  assert.deepEqual(sent.map(s=>s.slice(REFERENCE.length)),['one','two','three','four']);
+  assert.deepEqual(sent,['one','two','three','four']);
   assert.equal(queue.inFlight,3);
   pending[0].reject(new Error('rejected first fragment'));await new Promise(resolve=>setImmediate(resolve));
   queue.add('thinking','five');pending[2].resolve();pending[3].resolve();await new Promise(resolve=>setImmediate(resolve));
@@ -207,7 +204,7 @@ test('every fragment names its originating hook and reconstructs the full UTF-8 
   queue.add('thinking',raw,null,'Claude PostToolUse');
   await new Promise(resolve=>setImmediate(resolve));
   assert.ok(sent.length>1);
-  assert.ok(sent.every(e=>e.kind==='thinking'&&e.text.startsWith(REFERENCE+'[Claude PostToolUse; part ')));
-  assert.equal(sent.map(e=>e.text.slice(REFERENCE.length).replace(/^\[Claude PostToolUse; part \d+\/\d+\]\n/,'')).join(''),raw);
+  assert.ok(sent.every(e=>e.kind==='thinking'&&e.text.startsWith('[Claude PostToolUse; part ')));
+  assert.equal(sent.map(e=>e.text.replace(/^\[Claude PostToolUse; part \d+\/\d+\]\n/,'')).join(''),raw);
   queue.stop();
 });

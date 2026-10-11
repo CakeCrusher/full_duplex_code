@@ -18,7 +18,7 @@ function fixture(t: TestContext, state = 'active', observer = new ClaudeObserver
   return { live, observer, mediator, appends, deliveries, hook };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
-const unframe = (text: string) => text.replace(/^\[[^\n]+\]\n\[Claude [^\n]+\]\n/, '');
+const unframe = (text: string) => text.replace(/^\[Claude [^\n]+\]\n/, '');
 const content = (f: { appends: Append[] }, kind?: string) => f.appends.filter(e => !kind || e.kind === kind).map(e => e.kind === 'thinking' ? unframe(e.content) : e.content).join('');
 
 test('hooks are primary: all raw hooks, including assistant batches, are quiet thinking', async t => {
