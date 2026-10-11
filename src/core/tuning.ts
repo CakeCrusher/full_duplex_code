@@ -42,7 +42,7 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     levels: [
     { value: 1000, consequence: 'Updates resume 1 s after the operator stops: fresher, but they can land while GPT Live decides whether to pass a request on, which dropped requests in live tests.' },
     { value: 2000, consequence: 'The measured balance (default): 31 of 32 requests reached the agent on time in live tests.' },
-    { value: 3000, consequence: 'For operators who pause mid-thought or ask not to be interrupted: updates wait 3 s after they stop.' },
+    { value: 3000, consequence: 'Agent updates, which can prompt GPT Live to speak up, wait 3 s after the operator stops: fewer interruptions for operators who pause mid-thought, think aloud, or ask not to be cut off.' },
   ] },
   pauseMs: { min: 0, max: 2000, describe:
     'Updates may land while the operator is actively talking and wait only once they pause this long (ms). 0 holds updates for the whole time they talk: on 54 real sessions 0.9% of batches landed while they spoke and 1.6% in the second after. 700 lets 13.6% land mid-speech, which a full-duplex model handles, but 7.7% landed in the risky second after.',
