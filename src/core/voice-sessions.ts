@@ -44,6 +44,7 @@ export class VoiceSessions {
   async learn({ text, ...judged }: LearnedInstruction) {
     const id = `I${++this.learnedCount}`;
     this.bridge.log({ type: 'instruction.learned', id, text, ...judged });
+    this.bridge.learned.add({ session: this.bridge.sessionId, id, text, scope: judged.scope });
     const item = await this.appendInstruction(`${id}: ${text}`, id).catch(error => { this.bridge.log({ type: 'instruction.error', id, message: (error as Error).message }); return undefined; });
     if (item) this.bridge.publish({ type: 'instruction_learned', id, text, state: item.state });
   }
@@ -53,6 +54,7 @@ export class VoiceSessions {
     if (index < 0) return;
     const [item] = this.additionalInstructions.splice(index, 1), live = this.live;
     this.bridge.log({ type: 'instruction.removed', id: item.learned, text: item.text });
+    this.bridge.learned.remove({ session: this.bridge.sessionId, id: item.learned! }); this.bridge.retune();
     this.bridge.publish({ type: 'instruction_removed', id: item.learned }); this.bridge.publish(this.bridge.status());
     if (live?.state === 'active' && item.appended) await live.append('instructions', disregardInstruction(item.learned!, item.text.replace(`${item.learned}: `, ''))).catch(error => this.bridge.fault(error as Error));
   }
@@ -66,7 +68,7 @@ export class VoiceSessions {
     if (['new', 'connecting', 'closing'].includes(live?.state as string)) throw new Error('Wait for the voice connection to settle, then append your instruction.');
     const item: Instruction = { id: randomUUID(), text: text as string, state: live?.state === 'active' ? 'pending' : 'next_session', sessionId: live?.state === 'active' ? live.id : undefined, learned };
     this.additionalInstructions.push(item);
-    log({ type: 'voice.instruction', ...item }); publish(this.bridge.status());
+    log({ type: 'voice.instruction', ...item }); publish(this.bridge.status()); this.bridge.retune();
     if (live?.state !== 'active') return item;
     try {
       await live.append('instructions', text as string);

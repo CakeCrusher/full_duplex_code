@@ -52,6 +52,12 @@ export class Mediator {
     this.onLive = event => this.liveEvent(event);
     live.on('event', this.onLive); observer.on('observation', this.onObservation);
   }
+  /** New settings take effect at once: the floor, the hold and the compaction threshold. */
+  retune(tuning: Tuning) {
+    Object.assign(this.floor, { thinkMs: tuning.thinkMs, pauseMs: tuning.pauseMs });
+    if (this.feed.hold) this.feed.hold = { firstMs: tuning.holdFirstMs, perUpdateMs: tuning.holdPerUpdateMs, longestMs: tuning.holdLongestMs };
+    this.feed.compactTokens = tuning.compactTokens; this.context.holdMs = tuning.holdLongestMs;
+  }
   fault(error: Error) { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: error.message }); }
   liveEvent(event: any) {
     if (event.type === 'session.started') { this.feed.flush(); this.context.pump(); }

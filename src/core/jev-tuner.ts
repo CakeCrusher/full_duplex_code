@@ -1,0 +1,40 @@
+// Jev tuning the companion, optional: on with TYPESAFE_API_KEY and FDC_JEV_TUNING=1.
+// Whenever the operator's instructions change (one Jev learned, one they added or
+// removed), Jev reads them, with the instructions it learned in earlier sessions,
+// and picks a level for each low-level setting (tuning.ts) from what that level is
+// measured to cost and buy. The bridge applies the choice at once and logs it.
+import { KNOBS, type Tuning } from './tuning.ts';
+
+type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
+export interface TuningChange { name: keyof Tuning; from: number; to: number }
+
+const URL = 'https://api.typesafe.ai/v1/systemone';
+const SETTING = "Voice coding session: the operator talks to a voice companion (GPT Live) that answers them, reports on a coding agent's work and passes their requests to the agent. These are the companion's low-level settings for when and how the agent's updates reach it. The core principles, in order: 1 the operator comes first (never lose a work request, don't talk over them); 2 answer the operator's questions instead of delegating them; 3 synthesis, not narration; 4 know as much as possible; 5 fresh enough.";
+
+export class JevTuner {
+  apiKey: string; fetch: Fetch;
+  log: (event: Record<string, unknown>) => void;
+  constructor({ apiKey, log, fetch = globalThis.fetch as unknown as Fetch }: { apiKey: string; log: (event: Record<string, unknown>) => void; fetch?: Fetch }) {
+    this.apiKey = apiKey; this.log = log; this.fetch = fetch;
+  }
+  /** The settings that fit the operator's instructions; a setting Jev gives no valid level for keeps its value. */
+  async choose({ instructions, earlier, current }: { instructions: string[]; earlier: string[]; current: Tuning }): Promise<{ tuning: Tuning; changes: TuningChange[] }> {
+    const questions = Object.fromEntries(Object.entries(KNOBS).map(([name, knob]) => [name, {
+      type: 'choice',
+      instructions: `${knob.describe} Which level fits the operator's instructions and preferences best? Choose the default unless they ask for something this setting changes.`,
+      criteria: Object.fromEntries(knob.levels.map(level => [`level_${level.value}`, level.consequence])),
+    }]));
+    const state = { setting: SETTING, operator_instructions: instructions.join('\n').slice(0, 4000) || '(none)', earlier_sessions: earlier.join('\n').slice(0, 4000) || '(none)', current_settings: JSON.stringify(current) };
+    const response = await this.fetch(URL, { method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'jev-latest', state, questions }), signal: AbortSignal.timeout(8000) });
+    if (!response.ok) throw new Error(`Jev returned HTTP ${response.status}`);
+    const { answers } = await response.json();
+    const tuning = { ...current }, changes: TuningChange[] = [];
+    for (const [name, knob] of Object.entries(KNOBS) as [keyof Tuning, typeof KNOBS[keyof Tuning]][]) {
+      const value = Number(String(answers?.[name]?.choice ?? '').replace(/^level_/, ''));
+      if (!knob.levels.some(level => level.value === value) || value === current[name]) continue;
+      changes.push({ name, from: current[name], to: value }); tuning[name] = value;
+    }
+    this.log({ type: 'tuning.judged', answers, changes });
+    return { tuning, changes };
+  }
+}

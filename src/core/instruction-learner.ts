@@ -6,6 +6,8 @@
 // recorded utterances, it added 20; checked against the 291 labeled by hand, it
 // added 14 of 24 lasting instructions, 5 borderline ones and nothing else.
 
+import fs from 'node:fs';
+
 export interface LearnedInstruction { text: string; scope: 'session' | 'always'; behave: number; design: number; lasting: string }
 export interface Utterances { utterance: string; previous?: string; companion?: string }
 type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
@@ -64,5 +66,33 @@ export class InstructionLearner {
     const instruction: LearnedInstruction = { text: kept === text ? text : `${kept.trim()}…`, scope: lasting === 'always' ? 'always' : 'session', behave, design, lasting };
     this.onLearn(instruction);
     return instruction;
+  }
+}
+
+/**
+ * The instructions Jev learned, across sessions and companions, so that a later session can take
+ * the operator's preferences into account (Jev's tuning). Owner-only; a removal is recorded too.
+ */
+export class LearnedLog {
+  file: string;
+  constructor(file: string) { this.file = file; }
+  add(entry: { session?: string; id: string; text: string; scope: string }) { this.write({ ...entry }); }
+  remove(entry: { session?: string; id: string }) { this.write({ ...entry, removed: true }); }
+  write(entry: Record<string, unknown>) {
+    try { fs.appendFileSync(this.file, JSON.stringify({ at: Date.now(), ...entry }) + '\n', { mode: 0o600 }); } catch {}
+  }
+  /** The newest instructions still in force from other sessions than this one. */
+  earlier(session?: string, limit = 30): string[] {
+    let lines: string[] = [];
+    try { lines = fs.readFileSync(this.file, 'utf8').split('\n').filter(Boolean); } catch { return []; }
+    const kept = new Map<string, string>();
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line), key = `${entry.session}:${entry.id}`;
+        if (entry.session === session) continue;
+        if (entry.removed) kept.delete(key); else if (typeof entry.text === 'string') kept.set(key, entry.text);
+      } catch {}
+    }
+    return [...kept.values()].slice(-limit);
   }
 }
