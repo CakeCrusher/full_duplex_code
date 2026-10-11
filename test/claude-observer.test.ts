@@ -49,6 +49,7 @@ function transcriptRecords() {
     { type: 'user', uuid: 'meta', isMeta: true, message: { content: 'internal metadata' } },
     { type: 'user', uuid: 'foreign', sessionId: 'foreign', message: { content: 'another session' } },
     { type: 'assistant', isSidechain: true, message: { id: 'subagent', content: [{ type: 'text', text: 'another agent' }] } },
+    { type: 'user', uuid: 'compact', isCompactSummary: true, message: { content: 'This session is being continued from a previous conversation. The user said: My codename is ORCHID' } },
     { type: 'user', uuid: 'u2', message: { content: [{ type: 'text', text: 'My codename is ORCHID' }] } },
     { type: 'assistant', message: { id: 'a2', content: [{ type: 'text', text: 'ACK' }] } },
   ];

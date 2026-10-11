@@ -75,7 +75,8 @@ export class ClaudeObserver extends AgentObserver {
     // Claude stores channel-delivered operator prompts as metadata. They still
     // belong to this conversation; exclude only other internal metadata.
     const channelInput = event.type === 'user' && event.origin?.kind === 'channel';
-    if (!['user', 'assistant'].includes(event.type) || event.isSidechain || (event.isMeta && !channelInput) || (event.sessionId && event.sessionId !== this.sessionId)) return;
+    // Claude's context summary is saved as a user record; it restates the conversation, the operator's words included.
+    if (!['user', 'assistant'].includes(event.type) || event.isSidechain || event.isCompactSummary || (event.isMeta && !channelInput) || (event.sessionId && event.sessionId !== this.sessionId)) return;
     const content = event.message?.content;
     const blocks: any[] = typeof content === 'string' ? [{ type: 'text', text: content }] : content ?? [];
     for (const [index, block] of blocks.entries()) {
