@@ -67,15 +67,16 @@ async function openPage(t: TestContext, h: Harness) {
 }
 const texts = (input: any[]) => input.map(m => [m.role, m.content[0].text]);
 
-test('Resume forks a finalized stored session; otherwise it seeds the conversation; Start fresh does neither', () => {
+test('Resume forks a stored session (a dropped one once OpenAI has stored it); otherwise it seeds the conversation; Start fresh does neither', () => {
   const now = Date.now(), turns = [{ role: 'operator' as const, text: 'Hi' }];
   const stored = { liveSessionId: 'live_1', stored: true, finalized: true, endedAt: now - 1000, turns };
   assert.equal(planFor(stored, 'resume'), 'fork');
   assert.equal(planFor(stored, 'fresh'), 'fresh');
-  assert.equal(planFor({ ...stored, finalized: false }, 'resume'), 'seed', 'a dropped session has no finalized recording');
+  assert.equal(planFor({ ...stored, finalized: false }, 'resume'), 'seed', 'just dropped: OpenAI is still storing it');
+  assert.equal(planFor({ ...stored, finalized: false, endedAt: now - 10000 }, 'resume'), 'fork', 'a dropped stored session is forkable seconds later');
   assert.equal(planFor({ ...stored, stored: false }, 'resume'), 'seed', 'storage off or refused');
   assert.equal(planFor({ ...stored, endedAt: now - RECORDING_MS - 1 }, 'resume'), 'seed', 'recordings are kept 30 days');
-  assert.equal(planFor({ ...stored, finalized: false, turns: [] }, 'resume'), 'fresh', 'nothing to resume');
+  assert.equal(planFor({ ...stored, stored: false, turns: [] }, 'resume'), 'fresh', 'nothing to resume');
   assert.equal(forkable({ ...stored, liveSessionId: undefined }), false);
 });
 

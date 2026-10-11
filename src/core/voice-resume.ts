@@ -19,8 +19,11 @@ export const RECORDING_MS = 30 * 24 * 60 * 60 * 1000;
 export const INPUT_MESSAGES = 128, INPUT_TOKENS = 8192;
 const MESSAGE_TOKENS = 8, MARGIN_TOKENS = 256, TURN_CHARS = 4000, KEPT_TURNS = 256;
 
+// A stored session that dropped instead of closing can be forked too, once OpenAI has finished
+// storing it: a probe's fork failed 0.35 s after the drop ("not found") and worked about 6 s after.
+export const DROPPED_FORK_MS = 8000;
 export const forkable = (record: ResumeRecord, now = Date.now()) =>
-  Boolean(record.liveSessionId && record.stored && record.finalized && record.endedAt && now - record.endedAt < RECORDING_MS);
+  Boolean(record.liveSessionId && record.stored && record.endedAt && now - record.endedAt < RECORDING_MS && (record.finalized || now - record.endedAt >= DROPPED_FORK_MS));
 export const planFor = (record: ResumeRecord, mode: 'resume' | 'fresh'): ResumePlan =>
   mode === 'fresh' ? 'fresh' : forkable(record) ? 'fork' : record.turns.length ? 'seed' : 'fresh';
 
