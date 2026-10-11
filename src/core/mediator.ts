@@ -4,7 +4,8 @@ import type { Observation, VoiceRequest } from './adapter.ts';
 import type { AgentObserver, ObservedAgent } from './agent-observer.ts';
 import { ContextQueue, type ContextSink } from './context-queue.ts';
 import { VoiceHistory } from './voice-history.ts';
-import { ObservationFeed } from './observation-feed.ts';
+import { ObservationFeed, type Hold } from './observation-feed.ts';
+import { Floor, operatorSpeaking, type MicrophoneLevel } from './floor.ts';
 import { nothingToSend, queueFailed, sessionEndRequest, voiceRequest } from './prompts.ts';
 
 /** The part of a Live session the mediator uses. */
@@ -24,21 +25,23 @@ export class Mediator {
   clean: (text: string) => string;
   history = new VoiceHistory(); seenDelegations = new Set<string>(); timers = new Set<NodeJS.Timeout>();
   context: ContextQueue; feed: ObservationFeed;
+  /** Whether the operator is talking: agent updates wait for them. */
+  floor = new Floor();
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
-  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, coalesceMs }: {
+  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, hold }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
-    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; coalesceMs?: number;
+    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; hold?: Hold | null;
   }) {
     this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean;
     this.agent = agent;
     this.context = new ContextQueue(live, error => {
       this.fault(error);
       live.close(`${this.agent.profile.name} context delivery failed`);
-    }, this.agent);
+    }, this.agent, { floor: this.floor });
     // Earlier work reaches Live only through the bounded startup history; the feed
     // sends only observations that arrive from now on.
-    this.feed = new ObservationFeed(this.context, log, { agent: this.agent, coalesceMs });
+    this.feed = new ObservationFeed(this.context, log, { agent: this.agent, hold, floor: this.floor });
     this.onObservation = event => this.feed.add(event);
     this.onLive = event => this.liveEvent(event);
     live.on('event', this.onLive); observer.on('observation', this.onObservation);
@@ -46,6 +49,8 @@ export class Mediator {
   fault(error: Error) { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: error.message }); }
   liveEvent(event: any) {
     if (event.type === 'session.started') { this.feed.flush(); this.context.pump(); }
+    // GPT Live's transcript of the operator also shows they are talking, for pages that send no levels.
+    if (event.type === 'session.input_transcript.delta' && String(event.delta ?? '').trim()) this.floor.hear();
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
       const fragment = this.history.add(event);
       this.publish({ type: 'caption', ...fragment, voiceSessionId: this.live.id, voiceStartedAt: this.live.startedAt });
@@ -63,6 +68,8 @@ export class Mediator {
       this.schedule(attempt, 650);
     }
   }
+  /** The microphone level of the page this voice session listens to. */
+  hear(level: MicrophoneLevel) { if (operatorSpeaking(level)) this.floor.hear(); }
   schedule(fn: () => void, ms: number) { const timer = setTimeout(() => { this.timers.delete(timer); fn(); }, ms); this.timers.add(timer); }
   delegate(delegationId: string, offsetMs: number) {
     if (this.live.state !== 'active') return;

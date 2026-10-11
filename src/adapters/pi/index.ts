@@ -53,6 +53,7 @@ export const pi: AgentDefinition = {
   readArgs: readPiArgs,
   observationModes: [],
   receivedRequest,
+  toolCall: (event: string, data: any) => event === 'tool_execution_end' && typeof data?.toolName === 'string' ? data.toolName : undefined,
   // What the extension hands Pi: sendUserMessage(text, { deliverAs }).
   wire: (request: VoiceRequest) => ({ text: turnText(request), deliverAs: 'steer' }),
   create: session => new PiAdapter(session),

@@ -51,6 +51,7 @@ export const claude: AgentDefinition = {
   readArgs: readClaudeArgs,
   observationModes: ['hooks', 'transcript'],
   receivedRequest,
+  toolCall: (event: string, data: any) => /^PostToolUse(Failure)?$/.test(event) && typeof data?.tool_name === 'string' ? data.tool_name : undefined,
   wire: (request: VoiceRequest) => channelNotification(request),
   create: session => new ClaudeAdapter(session),
   doctor,

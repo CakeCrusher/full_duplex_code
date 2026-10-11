@@ -74,6 +74,7 @@ export const codex: AgentDefinition = {
   readArgs: readCodexArgs,
   observationModes: [],
   receivedRequest,
+  toolCall: (event: string, data: any) => /^PostToolUse(Failure)?$/.test(event) && typeof data?.tool_name === 'string' ? data.tool_name : undefined,
   wire: (request: VoiceRequest) => ({ input: turnInput(request) }),
   create: session => new CodexAdapter(session),
   doctor,

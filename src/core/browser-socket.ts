@@ -61,6 +61,8 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
         && Math.abs(event.at - Date.now()) < 5000 && event.durationMs > 0 && event.durationMs <= 500
         && event.inputRms >= 0 && event.inputRms <= 1 && event.outputRms >= 0 && event.outputRms <= 1) {
         bridge.log({ ...event, liveRun: bridge.live?.reservation, backlogMs: Number.isFinite(event.backlogMs) ? event.backlogMs : undefined });
+        // The voice page's microphone tells the core when the operator is talking.
+        if (page === bridge.voiceSessions.page) bridge.voiceSessions.mediator?.hear(event);
         const items = bridge.timeline.add(event);
         if (items.length) pages.broadcast({ type: 'timeline_update', items });
       }

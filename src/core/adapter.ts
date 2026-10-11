@@ -121,6 +121,8 @@ export interface AgentDefinition {
   observationModes: readonly string[];
   /** Finds the voice request inside a prompt the agent received, if there is one. */
   receivedRequest(prompt: string): ReceivedRequest | undefined;
+  /** The tool whose call an event reports finished (by event name and the event's context data), so a burst of tool work can be summed up by tool. */
+  toolCall?(event: string, data: any): string | undefined;
   /** The exact message deliver() sends for a request, shown in the request inspector. */
   wire(request: VoiceRequest): unknown;
   create(session: AgentSession): AgentAdapter;

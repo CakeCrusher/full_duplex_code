@@ -3,7 +3,8 @@ import type { Observation, ObservationKind } from './adapter.ts';
 import type { ObservedAgent } from './agent-observer.ts';
 import { estimatedTokens } from './text-fragments.ts';
 import { contextData } from './context-rules.ts';
-import { feedLabel } from './prompts.ts';
+import { feedLabel, toolWorkLine } from './prompts.ts';
+import type { Floor } from './floor.ts';
 import type { AppendKind } from './context-queue.ts';
 
 /** What the feed needs from an observation. */
@@ -56,35 +57,77 @@ export class ObservationProjector {
 /** Where the feed sends prepared context. */
 export interface ContextTarget { add(kind: AppendKind, text: string, delegationId?: string | null, source?: string): void }
 
-// Collects observations briefly, then sends them to the context queue in order.
+/**
+ * How long a burst of updates is collected before it goes to Live as one batch:
+ * the first update waits `firstMs`, each further one adds `perUpdateMs`, and the
+ * batch never waits longer than `longestMs`. While the operator holds the floor
+ * the batch keeps waiting, within the same limit. Urgent kinds skip the wait for
+ * more updates, but not the operator.
+ */
+export interface Hold { firstMs: number; perUpdateMs: number; longestMs: number }
+export const SOFT_HOLD: Hold = { firstMs: 1000, perUpdateMs: 1000, longestMs: 10000 };
+// Tool work in one batch above this many tokens becomes a single line saying what
+// ran: Live learns that the work happened, and the agent's own words, failures,
+// prompts and turn ends still arrive whole.
+const COMPACT_TOKENS = 900;
+
+// Collects observations into batches, then sends them to the context queue in order.
 export class ObservationFeed {
   context: ContextTarget;
   log: (event: Record<string, unknown>) => void;
-  coalesceMs: number;
+  hold: Hold | null;
+  floor?: Floor;
+  agent: ObservedAgent;
   projector: ObservationProjector;
   label: string;
-  pending: (Projection & { receivedAt: number })[] = [];
+  pending: (Projection & { kind: string; receivedAt: number })[] = [];
+  first = 0; due = 0;
   stopped = false;
   timer: NodeJS.Timeout | null = null;
-  constructor(context: ContextTarget, log: (event: Record<string, unknown>) => void, { agent, coalesceMs = 250 }: { agent: ObservedAgent; coalesceMs?: number }) {
-    this.context = context; this.log = log; this.coalesceMs = coalesceMs;
+  constructor(context: ContextTarget, log: (event: Record<string, unknown>) => void, { agent, hold = SOFT_HOLD, floor }: { agent: ObservedAgent; hold?: Hold | null; floor?: Floor }) {
+    this.context = context; this.log = log; this.hold = hold; this.floor = floor; this.agent = agent;
     this.projector = new ObservationProjector(agent); this.label = feedLabel(agent);
   }
   add(observation: FeedObservation) {
     if (this.stopped) return;
     const projection = this.projector.project(observation);
     if (!projection) return;
-    this.pending.push({ ...projection, receivedAt: Date.now() });
-    if (!this.timer) this.timer = setTimeout(() => this.flush(), this.coalesceMs);
-    if (!this.coalesceMs || URGENT.has(observation.kind)) this.flush();
+    const now = Date.now(), { firstMs, perUpdateMs, longestMs } = this.hold ?? { firstMs: 0, perUpdateMs: 0, longestMs: 0 };
+    if (!this.pending.length) { this.first = now; this.due = now + firstMs; }
+    else this.due = Math.min(this.first + longestMs, this.due + perUpdateMs);
+    if (URGENT.has(observation.kind)) this.due = now;
+    this.pending.push({ ...projection, kind: observation.kind, receivedAt: now });
+    this.wait();
+  }
+  // Sends the batch once it is due and the operator has finished, or at the longest hold.
+  wait() {
+    if (this.timer) clearTimeout(this.timer); this.timer = null;
+    if (this.stopped || !this.pending.length) return;
+    const now = Date.now(), last = this.first + (this.hold?.longestMs ?? 0);
+    if (now < this.due) { this.timer = setTimeout(() => this.wait(), this.due - now); return; }
+    if (this.floor?.held(now) && now < last) { this.timer = setTimeout(() => this.wait(), Math.min(250, last - now)); return; }
+    this.flush();
   }
   flush() {
     if (this.timer) clearTimeout(this.timer); this.timer = null;
     if (this.stopped || !this.pending.length) return;
-    const records = this.pending.splice(0), content = records.map(record => record.text).join('\n');
-    this.log({ type: 'context.prepared', sources: records.map(({ text, ...source }) => source), content });
+    const records = this.pending.splice(0), tools = records.filter(record => record.kind === 'tool');
+    let lines = records.map(record => record.text);
+    if (tools.reduce((sum, record) => sum + record.tokens, 0) > COMPACT_TOKENS) {
+      const at = records.indexOf(tools[0]);
+      lines = records.flatMap((record, i) => i === at ? [toolWork(this.agent, tools)] : record.kind === 'tool' ? [] : [record.text]);
+    }
+    const content = lines.join('\n');
+    this.log({ type: 'context.prepared', sources: records.map(({ text, ...source }) => source), content, compacted: lines.length < records.length ? tools.length : undefined });
     // All observations remain in order. In-flight ACKs do not stall new events.
     this.context.add('thinking', content, null, this.label);
   }
   stop() { this.stopped = true; if (this.timer) clearTimeout(this.timer); this.pending.length = 0; }
+}
+
+// One line for a batch of tool work: the finished calls by tool, when the adapter names them.
+function toolWork(agent: ObservedAgent, tools: { name: string; text: string }[]) {
+  const names = tools.map(record => agent.toolCall?.(record.name, JSON.parse(record.text).data)).filter((name): name is string => !!name);
+  const counts = [...names.reduce((map, name) => map.set(name, (map.get(name) ?? 0) + 1), new Map<string, number>())];
+  return toolWorkLine(agent, counts.length ? counts.map(([name, n]) => `${n} ${name} call${n > 1 ? 's' : ''}`).join(', ') : `${tools.length} tool events`);
 }

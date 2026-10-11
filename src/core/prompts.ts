@@ -48,6 +48,8 @@ export const historyOmitted = ({ profile: { name } }: Agent, omitted: number) =>
 
 // Labels on context appends.
 export const feedLabel = ({ profile: { name, eventsWord } }: Agent) => `${name} ${eventsWord}`;
+// A burst of tool work, summed up in one line (calls are counted by tool when the adapter names them).
+export const toolWorkLine = ({ profile: { name } }: Agent, work: string) => `[${name} made ${work}; their details are omitted]`;
 export const observationReference = ({ profile: { turnEnd } }: { profile: { turnEnd: string } }) =>
   `[Silent reference, not speech. Do not narrate work in progress. Answer the operator first; consider a brief outcome only after the main ${turnEnd}.]\n`;
 

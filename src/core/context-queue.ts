@@ -1,6 +1,7 @@
 import type { AgentProfile } from './adapter.ts';
 import { estimatedTokens, textFragments } from './text-fragments.ts';
 import { observationReference } from './prompts.ts';
+import type { Floor } from './floor.ts';
 
 export type AppendKind = 'thinking' | 'commentary' | 'instructions';
 /** The part of a Live session the queue writes to. */
@@ -9,7 +10,7 @@ export interface ContextSink {
   ws?: { bufferedAmount: number };
   append(kind: AppendKind, content: string, delegationId?: string | null): Promise<unknown>;
 }
-interface Fragment { kind: AppendKind; content: string; delegationId: string | null; source: string }
+interface Fragment { kind: AppendKind; content: string; delegationId: string | null; source: string; queuedAt: number }
 
 export class ContextQueue {
   live: ContextSink;
@@ -20,7 +21,11 @@ export class ContextQueue {
   running = false; stopped = false;
   reference: string;
   writeTimer: NodeJS.Timeout | null = null;
-  constructor(live: ContextSink, onError: (error: Error) => void, agent: { profile: AgentProfile }) { this.live = live; this.onError = onError; this.agent = agent; this.reference = observationReference(agent); }
+  /** While the operator holds the floor, agent context waits, at most `holdMs` from when it was queued. */
+  floor?: Floor; holdMs: number;
+  constructor(live: ContextSink, onError: (error: Error) => void, agent: { profile: AgentProfile }, { floor, holdMs = 10000 }: { floor?: Floor; holdMs?: number } = {}) {
+    this.live = live; this.onError = onError; this.agent = agent; this.reference = observationReference(agent); this.floor = floor; this.holdMs = holdMs;
+  }
   add(kind: AppendKind, text: string, delegationId: string | null = null, source = '') {
     if (this.stopped || !text) return;
     // Preserve the prepared representation. Chunking is an API transport
@@ -29,7 +34,8 @@ export class ContextQueue {
     // permitted by the local transport limit. Never split a Unicode character.
     const prefix = (kind === 'thinking' ? this.reference : '') + (source ? `[${source}; part 999999/999999]\n` : '');
     const parts = textFragments(text, prefix);
-    for (const [index, content] of parts.entries()) this.queue.push({ kind, content, delegationId, source: source ? `[${source}; part ${index + 1}/${parts.length}]\n` : '' });
+    const queuedAt = Date.now();
+    for (const [index, content] of parts.entries()) this.queue.push({ kind, content, delegationId, source: source ? `[${source}; part ${index + 1}/${parts.length}]\n` : '', queuedAt });
     this.pump();
   }
   pump() {
@@ -40,6 +46,13 @@ export class ContextQueue {
     while (!this.stopped && this.queue.length && this.live.state === 'active') {
       if ((this.live.ws?.bufferedAmount ?? 0) > 64 * 1024) {
         this.writeTimer = setTimeout(() => this.pump(), 10);
+        return;
+      }
+      // Agent context, including the rest of a batch already going in, waits for the
+      // operator to finish. Answers about a delegation do not.
+      const next = this.queue[0];
+      if (next.kind === 'thinking' && next.delegationId === null && this.floor?.held() && Date.now() < next.queuedAt + this.holdMs) {
+        this.writeTimer = setTimeout(() => this.pump(), 100);
         return;
       }
       const { kind, content, delegationId, source = '' } = this.queue.shift()!;

@@ -12,7 +12,7 @@ function fixture(t: TestContext, state = 'active', observer = new ClaudeObserver
   const live: any = new EventEmitter(); live.state = state; live.close = () => { live.state = 'closed'; };
   const appends: Append[] = []; live.append = async (kind: string, content: string, delegationId?: string | null) => { appends.push({ kind, content, delegationId }); };
   const deliveries: VoiceRequest[] = [];
-  const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, coalesceMs: 0 });
+  const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null });
   t.after(() => { mediator.stop(); observer.close(); });
   const hook = (event: Record<string, any>) => observer.hook({ session_id: 'test', ...event });
   return { live, observer, mediator, appends, deliveries, hook };

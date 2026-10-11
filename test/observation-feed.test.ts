@@ -2,12 +2,14 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ContextRule, TurnState } from '../src/core/adapter.ts';
 import { ObservationProjector, ObservationFeed, type ContextTarget } from '../src/core/observation-feed.ts';
+import { Floor } from '../src/core/floor.ts';
 import { contextData, truncate } from '../src/core/context-rules.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { codex } from '../src/adapters/codex/index.ts';
 import { pi } from '../src/adapters/pi/index.ts';
 import { nextTurnState, observationKind } from '../src/adapters/claude/observer.ts';
 import * as codexEvents from '../src/adapters/codex/observer.ts';
+import * as piEvents from '../src/adapters/pi/observer.ts';
 
 // Hooks as each adapter observes them. A new projector or feed starts from an
 // unknown turn, as each one did when it tracked the turn itself.
@@ -197,16 +199,74 @@ test('pending acknowledgments do not discard assistant paragraphs or delay new h
   }
 });
 
-test('ordinary hooks wait at most the collection window; urgent hooks flush without that wait', t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+test('a burst waits a second, a second more per update, never past ten seconds; urgent hooks skip that wait', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const f = fixture(t);
   f.feed.add(observation('PreToolUse', { tool_name: 'Read' }));
-  t.mock.timers.tick(249); assert.equal(f.sent.length, 0);
+  t.mock.timers.tick(999); assert.equal(f.sent.length, 0);
   t.mock.timers.tick(1); assert.equal(f.sent.length, 1);
+  f.feed.add(observation('PreToolUse', { tool_name: 'Read' }));
+  t.mock.timers.tick(500); f.feed.add(observation('PostToolUse', { tool_name: 'Read' }));
+  t.mock.timers.tick(1499); assert.equal(f.sent.length, 1, 'the second update moved the batch a second later');
+  t.mock.timers.tick(1); assert.equal(f.sent.length, 2);
+  for (let i = 0; i < 12; i++) { f.feed.add(observation('PreToolUse', { tool_name: 'Bash' })); t.mock.timers.tick(900); }
+  assert.equal(f.sent.length, 3, 'a steady stream still goes in by ten seconds');
+  assert.equal(f.logs.filter(e => e.type === 'context.prepared').at(-1).sources.length, 12);
   f.feed.add(observation('PermissionRequest', { tool_name: 'Bash' }));
-  assert.equal(f.sent.length, 2);
+  assert.equal(f.sent.length, 4, 'urgent: at once, with what was waiting');
   f.feed.add(observation('Stop', { last_assistant_message: 'Ready.' }));
-  assert.equal(f.sent.length, 2, 'a removed event sends nothing');
+  assert.equal(f.sent.length, 4, 'a removed event sends nothing');
+});
+
+test('while the operator talks, and for two seconds after, a batch keeps waiting, never past ten seconds', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const logs: any[] = [], sent: any[][] = [], floor = new Floor();
+  const feed = new ObservationFeed({ add: (...args: any[]) => sent.push(args) }, e => logs.push(e), { agent: claude, floor });
+  t.after(() => feed.stop());
+  turn = 'unknown';
+  floor.hear();
+  feed.add(observation('PreToolUse', { tool_name: 'Read' }));
+  t.mock.timers.tick(1000); assert.equal(sent.length, 0, 'the operator is talking');
+  t.mock.timers.tick(1000); assert.equal(sent.length, 1, 'two seconds after they stopped');
+  floor.hear();
+  feed.add(observation('PermissionRequest', { tool_name: 'Bash' }));
+  assert.equal(sent.length, 1, 'urgent updates skip the collection, not the operator');
+  t.mock.timers.tick(2000); assert.equal(sent.length, 2);
+  feed.add(observation('PreToolUse', { tool_name: 'Read' }));
+  for (let i = 0; i < 20 && sent.length === 2; i++) { floor.hear(); t.mock.timers.tick(500); }
+  assert.equal(sent.length, 3);
+  assert.equal(Date.now() - logs.at(-1).sources[0].receivedAt, 10000, 'never past ten seconds, even when the operator keeps talking');
+});
+
+test('tool work above 900 tokens in one batch becomes one line counting calls by tool; the agent\'s words stay whole', t => {
+  const f = fixture(t);
+  const big = 'output line\n'.repeat(200);
+  f.feed.add(observation('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'ls' } }));
+  f.feed.add(observation('PostToolUse', { tool_name: 'Bash', tool_input: { command: 'ls' }, tool_response: { stdout: big } }));
+  f.feed.add(observation('MessageDisplay', { delta: 'Found the config.' }));
+  f.feed.add(observation('PostToolUse', { tool_name: 'Bash', tool_input: { command: 'cat a' }, tool_response: { stdout: big } }));
+  f.feed.add(observation('PostToolUse', { tool_name: 'Read', tool_input: { file_path: 'b' }, tool_response: { content: big } }));
+  f.feed.flush();
+  const lines = f.sent.at(-1)![1].split('\n');
+  assert.deepEqual(lines.map((l: string) => l.startsWith('[') ? l : JSON.parse(l).hook), ['[Claude made 2 Bash calls, 1 Read call; their details are omitted]', 'MessageDisplay']);
+  assert.equal(f.logs.at(-1).compacted, 4);
+  f.feed.add(observation('PostToolUse', { tool_name: 'Read', tool_input: { file_path: 'b' }, tool_response: { content: 'short' } }));
+  f.feed.flush();
+  assert.equal(JSON.parse(f.sent.at(-1)![1]).hook, 'PostToolUse', 'a small batch goes whole');
+});
+
+test('every adapter names its tools for the summary line: Codex and Pi as well as Claude', t => {
+  const big = (i: number) => `output line ${i}\n`.repeat(300), sent: string[] = [];
+  const feeds = [codex, pi].map(agent => new ObservationFeed({ add: (_kind, text) => sent.push(text) }, () => {}, { agent }));
+  t.after(() => feeds.forEach(feed => feed.stop()));
+  turn = 'unknown';
+  for (let i = 0; i < 4; i++) feeds[0].add(codexObservation('PostToolUse', { tool_name: 'Bash', tool_input: { command: `make ${i}` }, tool_response: big(i) }));
+  for (let i = 0; i < 4; i++) {
+    const raw = { type: 'tool_execution_end', toolCallId: `c${i}`, toolName: 'bash', args: { command: `ls ${i}` }, result: { content: [{ type: 'text', text: big(i) }] }, isError: false };
+    feeds[1].add({ kind: piEvents.observationKind(raw), name: raw.type, text: JSON.stringify(raw), state: 'working' });
+  }
+  feeds.forEach(feed => feed.flush());
+  assert.deepEqual(sent, ['[Codex made 4 Bash calls; their details are omitted]', '[Pi made 4 bash calls; their details are omitted]']);
 });
 
 test('displayed answers are sent in full, from the main agent and subagents alike', t => {

@@ -3,6 +3,7 @@ import { textFragments, estimatedTokens } from '../src/core/text-fragments.ts';
 import assert from 'node:assert/strict';
 import { observationReference } from '../src/core/prompts.ts';
 import { ContextQueue } from '../src/core/context-queue.ts';
+import { Floor } from '../src/core/floor.ts';
 import { LineReader } from '../src/core/line-reader.ts';
 import { VoiceHistory, type SpokenRequest } from '../src/core/voice-history.ts';
 import { redact } from '../src/core/redact.ts';
@@ -77,6 +78,36 @@ test('socket backpressure pauses writes without waiting for model acknowledgment
   assert.ok(sent.length>4,'socket drain releases writes while all earlier ACKs remain pending');
   assert.equal(queue.queue.length,0);assert.equal(queue.inFlight,sent.length);
   pending.forEach(resolve=>resolve());queue.stop();
+});
+
+test('agent context waits while the operator talks, even mid-batch, at most ten seconds, and keeps its order', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const sent: string[]=[],floor=new Floor(),ws={bufferedAmount:0};
+  const live={state:'active',ws,append:(_kind: string,text: string)=>{sent.push(text);if(sent.length===2)floor.hear();return new Promise<void>(()=>{});}};
+  const queue=new ContextQueue(live,error=>{throw error;},claude,{floor});
+  queue.add('thinking','const item = { score: 123, state: "ready" };\n'.repeat(300));
+  assert.equal(sent.length,2,'the operator started talking during the batch');
+  queue.add('thinking','No new operator speech is available to send.','delegation-1');
+  t.mock.timers.tick(1900);assert.equal(sent.length,2);
+  t.mock.timers.tick(200);assert.ok(sent.length>4,'two seconds after they stop, the rest goes in');
+  assert.ok(sent.some(text=>text.includes('No new operator speech')),'in order, behind the batch');
+  const before=sent.length;
+  floor.hear();queue.add('thinking','late observation');
+  for(let i=0;i<30;i++){floor.hear();t.mock.timers.tick(500);}
+  assert.equal(sent.length,before+1,'never more than ten seconds');
+  queue.stop();
+});
+
+test('an answer about a delegation does not wait for the operator when nothing is ahead of it', () => {
+  const sent: string[]=[],floor=new Floor();
+  const live={state:'active',append:(_kind: string,text: string)=>{sent.push(text);return new Promise<void>(()=>{});}};
+  const queue=new ContextQueue(live,error=>{throw error;},claude,{floor});
+  floor.hear();
+  queue.add('thinking','No new operator speech is available to send.','delegation-1');
+  assert.equal(sent.length,1);
+  queue.add('thinking','observation');
+  assert.equal(sent.length,1,'agent context still waits');
+  queue.stop();
 });
 
 test('stopping delivery cancels backpressure retries and ignores late acknowledgments', async () => {
