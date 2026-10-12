@@ -87,8 +87,9 @@ export class ClaudeObserver extends AgentObserver {
       const key = createHash('sha256').update(`${event.type}:${id}:${index}:${JSON.stringify(block)}`).digest('hex');
       if (this.seen.has(key)) continue;
       this.seen.add(key);
-      // A record restored from the transcript keeps the time it was written, so a resumed fork knows it is old work.
-      this.observe({ source: 'transcript', role: event.type, message_id: id, block }, emit, Date.parse(event.timestamp) || Date.now());
+      // A record restored from the transcript keeps the time it was written, so a resumed fork knows it is old work;
+      // one read as it happens counts from when it arrived, like a hook.
+      this.observe({ source: 'transcript', role: event.type, message_id: id, block }, emit, emit ? Date.now() : Date.parse(event.timestamp) || Date.now());
       if (block.type === 'text') {
         if (event.type === 'user') this.input(block.text, { source: 'transcript' }, emit);
         else this.textDelta(block.text, { source: 'transcript' }, emit);

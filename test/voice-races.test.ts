@@ -251,3 +251,66 @@ test('instructions restored after a restart bring back the settings Jev chose fo
   await settle(1300);
   assert.equal(second.tuning.holdLongestMs, 20000);
 });
+
+test('a work request whose judgment failed is judged again at the next pause', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => { live.state = 'closed'; }; live.append = async () => {};
+  let calls = 0;
+  const catcher = { needsAgent: async (said: string) => { if (++calls === 1) throw new Error('The operation was aborted due to timeout'); return /merge the feature branch/.test(said) ? .95 : .1; } } as unknown as WorkCatcher;
+  const deliveries: any[] = [];
+  const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, catcher });
+  t.after(() => { mediator.stop(); observer.close(); });
+  const pass = async (ms: number) => { t.mock.timers.tick(ms); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Please merge the feature branch.', start_ms: 0, end_ms: 1500 });
+  await mediator.catchWork().catch(() => {});
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ' Hmm, okay.', start_ms: 20000, end_ms: 20800 });
+  await pass(8500);
+  assert.equal(deliveries.length, 1);
+});
+
+test('a positive judgment that lands after GPT Live passed the words on owes nothing', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => { live.state = 'closed'; }; live.append = async () => {};
+  let release: ((p: number) => void) | undefined;
+  const catcher = { needsAgent: (said: string) => /merge/.test(said) ? new Promise<number>(resolve => { release = resolve; }) : Promise.resolve(.1) } as unknown as WorkCatcher;
+  const deliveries: any[] = [];
+  const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, catcher });
+  t.after(() => { mediator.stop(); observer.close(); });
+  const pass = async (ms: number) => { t.mock.timers.tick(ms); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Please merge the feature branch.', start_ms: 0, end_ms: 1500 });
+  await pass(8500);
+  live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' }, offset_ms: 2000 });
+  await pass(700);
+  release!(.95); await pass(10);
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'What is the status of the tests?', start_ms: 30000, end_ms: 31500 });
+  await pass(8500);
+  assert.equal(deliveries.length, 1, "only GPT Live's own request");
+});
+
+test('with the transcript observed, text held behind a later hook at the end of voice reaches the fork', async t => {
+  const { h, lives, sessionId } = await harness(t, { observation: 'transcript' });
+  await h.startLive(undefined, undefined, 'fresh');
+  const writtenAt = Date.now();
+  await settle(30);
+  h.observer.hook({ session_id: sessionId, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' } });
+  (h.observer as any).record({ type: 'assistant', sessionId, timestamp: new Date(writtenAt).toISOString(), message: { id: 'm1', content: [{ type: 'text', text: 'Found it: the tokenizer drops trailing commas, fixing now.' }] } });
+  await h.live!.close('operator ended voice');
+  await h.startLive(undefined, undefined, 'resume');
+  assert.equal(lives[1].options.fork, 'voice-0');
+  assert.ok(lives[1].appended.some(([, text]) => text.includes('trailing commas')));
+});
+
+test('with the transcript observed, text written before voice ended but read after it reaches the fork', async t => {
+  const { h, lives, sessionId } = await harness(t, { observation: 'transcript' });
+  await h.startLive(undefined, undefined, 'fresh');
+  const writtenAt = Date.now();
+  await settle(30);
+  await h.live!.close('operator ended voice');
+  await settle(30);
+  (h.observer as any).record({ type: 'assistant', sessionId, timestamp: new Date(writtenAt).toISOString(), message: { id: 'm2', content: [{ type: 'text', text: 'Pushed the fix to origin/feature-commas.' }] } });
+  await h.startLive(undefined, undefined, 'resume');
+  assert.equal(lives[1].options.fork, 'voice-0');
+  assert.ok(lives[1].appended.some(([, text]) => text.includes('feature-commas')));
+});

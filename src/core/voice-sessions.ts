@@ -323,7 +323,7 @@ export class VoiceSessions {
     // One that never started is reported, or replaced, by start().
     if (!this.started.has(live)) { own?.stop(); this.failed = result; return; }
     // A fork catches up from the oldest agent work GPT Live had not acknowledged: still held, queued, in flight, or lost.
-    const undelivered = Math.min(mediator.feed.pending[0]?.at ?? Infinity, mediator.context.undeliveredSince() ?? Infinity);
+    const undelivered = Math.min(...mediator.feed.pending.map(record => record.at), mediator.context.undeliveredSince() ?? Infinity);
     record.turns.push(...mediator.history.turns());
     record.inForce = [...run.inForce.values()];
     Object.assign(record, { finalized: result.finalized, endedAt: Date.now(), deliveredThrough: Number.isFinite(undelivered) ? undelivered - 1 : Date.now(), lastRecordId: mediator.feed.projector.sequence });

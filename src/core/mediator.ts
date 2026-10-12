@@ -114,9 +114,13 @@ export class Mediator {
     const fragments = this.history.fragments, through = fragments.at(-1)?.seq ?? -1;
     // Only speech not yet passed on, and not judged before.
     const said = fragments.filter(f => f.seq > Math.max(this.caughtThrough, this.history.delegatedThrough) && f.role === 'operator' && !this.history.unheard(f)).map(f => f.text).join('').trim();
+    // The newest words matter most: Jev reads the end of what was said. A judgment that fails leaves them for the next pause.
+    if (said && !this.owed) {
+      const asked = Date.now(), owed = await this.catcher.needsAgent(this.clean(said.slice(-600))) >= CATCH_THRESHOLD;
+      // Passed on while Jev was judging: nothing is owed.
+      this.owed = owed && this.delegatedAt < asked;
+    }
     this.caughtThrough = through;
-    // The newest words matter most: Jev reads the end of what was said.
-    if (said && !this.owed) this.owed = await this.catcher.needsAgent(this.clean(said.slice(-600))) >= CATCH_THRESHOLD;
     // Passed on meanwhile, or the operator spoke again: their next pause decides.
     if (!this.owed || this.live.state !== 'active' || Date.now() - this.delegatedAt < CATCH_AFTER_MS || this.history.fragments.some(f => f.seq > through && f.role === 'operator')) return;
     const request = this.history.request(Infinity);
