@@ -34,6 +34,8 @@ export class Mediator {
   learner?: InstructionLearner; judgedThrough = -1; judgeTimer?: NodeJS.Timeout; previousUtterance = '';
   /** Sends on work GPT Live answered without passing on, when Jev is configured. */
   catcher?: WorkCatcher; catchTimer?: NodeJS.Timeout; delegatedAt = 0;
+  /** The last transcript fragment the catcher has judged, and whether judged speech needing the agent still waits to be sent. */
+  caughtThrough = -1; owed = false;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
   constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, catcher, firstRecordId = 0 }: {
@@ -105,19 +107,24 @@ export class Mediator {
     this.previousUtterance = utterance.utterance;
     this.learner.consider(utterance).catch(error => this.log({ type: 'instruction.error', message: (error as Error).message }));
   }
-  // The operator has been quiet since speaking and GPT Live passed nothing on: if Jev judges
-  // that what they said needs the agent, it goes there anyway, marked as such.
+  // The operator has been quiet since speaking and GPT Live passed nothing on: if Jev judges that
+  // what they said since the last check needs the agent, it goes there anyway, marked as such.
   async catchWork() {
-    if (this.live.state !== 'active' || Date.now() - this.delegatedAt < CATCH_AFTER_MS) return;
+    if (!this.catcher || this.live.state !== 'active' || Date.now() - this.delegatedAt < CATCH_AFTER_MS) return;
+    const fragments = this.history.fragments, through = fragments.at(-1)?.seq ?? -1;
+    // Only speech not yet passed on, and not judged before.
+    const said = fragments.filter(f => f.seq > Math.max(this.caughtThrough, this.history.delegatedThrough) && f.role === 'operator' && !this.history.unheard(f)).map(f => f.text).join('').trim();
+    this.caughtThrough = through;
+    // The newest words matter most: Jev reads the end of what was said.
+    if (said && !this.owed) this.owed = await this.catcher.needsAgent(this.clean(said.slice(-600))) >= CATCH_THRESHOLD;
+    // Passed on meanwhile, or the operator spoke again: their next pause decides.
+    if (!this.owed || this.live.state !== 'active' || Date.now() - this.delegatedAt < CATCH_AFTER_MS || this.history.fragments.some(f => f.seq > through && f.role === 'operator')) return;
     const request = this.history.request(Infinity);
-    if (!request || !this.catcher) return;
-    const said = request.utterances.filter(u => u.role === 'operator').map(u => u.text).join(' ');
-    const needsAgent = await this.catcher.needsAgent(this.clean(said));
-    // Passed on, or more said, while Jev was judging: the newer state decides.
-    if (needsAgent < CATCH_THRESHOLD || this.live.state !== 'active' || this.history.request(Infinity)?.through !== request.through || Date.now() - this.delegatedAt < CATCH_AFTER_MS) return;
+    this.owed = false;
+    if (!request) return;
     this.deliver({ id: randomUUID(), content: this.clean(caughtRequest(request.utterances)), delegationId: null, voiceSessionId: this.live.id, queuedAt: Date.now() });
     this.history.markDelivered(request);
-    this.log({ type: 'work.caught', needsAgent, utterances: request.utterances.length });
+    this.log({ type: 'work.caught', utterances: request.utterances.length });
   }
   /** The microphone level of the page this voice session listens to. */
   hear(level: MicrophoneLevel) { if (operatorSpeaking(level)) this.floor.hear(); }
@@ -134,7 +141,7 @@ export class Mediator {
     const content = this.clean(voiceRequest(request.utterances));
     try {
       this.deliver({ id: randomUUID(), content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now() });
-      this.history.markDelivered(request);
+      this.history.markDelivered(request); this.owed = false;
     } catch (error) {
       this.fault(error as Error);
       this.context.add('thinking', queueFailed(this.agent), delegationId);

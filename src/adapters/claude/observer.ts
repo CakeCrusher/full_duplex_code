@@ -49,9 +49,9 @@ export class ClaudeObserver extends AgentObserver {
     super({ agent: { profile: claudeProfile, context: claudeContext, receivedRequest }, clean, log });
     this.sessionId = sessionId; this.observation = observation;
   }
-  observe(data: Record<string, any>, emit = true) {
+  observe(data: Record<string, any>, emit = true, at = Date.now()) {
     this.turn = nextTurnState(this.turn, data);
-    this.add(makeObservation({ kind: observationKind(data), name: eventName(data), text: this.clean(JSON.stringify(data)), at: Date.now(), state: this.turn, child: Boolean(data.agent_id) }), emit);
+    this.add(makeObservation({ kind: observationKind(data), name: eventName(data), text: this.clean(JSON.stringify(data)), at, state: this.turn, child: Boolean(data.agent_id) }), emit);
   }
   attachTranscript(file: string) {
     if (this.transcriptPath === file) return;
@@ -87,7 +87,8 @@ export class ClaudeObserver extends AgentObserver {
       const key = createHash('sha256').update(`${event.type}:${id}:${index}:${JSON.stringify(block)}`).digest('hex');
       if (this.seen.has(key)) continue;
       this.seen.add(key);
-      this.observe({ source: 'transcript', role: event.type, message_id: id, block }, emit);
+      // A record restored from the transcript keeps the time it was written, so a resumed fork knows it is old work.
+      this.observe({ source: 'transcript', role: event.type, message_id: id, block }, emit, Date.parse(event.timestamp) || Date.now());
       if (block.type === 'text') {
         if (event.type === 'user') this.input(block.text, { source: 'transcript' }, emit);
         else this.textDelta(block.text, { source: 'transcript' }, emit);

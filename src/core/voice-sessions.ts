@@ -12,7 +12,7 @@ import { forkable, planFor, ResumeStore, seedInput, type ResumePlan, type Resume
 import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, reconnectGreeting, resumeGreeting } from './prompts.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 
-export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean; /** Set for an instruction Jev learned: its short ID, such as I3. */ learned?: string }
+export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean; /** Set for an instruction Jev learned: its short ID, such as I3, and the agent session it was learned in. */ learned?: string; learnedIn?: string }
 /** The latest voice session's span and GPT Live's usage reports, for the page's meters. */
 export interface LiveUsage { voiceSessionId: string; startedAt: number; endedAt?: number; seconds: number; ratio: number | null; points: [at: number, ratio: number][] }
 /** Why the watchdog ends voice when GPT Live stops hearing audio the page still sends. */
@@ -23,15 +23,14 @@ const RECONNECTS = 2, RECONNECT_WINDOW_MS = 5 * 60 * 1000, CARRY_MS = 30000;
 // After GPT Live starts, its media gets this long to deliver the first audio; after that, audio may pause 5 s.
 const FIRST_AUDIO_MS = 15000, AUDIO_GAP_MS = 5000;
 const emptyRecord = (): ResumeRecord => ({ stored: false, finalized: false, turns: [] });
-const saved = ({ id, text, learned }: Instruction): SavedInstruction => ({ id, text, ...learned ? { learned } : {} });
-const inForce = (item: Instruction, live: LiveSession) => item.sessionId === live.id && ['acknowledged', 'pending'].includes(item.state);
+const saved = ({ id, text, learned, learnedIn }: Instruction | SavedInstruction): SavedInstruction => ({ id, text, ...learned ? { learned, learnedIn } : {} });
 
 /** One voice session from its start: how it began, and the record of the agent session it belongs to. */
 interface Run {
   live: LiveSession; plan: ResumePlan; page?: Page; automatic: boolean; mediator: Mediator;
   record: ResumeRecord; recordId?: string;
-  /** The instructions it started with, and those a fork inherited from its source. */
-  startup: Instruction[]; inherited: SavedInstruction[];
+  /** The instructions it started with, those a fork inherited from its source, and those in force in it now (given and not countermanded). */
+  startup: Instruction[]; inherited: SavedInstruction[]; inForce: Map<string, SavedInstruction>;
 }
 
 // Voice connections one after another beside the same agent session: startup
@@ -79,10 +78,7 @@ export class VoiceSessions {
   async learn({ text, ...judged }: LearnedInstruction) {
     const id = `I${++this.learnedCount}`;
     this.bridge.log({ type: 'instruction.learned', id, text, ...judged });
-    const item = await this.appendInstruction(`${id}: ${text}`, id).catch(error => { this.bridge.log({ type: 'instruction.error', id, message: (error as Error).message }); return undefined; });
-    if (!item) return;
-    this.bridge.learned.add({ session: this.bridge.sessionId, id, text, scope: judged.scope });
-    this.bridge.publish({ type: 'instruction_learned', id, text, state: item.state });
+    await this.appendInstruction(`${id}: ${text}`, { id, text, scope: judged.scope }).catch(error => this.bridge.log({ type: 'instruction.error', id, message: (error as Error).message }));
   }
   /**
    * Removes a learned instruction: later sessions leave it out, and the session it is in
@@ -92,15 +88,21 @@ export class VoiceSessions {
   async removeLearned(id: unknown) {
     const index = this.additionalInstructions.findIndex(item => item.learned !== undefined && item.learned === id);
     if (index < 0) return;
-    const [item] = this.additionalInstructions.splice(index, 1), live = this.live;
+    const [item] = this.additionalInstructions.splice(index, 1), run = this.run;
     this.bridge.log({ type: 'instruction.removed', id: item.learned, text: item.text });
-    this.bridge.learned.remove({ session: this.bridge.sessionId, id: item.learned! }); this.bridge.tuneFromInstructions();
+    this.bridge.learned.remove({ session: item.learnedIn ?? this.bridge.sessionId, id: item.learned! }); this.bridge.tuneFromInstructions();
     this.rememberInstructions();
     this.bridge.publish({ type: 'instruction_removed', id: item.learned }); this.bridge.publish(this.bridge.status());
-    if (live?.state === 'active' && inForce(item, live)) {
-      await live.append('instructions', disregardInstruction(item.learned!, item.text.replace(`${item.learned}: `, ''))).catch(error => this.bridge.fault(error as Error));
-      if (this.run?.live === live) this.noteInForce(this.run);
-    }
+    // A session still starting, or ending, countermands it when it starts (or its fork does).
+    if (run?.live.state === 'active' && run.inForce.has(item.id)) await this.disregard(run, item);
+  }
+  /** Tells a running session to disregard a learned instruction in force in it. */
+  async disregard(run: Run, item: SavedInstruction) {
+    const { live } = run;
+    try {
+      await live.append('instructions', disregardInstruction(item.learned!, item.text.replace(`${item.learned}: `, '')));
+      run.inForce.delete(item.id); this.noteInForce(run);
+    } catch (error) { if (live.state === 'active') this.bridge.fault(error as Error, run.page); }
   }
   /** The saved record of the current agent session, read once its ID is known. */
   current(): ResumeRecord {
@@ -118,9 +120,12 @@ export class VoiceSessions {
   // After fdc restarts on the same agent session, its instructions are listed (and removable)
   // again, as a fork carries them anyway, and the IDs of new learned ones continue.
   restoreInstructions() {
+    this.learnedCount = Math.max(this.learnedCount, this.record.learnedCount ?? 0);
     if (this.additionalInstructions.length || !this.record.instructions?.length) return;
     this.additionalInstructions = this.record.instructions.map(item => ({ ...item, state: 'next_session' }));
     this.learnedCount = Math.max(this.learnedCount, ...this.additionalInstructions.map(item => Number(item.learned?.slice(1)) || 0));
+    // With Jev's tuning on, the settings fit these instructions again.
+    this.bridge.tuneFromInstructions();
   }
   save(id = this.recordFor, record = this.record) {
     if (!id) return;
@@ -129,15 +134,15 @@ export class VoiceSessions {
   }
   // A voice session's record is saved under its own agent session, even if the agent moved on to another meanwhile.
   saveRun(run: Run) { this.save(run.recordId ?? (run.record === this.record ? this.recordFor : undefined), run.record); }
-  rememberInstructions() { this.current().instructions = this.additionalInstructions.map(saved); this.save(); }
+  rememberInstructions() { const record = this.current(); record.instructions = this.additionalInstructions.map(saved); record.learnedCount = Math.max(record.learnedCount ?? 0, this.learnedCount); this.save(); }
   /** The instructions in force in a running session, for a fork of it to inherit. */
-  noteInForce(run: Run) { run.record.inForce = this.additionalInstructions.filter(item => inForce(item, run.live)).map(saved); this.saveRun(run); }
+  noteInForce(run: Run) { run.record.inForce = [...run.inForce.values()]; this.saveRun(run); }
   /** What Resume voice would do now, for the page. */
   resumeStatus() {
     const record = this.current();
     return { plan: planFor(record, 'resume'), fork: forkable(record), turns: record.turns.length, store: this.store };
   }
-  async appendInstruction(text: unknown, learned?: string) {
+  async appendInstruction(text: unknown, learned?: { id: string; text: string; scope: string }) {
     const { clean, log, publish } = this.bridge;
     if (typeof text !== 'string' || !text.trim()) throw new Error('Enter an instruction first.');
     text = clean(text.trim());
@@ -147,9 +152,12 @@ export class VoiceSessions {
     // The operator retries their own; one Jev learned waits for the session that is starting (connect() adds it).
     if (!learned && ['new', 'connecting', 'closing'].includes(live?.state as string)) throw new Error('Wait for the voice connection to settle, then append your instruction.');
     const active = live?.state === 'active';
-    const item: Instruction = { id: randomUUID(), text: text as string, state: active ? 'pending' : 'next_session', sessionId: active ? live!.id : undefined, learned };
+    const item: Instruction = { id: randomUUID(), text: text as string, state: active ? 'pending' : 'next_session', sessionId: active ? live!.id : undefined, ...learned ? { learned: learned.id, learnedIn: this.bridge.sessionId } : {} };
     this.additionalInstructions.push(item);
-    log({ type: 'voice.instruction', ...item }); publish(this.bridge.status()); this.bridge.tuneFromInstructions();
+    log({ type: 'voice.instruction', ...item });
+    // Jev's: recorded, shown with Remove and announced the moment it is accepted.
+    if (learned) { this.bridge.learned.add({ session: item.learnedIn, id: learned.id, text: learned.text, scope: learned.scope }); publish({ type: 'instruction_learned', id: learned.id, text: learned.text, state: item.state }); }
+    publish(this.bridge.status()); this.bridge.tuneFromInstructions();
     this.rememberInstructions();
     if (!active) return item;
     await this.applyInstruction(live!, item);
@@ -163,7 +171,10 @@ export class VoiceSessions {
       if (this.live !== live || live.state !== 'active') return;
       Object.assign(item, { state: 'acknowledged', acknowledgedAt: Date.now(), appended: true });
       log({ type: 'voice.instruction_acknowledged', ...item });
-      if (this.run?.live === live) this.noteInForce(this.run);
+      const run = this.run?.live === live ? this.run : undefined;
+      if (run) { run.inForce.set(item.id, saved(item)); this.noteInForce(run); }
+      // Removed while it was being added: countermanded at once.
+      if (run && item.learned && !this.additionalInstructions.includes(item)) await this.disregard(run, saved(item));
     } catch (error) {
       if (this.live !== live || live.state !== 'active') return;
       Object.assign(item, { state: 'failed', error: clean((error as Error).message) });
@@ -194,9 +205,13 @@ export class VoiceSessions {
     // Starting fresh after a drop: the speech it had not passed on goes to the agent now.
     if (plan === 'fresh') this.handOffCarried();
     for (;;) {
-      try { return await this.connect(sdp as string | undefined, page, plan, automatic); }
+      const attempt: { live?: LiveSession } = {};
+      try { return await this.connect(sdp as string | undefined, page, plan, automatic, attempt); }
       catch (error) {
-        const live = this.live!, message = (error as Error).message;
+        const live = attempt.live, message = (error as Error).message;
+        if (!live) throw error;
+        // Another start took voice over meanwhile (moved to another page): this one is done.
+        if (this.live !== live) { log({ type: 'voice.start_superseded', message }); return; }
         // Ended after it started (dropped, or ended during the greeting): its close already told the page.
         if (this.started.has(live)) { log({ type: 'voice.start_interrupted', message }); return; }
         // A fork or storage OpenAI refuses falls back quietly: only a session that never started, that nobody canceled, and whose media answer the page has not applied.
@@ -204,14 +219,15 @@ export class VoiceSessions {
         if (retry && plan === 'fork') { log({ type: 'voice.fork_failed', from: record.liveSessionId, message }); plan = record.turns.length ? 'seed' : 'fresh'; continue; }
         // The page says so beside the connection facts (resume.store).
         if (retry && live.store && /\bstor(e|ed|age)\b|retention|persist/i.test(message)) { this.store = false; log({ type: 'voice.store_refused', message }); continue; }
-        // The page learns that voice did not start.
+        // The page learns that voice did not start; speech a dropped session left goes to the agent.
+        this.handOffCarried();
         publish({ type: 'voice_closed', ...(this.failed ?? { reserved: false, finalized: false, usageSeconds: 0, reason: message }) }, page);
         publish(bridge.status());
         throw error;
       }
     }
   }
-  async connect(sdp: string | undefined, page: Page | undefined, plan: ResumePlan, automatic: boolean) {
+  async connect(sdp: string | undefined, page: Page | undefined, plan: ResumePlan, automatic: boolean, attempt: { live?: LiveSession } = {}) {
     const bridge = this.bridge, { agent, observer, log, publish, fault, clean } = bridge, { name } = agent.profile;
     const record = this.current(), recordId = this.recordFor, sourceId = plan === 'fork' ? record.liveSessionId : undefined;
     const startup = attachment(agent, bridge.cwd, observer.state);
@@ -224,15 +240,17 @@ export class VoiceSessions {
     if (plan === 'seed') input = seedInput(input, record.turns);
     const live: LiveSession = this.createLive({ apiKey: bridge.apiKey, budget: bridge.ledger, voice: bridge.voice, instructions: this.instructions(), label: `${name} ${bridge.sessionId ?? 'session'}`,
       input: plan === 'fork' ? [] : input, store: this.store, fork: sourceId, log: event => log({ liveRun: live.reservation, ...event }) });
+    attempt.live = live;
     this.audit?.close(); this.audit = null; this.failed = undefined;
     this.live = live; this.page = page;
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean,
       learner: bridge.learner, catcher: bridge.catcher, tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
-    const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [] };
-    if (this.carried) mediator.history.carry(this.carried.mediator.history);
-    if (plan === 'fork') mediator.context.add('thinking', catchUp(agent, bridge.cwd, observer.state) + (history.text ? historyIntro(agent) + history.text : ''));
+    const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map() };
+    // A dropped or moved session's unsent speech: this session takes it if it starts; meanwhile it isn't handed off.
+    if (this.carried) { clearTimeout(this.carried.timer); mediator.history.carry(this.carried.mediator.history); }
+    if (plan === 'fork') mediator.context.add('thinking', catchUp(agent, bridge.cwd, observer.state) + (history.text ? historyIntro(agent) + history.text : ''), null, '', since);
     log({ type: 'voice.starting', plan, automatic, from: sourceId, seededTurns: plan === 'seed' ? input.length - (history.text ? 2 : 1) : undefined, store: this.store });
     publish(bridge.status());
     // A fork that fails falls back to a new session; its errors are logged, not shown.
@@ -247,12 +265,11 @@ export class VoiceSessions {
     await live.start(sdp);
     this.watch(live);
     if (live.state !== 'active') return;
-    // A fork is told to disregard learned instructions removed since its source ended, and is given those added since.
+    // Learned instructions in force here but no longer the companion's (removed while it started, or since a fork's
+    // source ended) are countermanded; the companion's instructions not yet in force are added.
     const kept = new Set(this.additionalInstructions.map(item => item.id));
-    for (const item of run.inherited) {
-      if (item.learned && !kept.has(item.id) && live.state === 'active') await live.append('instructions', disregardInstruction(item.learned, item.text.replace(`${item.learned}: `, ''))).catch(error => fault(error as Error, page));
-    }
-    for (const item of [...this.additionalInstructions]) if (live.state === 'active' && !inForce(item, live)) await this.applyInstruction(live, item);
+    for (const item of [...run.inForce.values()]) if (item.learned && !kept.has(item.id) && live.state === 'active') await this.disregard(run, item);
+    for (const item of [...this.additionalInstructions]) if (live.state === 'active' && !run.inForce.has(item.id) && !(item.state === 'pending' && item.sessionId === live.id)) await this.applyInstruction(live, item);
     if (live.state === 'active') await live.greet(plan === 'fresh' ? greeting(agent) : automatic ? reconnectGreeting(agent) : resumeGreeting(agent));
   }
   liveEvent(run: Run, event: any) {
@@ -286,12 +303,10 @@ export class VoiceSessions {
     this.started.add(live);
     // The replacement took over a dropped session's unsent speech.
     if (this.carried) { clearTimeout(this.carried.timer); this.carried = undefined; }
-    // In force from the start: a new session's startup instructions, or the ones a fork inherited that are still the companion's.
-    const inherited = new Set(run.inherited.map(item => item.id));
-    for (const item of run.startup) {
-      if (plan === 'fork' && !inherited.has(item.id)) continue;
-      Object.assign(item, { state: 'acknowledged', sessionId: live.id, acknowledgedAt: Date.now(), error: undefined, appended: false });
-    }
+    // In force from the start: everything in a new session's startup prompt (one removed while it started is
+    // countermanded right after), or what a fork inherited.
+    run.inForce = new Map((plan === 'fork' ? run.inherited : run.startup.map(saved)).map(item => [item.id, item]));
+    for (const item of this.additionalInstructions) if (run.inForce.has(item.id)) Object.assign(item, { state: 'acknowledged', sessionId: live.id, acknowledgedAt: Date.now(), error: undefined, appended: false });
     if (plan === 'fresh') record.turns = [];
     Object.assign(record, { liveSessionId: live.id, stored: live.stored, finalized: false, endedAt: undefined, deliveredThrough: undefined });
     this.noteInForce(run);
@@ -307,11 +322,10 @@ export class VoiceSessions {
     const own = this.mediator === mediator ? mediator : undefined;
     // One that never started is reported, or replaced, by start().
     if (!this.started.has(live)) { own?.stop(); this.failed = result; return; }
-    // A fork catches up from the first agent update GPT Live had not received: one still held, or in a
-    // batch still queued (its updates arrived within the longest hold before it was queued).
-    const undelivered = Math.min(mediator.feed.pending[0]?.at ?? Infinity, (mediator.context.queue[0]?.queuedAt ?? Infinity) - bridge.tuning.holdLongestMs);
+    // A fork catches up from the oldest agent work GPT Live had not acknowledged: still held, queued, in flight, or lost.
+    const undelivered = Math.min(mediator.feed.pending[0]?.at ?? Infinity, mediator.context.undeliveredSince() ?? Infinity);
     record.turns.push(...mediator.history.turns());
-    record.inForce = this.additionalInstructions.filter(item => inForce(item, live)).map(saved);
+    record.inForce = [...run.inForce.values()];
     Object.assign(record, { finalized: result.finalized, endedAt: Date.now(), deliveredThrough: Number.isFinite(undelivered) ? undelivered - 1 : Date.now(), lastRecordId: mediator.feed.projector.sequence });
     this.saveRun(run);
     // Ended without anyone asking (dropped, closed by GPT Live, or its media stalled): resume on the same page, a limited number of times.

@@ -56,7 +56,7 @@ export class ObservationProjector {
 }
 
 /** Where the feed sends prepared context. */
-export interface ContextTarget { add(kind: AppendKind, text: string, delegationId?: string | null, source?: string): void }
+export interface ContextTarget { add(kind: AppendKind, text: string, delegationId?: string | null, source?: string, since?: number): void }
 
 /**
  * How long a burst of updates is collected before it goes to Live as one batch:
@@ -123,7 +123,7 @@ export class ObservationFeed {
     const content = lines.join('\n');
     this.log({ type: 'context.prepared', sources: records.map(({ text, ...source }) => source), content, compacted: lines.length < records.length ? tools.length : undefined });
     // All observations remain in order. In-flight ACKs do not stall new events.
-    this.context.add('thinking', content, null, this.label);
+    this.context.add('thinking', content, null, this.label, Math.min(...records.map(record => record.at)));
   }
   stop() { this.stopped = true; if (this.timer) clearTimeout(this.timer); this.pending.length = 0; }
 }

@@ -56,7 +56,16 @@ test('a learned instruction joins this companion at once under an ID; removing i
   assert.match(harness.voiceSessions.instructions(), /I1: Never read file paths out loud to me\./);
   // During voice, it goes into the running session at once.
   const appended: [string, string][] = [];
-  harness.voiceSessions.live = { state: 'active', id: 'live_test', append: async (kind: string, text: string) => { appended.push([kind, text]); } } as any;
+  harness.agentReady = true;
+  harness.voiceSessions.createLive = () => {
+    const live: any = Object.assign(new EventEmitter(), { state: 'new', reservation: 'run', transport: 'websocket', usageSeconds: 0, requested: false, answered: false, stored: false });
+    return Object.assign(live, {
+      async start() { live.state = 'active'; live.id = 'live_test'; live.emit('event', { type: 'session.started' }); },
+      async append(kind: string, text: string) { appended.push([kind, text]); }, async greet() {}, audio() {},
+      close(reason: string) { live.requested = true; if (live.state !== 'closed') { live.state = 'closed'; live.emit('closed', { finalized: true, reserved: true, usageSeconds: 1, sessionId: live.id, reason }); } return Promise.resolve(); },
+    });
+  };
+  await harness.startLive(undefined, undefined, 'fresh');
   await harness.learner!.consider({ utterance: 'From now on, keep every answer to one sentence.' });
   await until(() => published.filter(e => e.type === 'instruction_learned').length === 2);
   assert.deepEqual(appended[0], ['instructions', 'I2: From now on, keep every answer to one sentence.']);
@@ -69,7 +78,6 @@ test('a learned instruction joins this companion at once under an ID; removing i
   assert.ok(published.some(e => e.type === 'instruction_removed' && e.id === 'I2'));
   await harness.removeInstruction('I9'); await harness.removeInstruction(undefined);
   assert.equal(appended.length, 2, 'an unknown ID changes nothing');
-  harness.voiceSessions.live = undefined;
   const log = fs.readFileSync(path.join(root, 'run', 'events.jsonl'), 'utf8');
   assert.match(log, /"type":"instruction\.learned","id":"I1","text":"Never read file paths out loud to me\.","scope":"session","behave":0\.9/);
   assert.match(log, /"type":"instruction\.removed","id":"I2"/);

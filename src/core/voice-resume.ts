@@ -16,8 +16,10 @@ export interface ResumeRecord {
   instructions?: SavedInstruction[]; inForce?: SavedInstruction[];
   /** Agent updates GPT Live had received when the last session ended (a time), and the last context record's number, which a fork continues. */
   deliveredThrough?: number; lastRecordId?: number;
+  /** How many instructions Jev has learned for this agent session, so IDs never repeat. */
+  learnedCount?: number;
 }
-export interface SavedInstruction { id: string; text: string; learned?: string }
+export interface SavedInstruction { id: string; text: string; learned?: string; learnedIn?: string }
 // OpenAI keeps stored recordings for 30 days.
 export const RECORDING_MS = 30 * 24 * 60 * 60 * 1000;
 // Live's startup input: at most 128 messages and 8,192 tokens in all.

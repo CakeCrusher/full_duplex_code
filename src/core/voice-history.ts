@@ -37,9 +37,20 @@ export class VoiceHistory {
   hearAudio({ audio, start_ms: startMs, end_ms: endMs }: { audio: string; start_ms: number; end_ms: number }) {
     const pcm = Buffer.from(audio, 'base64'); let peak = 0;
     for (let i = 0; i + 1 < pcm.length; i += 2) peak = Math.max(peak, Math.abs(pcm.readInt16LE(i)));
-    this.heard.push({ startMs, endMs, peak });
-    // About five stretches a second: the whole session is kept (resumed turns are checked at its end), up to about six hours.
-    if (this.heard.length > 120000) this.heard.splice(0, 20000);
+    const heard = this.heard, last = heard.at(-1), loud = peak > SOUND_PEAK;
+    // Following on from a stretch of the same kind, sound or silence: one stretch, up to five seconds.
+    if (last && startMs >= last.startMs && startMs - last.endMs <= 50 && (last.peak > SOUND_PEAK) === loud && endMs - last.startMs <= 5000) { last.endMs = Math.max(last.endMs, endMs); last.peak = Math.max(last.peak, peak); }
+    // The echo arrives in order; a stretch that doesn't is put in its place.
+    else if (!last || last.startMs <= startMs) heard.push({ startMs, endMs, peak });
+    else heard.splice(this.firstFrom(startMs), 0, { startMs, endMs, peak });
+    // The whole session is kept (resumed turns are checked at its end), within reason.
+    if (heard.length > 120000) heard.splice(0, 20000);
+  }
+  /** The first stretch starting at or after `ms`: stretches are kept in order of their start. */
+  firstFrom(ms: number) {
+    let low = 0, high = this.heard.length;
+    while (low < high) { const middle = (low + high) >> 1; if (this.heard[middle].startMs >= ms) high = middle; else low = middle + 1; }
+    return low;
   }
   /**
    * Whether GPT Live heard any sound around a stretch of its transcript: false only when its echo
@@ -49,13 +60,13 @@ export class VoiceHistory {
    */
   audible(startMs: number, endMs: number): boolean | undefined {
     const from = startMs - 1000, to = endMs + 1000, heard = this.heard;
-    // The echo arrives in order: find the first stretch that ends after `from`.
-    let low = 0, high = heard.length;
-    while (low < high) { const middle = (low + high) >> 1; if (heard[middle].endMs > from) high = middle; else low = middle + 1; }
     let covered = 0;
-    for (let i = low; i < heard.length && heard[i].startMs < to; i++) {
-      if (heard[i].peak > SOUND_PEAK) return true;
-      covered += Math.min(heard[i].endMs, to) - Math.max(heard[i].startMs, from);
+    // No stretch is longer than five seconds, so one that reaches into [from, to] starts after from - 5 s.
+    for (let i = this.firstFrom(from - 5000); i < heard.length && heard[i].startMs < to; i++) {
+      const stretch = heard[i];
+      if (stretch.endMs <= from) continue;
+      if (stretch.peak > SOUND_PEAK) return true;
+      covered += Math.min(stretch.endMs, to) - Math.max(stretch.startMs, from);
     }
     return covered >= .9 * (to - from) ? false : undefined;
   }

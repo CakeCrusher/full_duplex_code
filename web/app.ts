@@ -33,7 +33,10 @@ function handle(event: BridgeEvent) {
   if (event.type === 'page') pageId = event.id;
   if (event.type === 'status') {
     currentStatus = event;
-    for (const item of event.prompt?.additional ?? []) if (item.learned) learned({ type: 'instruction_learned', id: item.learned, text: item.text.replace(`${item.learned}: `, '') });
+    // The companion's learned instructions as it lists them: a card for each, and one it no longer lists was removed.
+    const listed = (event.prompt?.additional ?? []).filter((item: any) => item.learned);
+    for (const item of listed) learned({ type: 'instruction_learned', id: item.learned, text: item.text.replace(`${item.learned}: `, '') });
+    for (const card of document.querySelectorAll<HTMLElement>('.learned[id^="learned-"]:not(.removed)')) if (!listed.some((item: any) => card.id === `learned-${item.learned}`)) removed(card.id.slice('learned-'.length));
     showStatus(event, { active, muted, starting, elsewhere: Boolean(event.voicePage) && event.voicePage !== pageId });
   }
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
