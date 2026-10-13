@@ -3,11 +3,15 @@ import type { AgentDefinition } from './adapter.ts';
 export interface TimelineItem { id: string; track: string; start: number; end: number; [field: string]: any }
 export interface JevCheck { at: number; kind: string; outcome: string; scores: Record<string, number | string | null>; words?: string; flagged: boolean }
 type Agent = Pick<AgentDefinition, 'profile' | 'receivedRequest'>;
-// Jev's needsAgent below this says an answer would have done: GPT Live passed on what it could have answered.
-const ANSWERABLE = .4;
-/** A check worth the operator's eye: Jev learned an instruction, or disagrees with passing the words on. */
-export const flagged = ({ kind, outcome, scores }: Omit<JevCheck, 'flagged' | 'at'>) =>
-  kind === 'handoff' ? typeof scores?.needsAgent === 'number' && scores.needsAgent < ANSWERABLE : /\blearned I\d+/i.test(outcome);
+// Jev's needsAgent below ANSWERABLE says an answer would have done; at NEEDED or above, the harness was needed.
+const ANSWERABLE = .4, NEEDED = .6;
+/** A check worth the operator's eye: Jev learned an instruction, or disagrees with GPT Live: it passed on what
+ *  it could have answered, or kept what needed the harness (sent only when voice ended). */
+export const flagged = ({ kind, outcome, scores }: Omit<JevCheck, 'flagged' | 'at'>) => {
+  if (kind !== 'handoff') return /\blearned I\d+/i.test(outcome);
+  const p = scores?.needsAgent;
+  return typeof p === 'number' && (scores?.handOff === 'answered' ? p >= NEEDED : p < ANSWERABLE);
+};
 
 // Compact visual history. This is independent of the complete context sent to
 // GPT Live: grouping here changes only how the browser draws observations.

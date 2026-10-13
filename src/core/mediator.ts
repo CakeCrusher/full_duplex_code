@@ -101,7 +101,7 @@ export class Mediator {
     }
     this.previousUtterance = said;
     if (this.audit) void this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId }).then(needsAgent => this.publish({
-      type: 'jev_check', requestId, at: Date.now(), kind: 'handoff', words: said, scores: { needsAgent },
+      type: 'jev_check', requestId, at: Date.now(), kind: 'handoff', words: said, scores: { needsAgent, handOff },
       outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${handOff === 'passed' ? 'GPT Live passed it on' : 'GPT Live kept it; sent when voice ended'}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})`,
     }));
   }

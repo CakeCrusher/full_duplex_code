@@ -103,25 +103,28 @@ test('Jev is asked about each request sent to the harness, with what the compani
   assert.deepEqual(considered, [{ utterance: "From now on, don't read paths out loud.", previous: '', companion: 'Claude finished the edit.', requestId: delivered[0].id }]);
 });
 
-test('a likely instruction is written by a one-off run of the harness; none, or one already in force, adds nothing', async t => {
+test('a learned instruction is written by a one-off run of the harness, told Jev found one; a match in force adds nothing', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-distill-'));
   const harness = await new Harness({ agent: claude, root, runDir: path.join(root, 'run'), cwd: root, sessionId: randomUUID(), apiKey: 'unused', jevKey: 'jev-key' }).start();
   t.after(async () => { await harness.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const checks: any[] = [], publish = harness.publish; harness.publish = (event, page) => { if (event.type === 'jev_check') checks.push(event); publish(event, page); };
   harness.learner!.fetch = jev(.9, .1, 'always').fetch;
-  const prompts: string[] = [], replies = ["Don't read file paths out loud.", 'NONE', 'SAME I1'];
+  const prompts: string[] = [], replies = ["<instruction>Don't read file paths out loud.</instruction>", 'Sure. <same>I1</same>', 'Okay, will do.'];
   harness.ask = async prompt => { prompts.push(prompt); return replies.shift()!; };
   await harness.learner!.consider({ utterance: 'Oh and um never like read the paths out loud to me okay', requestId: 'r1' });
   await until(() => checks.length === 1);
   assert.deepEqual(harness.voiceSessions.additionalInstructions.map(i => i.text), ["I1: Don't read file paths out loud."]);
+  assert.match(prompts[0], /Jev\) has determined that the operator just gave the companion a standing instruction/);
   assert.match(prompts[0], /never like read the paths out loud/); assert.match(prompts[0], /Instructions already in force: \(none\)/);
   assert.deepEqual(checks.map(c => [c.requestId, c.outcome]), [['r1', "Learned I1: Don't read file paths out loud."]]);
-  await harness.learner!.consider({ utterance: "Whenever there's an instruction added, I want you to run it by a", requestId: 'r2' });
-  await harness.learner!.consider({ utterance: 'Please never read file paths to me again', requestId: 'r3' });
+  await harness.learner!.consider({ utterance: 'Please never read file paths to me again', requestId: 'r2' });
+  await until(() => checks.length === 2);
+  assert.match(prompts[1], /I1: Don't read file paths out loud\./, 'what is in force is offered');
+  assert.equal(checks[1].outcome, 'Already in force as I1'); assert.equal(harness.voiceSessions.additionalInstructions.length, 1);
+  // A reply without the tags: the operator's own words are kept, as before.
+  await harness.learner!.consider({ utterance: 'Keep every answer short from now on', requestId: 'r3' });
   await until(() => checks.length === 3);
-  assert.match(prompts[2], /I1: Don't read file paths out loud\./, 'what is in force is offered');
-  assert.equal(harness.voiceSessions.additionalInstructions.length, 1, 'nothing more added');
-  assert.deepEqual(checks.slice(1).map(c => c.outcome), ['Looked like an instruction; the harness found none to add', 'Already in force as I1']);
+  assert.equal(harness.voiceSessions.additionalInstructions[1].text, 'I2: Keep every answer short from now on');
   const log = fs.readFileSync(path.join(root, 'run', 'events.jsonl'), 'utf8');
   assert.match(log, /"type":"instruction\.distilled","said":"Oh and um never like read the paths out loud to me okay"/, 'the operator\'s words stay in the log');
 });

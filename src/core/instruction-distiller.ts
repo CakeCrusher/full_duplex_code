@@ -1,40 +1,40 @@
-// What a learned instruction says. Jev only finds that the operator likely gave the voice
-// companion a standing instruction; the words themselves are speech: unfinished, hedged, mixed
-// with other talk. A detached one-off run of the same agent (its own non-interactive mode, no
-// tools, no saved session) writes the instruction those words amount to, or says there is none,
-// or that one in force already says it. The operator's words stay in the log.
+// What a learned instruction says. Jev finds that the operator gave the voice companion a standing
+// instruction; the words themselves are speech: unfinished, hedged, mixed with other talk. A
+// detached one-off run of the same harness (its own non-interactive mode, no tools, no saved
+// session) is told so, given what Jev saw, and writes the instruction inside <instruction> tags
+// (tags rather than tool calls, which not every harness's one-off mode has), or names one in force
+// that already says it. The operator's words stay in the log.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { AgentDefinition } from './adapter.ts';
 
-export type Distilled = { text: string } | { none: true } | { same: string };
+export type Distilled = { text: string } | { same: string };
 
-export function distillPrompt({ said, previous = '', companion = '', inForce }: { said: string; previous?: string; companion?: string; inForce: { id: string; text: string }[] }) {
+export function distillPrompt({ said, previous = '', companion = '', inForce, scores }: { said: string; previous?: string; companion?: string; inForce: { id: string; text: string }[]; scores?: { behave?: number; lasting?: string } }) {
   return [
-    'An operator talks by voice to a voice companion that relays a coding agent\'s work. A judge found that the operator may have just given the companion a standing instruction: how it should behave toward them from now on.',
-    'Write that instruction for the companion, or say there is none.',
+    'You are writing one instruction for a voice companion. The operator talks by voice to the companion, which relays a coding agent\'s work.',
+    `A judge (Jev) has determined that the operator just gave the companion a standing instruction: how it should behave toward them ${scores?.lasting === 'always' ? 'in every session' : 'for the rest of this session'}${typeof scores?.behave === 'number' ? ` (confidence ${scores.behave.toFixed(2)})` : ''}. There is an instruction here; your only job is to state it clearly.`,
     '',
-    `What the companion said just before: ${JSON.stringify(companion.slice(-400))}`,
-    `What the operator said before that: ${JSON.stringify(previous.slice(-400))}`,
-    `What the operator just said (speech-to-text, may be imperfect): ${JSON.stringify(said)}`,
-    `Instructions already in force: ${inForce.length ? inForce.map(i => `${i.id}: ${i.text}`).join(' | ') : '(none)'}`,
+    'What the judge saw:',
+    `- What the companion said just before: ${JSON.stringify(companion.slice(-400))}`,
+    `- What the operator said before that: ${JSON.stringify(previous.slice(-400))}`,
+    `- What the operator just said (speech-to-text, may be imperfect or unfinished): ${JSON.stringify(said)}`,
+    `- Instructions already in force: ${inForce.length ? inForce.map(i => `${i.id}: ${i.text}`).join(' | ') : '(none)'}`,
     '',
-    'Reply with exactly one line, nothing else:',
-    '- the instruction, addressed to the companion, one or two short sentences, self-contained, saying what the operator wants and nothing they did not say; or',
-    '- NONE if it is not a standing instruction to the companion: a task or question for the coding agent, talk about how the tool should be designed, a one-off request, or an unfinished thought whose instruction is unclear; or',
-    '- SAME <id> if an instruction already in force says the same thing.',
+    'Reply with exactly one of these and nothing else, no other text before or after:',
+    '<instruction>the instruction, addressed to the companion, one or two short sentences, self-contained, saying what the operator wants and nothing they did not say</instruction>',
+    '<same>ID</same>  (only if an instruction already in force says the same thing, e.g. <same>I1</same>)',
   ].join('\n');
 }
 
 export function parseDistilled(reply: string): Distilled {
-  const line = reply.split('\n').map(l => l.trim()).find(Boolean) ?? '';
-  if (/^NONE\b/i.test(line)) return { none: true };
-  const same = line.match(/^SAME\s+(I\d+)\b/i);
+  const same = reply.match(/<same>\s*(I\d+)\s*<\/same>/i);
   if (same) return { same: same[1].toUpperCase() };
-  if (!line) throw new Error('The agent gave no instruction.');
-  return { text: line.replace(/^["'`]|["'`]$/g, '').slice(0, 400) };
+  const text = reply.match(/<instruction>([\s\S]*?)<\/instruction>/i)?.[1].replace(/\s+/g, ' ').trim();
+  if (!text) throw new Error('The harness replied without an <instruction>.');
+  return { text: text.slice(0, 400) };
 }
 
 /** Runs the agent once, non-interactively, with no tools and none of the companion's keys; returns its reply. */

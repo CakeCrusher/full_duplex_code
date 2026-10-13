@@ -142,10 +142,9 @@ export class Harness {
     const inForce = this.voiceSessions.additionalInstructions.filter(item => item.learned).map(item => ({ id: item.learned!, text: item.text.replace(`${item.learned}: `, '') }));
     let text = instruction.text;
     try {
-      const reply = await this.ask(distillPrompt({ said: instruction.said ?? instruction.text, previous: instruction.previous, companion: instruction.companion, inForce }));
+      const reply = await this.ask(distillPrompt({ said: instruction.said ?? instruction.text, previous: instruction.previous, companion: instruction.companion, inForce, scores: instruction }));
       const distilled = parseDistilled(this.clean(reply));
       this.log({ type: 'instruction.distilled', said: instruction.said, distilled, requestId: instruction.requestId });
-      if ('none' in distilled) return this.jevCheck(instruction.requestId, 'instruction', 'Looked like an instruction; the harness found none to add', instruction);
       if ('same' in distilled) return this.jevCheck(instruction.requestId, 'instruction', `Already in force as ${distilled.same}`, instruction);
       text = distilled.text;
     } catch (error) {
