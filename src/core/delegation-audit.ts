@@ -36,13 +36,13 @@ export interface Judgment { needsAgent: number | null; sessions?: SessionsJudgme
 // On 8 sample requests (Oct 13): a plain "switch to video editing" scored only .73, the ones that also asked for work .02.
 export const ASKED = .7, ONLY = .7, UNLISTED = .7;
 
-const SESSIONS_SETTING = ' The operator may run several companions at once, each beside its own coding session in its own folder (`sessions`); each one\'s voice can be on or off, and several can be on together. fdc, the voice tool itself, turns them on or off; the coding agent does not.';
+const SESSIONS_SETTING = ' The operator may run several companions at once, each beside its own coding session in its own folder (`sessions`); each one\'s voice can be on or off, and several can be on together. fdc, the voice tool itself, turns them on or off; the coding agent does not. Every listed session is already running, so starting, opening or turning on a listed session (named by its folder or project) means turning its voice on, and stopping or closing one means turning its voice off.';
 const sessionQuestions = (sessions: Session[]) => ({
   sessions_asked: {
     type: 'noul',
     instructions: 'Does the operator, in `utterance`, ask to turn the voice of one or more companion sessions on or off: start one, stop one, switch to another, switch away from this one, or talk to several at once?',
     criteria: {
-      true: 'Asks for a session\'s voice to be turned on or off, to switch to or between sessions, to bring another session in, or for this session to stop listening. The session may be named by its folder, project or agent.',
+      true: 'Asks to start, open, turn on, stop or turn off a listed session, to switch to or between sessions, to bring another session in, or for this session to stop listening, with or without the word voice. The session may be named by its folder, project or agent.',
       false: 'Anything else: work on a project, even one named like a session; questions about how sessions work; designing the voice tool; switching something inside the code, such as a branch, a file or a setting.',
     },
   },
