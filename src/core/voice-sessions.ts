@@ -44,6 +44,9 @@ export class VoiceSessions {
   run?: Run;
   audit: AudioAudit | null = null;
   additionalInstructions: Instruction[] = [];
+  /** Every instruction appended to each session, in order, countermands included: nothing appended can be taken out. */
+  appendedTo = new WeakMap<LiveSession, string[]>();
+  appended(live: LiveSession, text: string) { this.appendedTo.set(live, [...this.appendedTo.get(live) ?? [], text]); }
   usage?: LiveUsage;
   /** When GPT Live last echoed microphone audio (or the page sent it, over WebSocket), and when the page last reported microphone levels. */
   lastAudioAt = 0; pageAudioAt = 0;
@@ -101,8 +104,10 @@ export class VoiceSessions {
   async disregard(run: Run, item: SavedInstruction) {
     const { live } = run;
     try {
-      await live.append('instructions', disregardInstruction(item.learned!, item.text.replace(`${item.learned}: `, '')));
-      run.inForce.delete(item.id); this.noteInForce(run);
+      const text = disregardInstruction(item.learned!, item.text.replace(`${item.learned}: `, ''));
+      await live.append('instructions', text);
+      this.appended(live, text); run.inForce.delete(item.id); this.noteInForce(run);
+      this.bridge.publish(this.bridge.status());
     } catch (error) { if (live.state === 'active') this.bridge.fault(error as Error, run.page); }
   }
   /** The saved record of the current agent session, read once its ID is known. */
@@ -169,6 +174,7 @@ export class VoiceSessions {
     Object.assign(item, { state: 'pending', sessionId: live.id });
     try {
       await live.append('instructions', item.text);
+      this.appended(live, item.text);
       if (this.live !== live || live.state !== 'active') return;
       Object.assign(item, { state: 'acknowledged', acknowledgedAt: Date.now(), appended: true });
       log({ type: 'voice.instruction_acknowledged', ...item });

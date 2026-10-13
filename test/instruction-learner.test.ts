@@ -77,6 +77,8 @@ test('a learned instruction joins this companion at once under an ID; removing i
   assert.deepEqual(appended[1], ['instructions', 'Disregard instruction I2 ("From now on, keep every answer to one sentence."): the operator removed it, so it no longer applies.']);
   assert.deepEqual(harness.voiceSessions.additionalInstructions.map(i => i.learned), ['I1']);
   assert.doesNotMatch(harness.voiceSessions.instructions(), /I2/);
+  // The running session's prompt shows what GPT Live has: nothing appended can be taken out, so I2 stays, then its countermand.
+  assert.match(harness.status().prompt.instructions, /I2: From now on, keep every answer to one sentence\.\n\nDisregard instruction I2 \(/);
   assert.ok(published.some(e => e.type === 'instruction_removed' && e.id === 'I2'));
   await harness.removeInstruction('I9'); await harness.removeInstruction(undefined);
   assert.equal(appended.length, 2, 'an unknown ID changes nothing');

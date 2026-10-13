@@ -33,8 +33,9 @@ export function statusSnapshot(bridge: Harness) {
   const { voiceSessions: voice, observer } = bridge;
   const live = voice.live;
   const budget = bridge.ledger.summary();
-  // Instructions appended during a session show as part of its prompt once Live acknowledges them.
-  const appended = live?.id ? voice.additionalInstructions.filter(item => item.appended && item.state === 'acknowledged' && item.sessionId === live.id).map(item => item.text) : [];
+  // What GPT Live actually has: its startup text, then every instruction appended to it in order. Nothing
+  // appended can be taken out, so a removed instruction stays, followed by the line that countermands it.
+  const appended = live?.id ? voice.appendedTo.get(live) ?? [] : [];
   const startup = live?.instructions ?? voice.instructions();
   const prompt = {
     instructions: startup + (appended.length ? `\n\n${startup.includes('Additional operator instructions:') ? '' : 'Additional operator instructions:\n'}${appended.join('\n\n')}` : ''),
