@@ -12,6 +12,9 @@ import { mountCompanions } from './companions.js';
 
 const token = location.hash.slice(1) || sessionStorage.getItem('fd-voice-token');
 if (location.hash) { sessionStorage.setItem('fd-voice-token', token!); history.replaceState(null, '', location.pathname); }
+// A new link from a later start, opened in this tab, changes only the hash, and the browser
+// doesn't reload for that: reload so the page reads the new key instead of the refused old one.
+addEventListener('hashchange', () => { if (location.hash.length > 1) location.reload(); });
 const bridge = new BridgeClient(), audio = new AudioIO(), peer = new WebRtcPeer();
 let active = false, starting = false, muted = false, currentStatus: BridgeEvent | undefined;
 let voiceSessionId: string | null = null;
