@@ -226,6 +226,17 @@ export class VoiceSessions {
         if (retry && plan === 'fork') { log({ type: 'voice.fork_failed', from: record.liveSessionId, message }); plan = record.turns.length ? 'seed' : 'fresh'; continue; }
         // The page says so beside the connection facts (resume.store).
         if (retry && live.store && /\bstor(e|ed|age)\b|retention|persist/i.test(message)) { this.store = false; log({ type: 'voice.store_refused', message }); continue; }
+        // A fork OpenAI answered but never started (twice in a row on Oct 13, "session startup timed out"): it isn't
+        // tried again; the page starts over at once, and Resume rebuilds the conversation from its text.
+        if (plan === 'fork' && live.answered && !live.requested && !bridge.stopping && record.turns.length) {
+          record.forkFailed = record.liveSessionId; this.save();
+          log({ type: 'voice.fork_never_started', from: record.liveSessionId, message });
+          if (page?.ws.readyState === WebSocket.OPEN && this.allowReconnect()) {
+            publish({ type: 'voice_closed', ...(this.failed ?? { reserved: false, finalized: false, usageSeconds: 0 }), reason: 'continuing the last voice session failed; rebuilding the conversation', reconnect: true }, page);
+            publish(bridge.status());
+            return;
+          }
+        }
         // The page learns that voice did not start; speech a dropped session left goes to the agent.
         this.handOffCarried();
         publish({ type: 'voice_closed', ...(this.failed ?? { reserved: false, finalized: false, usageSeconds: 0, reason: message }) }, page);

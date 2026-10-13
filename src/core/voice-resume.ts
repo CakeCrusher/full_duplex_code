@@ -18,6 +18,8 @@ export interface ResumeRecord {
   deliveredThrough?: number; lastRecordId?: number;
   /** How many instructions Jev has learned for this agent session, so IDs never repeat. */
   learnedCount?: number;
+  /** A session whose fork OpenAI connected but never started: Resume rebuilds the conversation from its text instead. */
+  forkFailed?: string;
 }
 export interface SavedInstruction { id: string; text: string; learned?: string; learnedIn?: string }
 // OpenAI keeps stored recordings for 30 days.
@@ -30,7 +32,7 @@ const MESSAGE_TOKENS = 8, MARGIN_TOKENS = 256, TURN_CHARS = 4000, KEPT_TURNS = 2
 // storing it: a probe's fork failed 0.35 s after the drop ("not found") and worked about 6 s after.
 export const DROPPED_FORK_MS = 8000;
 export const forkable = (record: ResumeRecord, now = Date.now()) =>
-  Boolean(record.liveSessionId && record.stored && record.endedAt && now - record.endedAt < RECORDING_MS && (record.finalized || now - record.endedAt >= DROPPED_FORK_MS));
+  Boolean(record.liveSessionId && record.stored && record.forkFailed !== record.liveSessionId && record.endedAt && now - record.endedAt < RECORDING_MS && (record.finalized || now - record.endedAt >= DROPPED_FORK_MS));
 export const planFor = (record: ResumeRecord, mode: 'resume' | 'fresh'): ResumePlan =>
   mode === 'fresh' ? 'fresh' : forkable(record) ? 'fork' : record.turns.length ? 'seed' : 'fresh';
 

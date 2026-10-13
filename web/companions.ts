@@ -3,9 +3,12 @@ import type { CompanionSummary as Companion } from '../src/core/companions.ts';
 // Every running companion, to switch between them: its folder, agent and state,
 // refreshed while the page is visible. Each companion has a tab of its own, so
 // switching never leaves a page and never ends the voice it runs.
-const LABELS = { voice: 'Voice on', starting: 'Starting voice', ready: 'Ready', waiting: 'Agent not connected', unreachable: 'Unreachable' };
+const LABELS = { voice: 'Voice on', starting: 'Starting voice', ready: 'Ready', notReady: 'Not ready', waiting: 'Agent not connected', unreachable: 'Unreachable' };
 const AGENT_STATES: Record<string, string> = { starting: 'starting', idle: 'ready for a request', working: 'working', needs_attention: 'needs your attention', failed: 'reported an error', exited: 'session ended' };
-const stateOf = (c: Companion): keyof typeof LABELS => !c.reachable ? 'unreachable' : c.voice === 'active' ? 'voice' : c.voice === 'connecting' ? 'starting' : c.agentReady ? 'ready' : 'waiting';
+// Ready only when its voice could start: its agent connected and a tab with the microphone allowed and clicked.
+const stateOf = (c: Companion): keyof typeof LABELS => !c.reachable ? 'unreachable' : c.voice === 'active' ? 'voice' : c.voice === 'connecting' ? 'starting' : !c.agentReady ? 'waiting' : c.blocked ? 'notReady' : 'ready';
+// What a companion that is not ready lacks, in a few words.
+const lacks = (blocked: string) => /no tab/.test(blocked) ? 'No tab open' : /blocked from/.test(blocked) ? 'Microphone blocked' : /not been allowed/.test(blocked) ? 'Microphone not allowed' : /not been clicked/.test(blocked) ? 'Needs a click in its tab' : 'Not ready';
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string) {
   const node = document.createElement(tag); node.className = className;
@@ -26,7 +29,7 @@ function chip(c: Companion) {
   const name = element('span', 'companion-name');
   name.append(element('i', 'companion-dot'), element('strong', '', c.folder));
   if (c.public) name.append(element('b', 'companion-public', 'Public'));
-  button.append(name, element('span', 'companion-meta', [c.agent, c.sessionId, LABELS[state]].filter(Boolean).join(' · ')));
+  button.append(name, element('span', 'companion-meta', [c.agent, c.sessionId, state === 'notReady' ? lacks(c.blocked!) : LABELS[state]].filter(Boolean).join(' · ')));
   // The link holds the other page's token: open it from here rather than show it as an address on hover.
   if (c.current) button.setAttribute('aria-current', 'page');
   else if (c.link && c.reachable) { const link = c.link; button.onclick = () => openCompanion(c.id, link); }
