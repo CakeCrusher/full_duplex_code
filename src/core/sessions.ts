@@ -14,9 +14,21 @@ import { sessionsHandled, sessionsOutcome } from './prompts.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
 
+const localPages = (bridge: Harness) => [...bridge.pages.all.values()].filter(p => p.via === 'local' && p.ws.readyState === WebSocket.OPEN);
+const readyPages = (bridge: Harness) => localPages(bridge).filter(p => p.ready?.microphone === 'granted' && p.ready.clicked);
+/** Why voice can't start here without the operator, or undefined when a tab of it can. */
+export function startBlocked(bridge: Harness): string | undefined {
+  const pages = localPages(bridge);
+  if (!pages.length) return 'no tab of it is open';
+  if (readyPages(bridge).length) return;
+  if (pages.some(p => p.ready?.microphone === 'denied')) return 'its tab is blocked from the microphone; allow it in the address bar';
+  if (!pages.some(p => p.ready?.microphone === 'granted')) return 'its tab has not been allowed the microphone yet; start voice there once';
+  return 'its tab has not been clicked since it opened (Chrome allows sound and the microphone only after a click)';
+}
+
 const name = (s: Session) => s.current ? 'this session' : s.folder;
 const names = (sessions: Session[]) => sessions.map(name).join(', ');
-const running = (sessions: Session[]) => sessions.map(s => `${s.folder} (${s.current ? 'this one, ' : ''}voice ${s.on ? 'on' : 'off'})`).join(', ');
+const running = (sessions: Session[]) => sessions.map(s => `${s.folder} (${s.current ? 'this one, ' : ''}voice ${s.on ? 'on' : 'off'}${!s.on && s.blocked ? `, can't start: ${s.blocked}` : ''})`).join(', ');
 
 export class SessionSwitch {
   bridge: Harness;
@@ -30,7 +42,7 @@ export class SessionSwitch {
   async screen(said: string, requestId: string): Promise<Screened> {
     const bridge = this.bridge, companions = await listCompanions(bridge, true, 800);
     // Only companions this one can reach and turn on or off.
-    const sessions: Session[] = companions.filter(c => c.current || (c.reachable && c.link)).map(c => ({ id: c.id, folder: c.folder, agent: c.agent, on: c.voice !== 'none', current: c.current }));
+    const sessions: Session[] = companions.filter(c => c.current || (c.reachable && c.link)).map(c => ({ id: c.id, folder: c.folder, agent: c.agent, on: c.voice !== 'none', current: c.current, blocked: c.blocked }));
     const judgment = await bridge.handOffAudit!.judge(said, sessions, 3000), { needsAgent } = judgment, asked = judgment.sessions!;
     bridge.log({ type: 'sessions.judged', requestId, needsAgent, ...asked });
     if (asked.asked < ASKED) return { needsAgent };
@@ -82,14 +94,14 @@ export class SessionSwitch {
     if (!entry) return { session, ok: false, text: `${session.folder} has stopped` };
     try {
       const answer = await this.call(entry, '/api/voice', { method: 'POST', body: JSON.stringify({ action: 'on', from }) });
-      if (!answer.ok) return { session, ok: false, text: `${session.folder}'s voice did not start: ${answer.reason}` };
+      if (!answer.ok) return { session, ok: false, text: `${session.folder}'s voice can't start: ${answer.reason}` };
       for (const until = Date.now() + this.confirmMs; Date.now() < until;) {
         const status = await this.call(entry, '/api/status').catch(() => undefined);
         if (status?.live === 'active') return { session, ok: true, text: `${session.folder}'s voice is on` };
         if (status?.voiceAsked?.failed) return { session, ok: false, text: `${session.folder}'s voice did not start: ${status.voiceAsked.failed}` };
         await new Promise(resolve => setTimeout(resolve, 500));
       }
-      return { session, ok: false, text: `${session.folder}'s voice did not start within ${this.confirmMs / 1000} s; its tab may need a click (Chrome allows sound and the microphone only after one)` };
+      return { session, ok: false, text: `${session.folder}'s voice did not start within ${this.confirmMs / 1000} s` };
     } catch (error) { return { session, ok: false, text: `${session.folder} did not answer (${(error as Error).message})` }; }
   }
 
@@ -114,9 +126,10 @@ export class SessionSwitch {
     if (action !== 'on') return { ok: false, reason: 'unknown action' };
     if (on) return { ok: true, state: 'already on' };
     if (!bridge.agentReady) return { ok: false, reason: `its ${bridge.agent.profile.name} is not connected` };
-    // The page opened last on this computer: a tab of it is where voice starts.
-    const page = [...bridge.pages.all.values()].reverse().find(p => p.via === 'local' && p.ws.readyState === WebSocket.OPEN);
-    if (!page) return { ok: false, reason: 'no page of it is open' };
+    // A tab on this computer that can start voice without the operator; the newest one.
+    const blocked = startBlocked(bridge);
+    if (blocked) return { ok: false, reason: blocked };
+    const page = readyPages(bridge).at(-1)!;
     this.asked = { at: Date.now(), from: origin };
     bridge.pages.send(page, { type: 'voice_on', from: origin });
     return { ok: true, state: 'starting' };

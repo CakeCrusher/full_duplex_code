@@ -26,7 +26,7 @@ const QUESTIONS = {
 };
 export type HandOff = 'passed' | 'answered';
 /** A running companion, as Jev is told about it. */
-export interface Session { id: string; folder: string; agent: string; on: boolean; current: boolean }
+export interface Session { id: string; folder: string; agent: string; on: boolean; current: boolean; /** Why its voice can't start without the operator. */ blocked?: string | null }
 /** Jev's reading of a request for session orchestration. */
 export interface SessionsJudgment { asked: number; only: number; unlisted: number; turnOn: string[]; turnOff: string[] }
 export interface Judgment { needsAgent: number | null; sessions?: SessionsJudgment }

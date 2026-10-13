@@ -116,11 +116,22 @@ function connect() {
       if (voiceDropped) notice('Reconnected. Voice ended when the connection dropped; click Start voice to start it again.');
       else if (connections > 1) notice('');
       voiceDropped = false;
+      reportReady();
     },
     onEvent: handle,
     onClose: disconnected,
   });
 }
+// Whether voice could start here without the operator: Chrome needs microphone permission and a click in the tab
+// before sound and the microphone work, so another companion turning this one on knows if it can.
+async function reportReady() {
+  let microphone = 'unknown';
+  try { microphone = (await navigator.permissions.query({ name: 'microphone' as PermissionName })).state; } catch {}
+  if (bridge.open) bridge.send({ type: 'page_ready', microphone, clicked: navigator.userActivation?.hasBeenActive ?? false });
+}
+navigator.permissions?.query({ name: 'microphone' as PermissionName }).then(status => { status.onchange = reportReady; }).catch(() => {});
+for (const type of ['pointerdown', 'keydown'] as const) addEventListener(type, () => { if (!clickedReported) { clickedReported = true; reportReady(); } }, { capture: true });
+let clickedReported = false;
 function disconnected() {
   const cue = cues.end(); if (cue) cuePlayer.play(cue);
   const hadVoice = active || starting;

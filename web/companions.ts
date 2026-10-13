@@ -17,6 +17,7 @@ function details(c: Companion) {
   const started = new Date(c.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const parts = [`${c.agent} ${AGENT_STATES[c.agentState ?? ''] ?? c.agentState ?? ''}`.trim(), `${c.pages} page${c.pages === 1 ? '' : 's'} open`, `started ${started}`];
   if (!c.current && !c.link) parts.push('open it on the computer running it');
+  if (c.voice === 'none' && c.blocked) parts.push(`voice can't start by voice: ${c.blocked}`);
   return parts.join(' · ');
 }
 function chip(c: Companion) {

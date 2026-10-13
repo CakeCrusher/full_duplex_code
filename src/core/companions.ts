@@ -17,6 +17,8 @@ export interface CompanionSummary {
   reachable: boolean; agentReady: boolean; agentState: string | null;
   voice: 'none' | 'connecting' | 'active'; voicePage: boolean; pages: number;
   public: boolean; startedAt: number;
+  /** Why its voice can't start without the operator (no tab, no microphone permission, no click), or null when it can. */
+  blocked: string | null;
   /** Where the page can switch to it, or null where it may not learn the token. */
   link: string | null;
 }
@@ -83,7 +85,7 @@ export function summarize(entry: CompanionEntry, status: Record<string, any> | u
     reachable: Boolean(status), agentReady: status?.agentReady === true, agentState: typeof status?.agent === 'string' ? status.agent : null,
     voice: status?.live === 'active' ? 'active' : ['new', 'connecting'].includes(status?.live) ? 'connecting' : 'none',
     voicePage: Boolean(status?.voicePage), pages: Number.isInteger(status?.pages) ? status!.pages : 0,
-    public: Boolean(entry.publicUrl), startedAt: entry.startedAt,
+    public: Boolean(entry.publicUrl), startedAt: entry.startedAt, blocked: typeof status?.voiceBlocked === 'string' ? status.voiceBlocked : null,
     // Through the tunnel, only links the tunnel already exposes: never a local-only companion's token.
     link: local ? `http://127.0.0.1:${entry.port}/#${entry.token}` : entry.publicUrl ? `${entry.publicUrl}/#${entry.token}` : null,
   };

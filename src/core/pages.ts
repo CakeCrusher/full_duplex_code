@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 
 /** One open companion page, on this computer or through the tunnel. */
-export interface Page { id: string; ws: WebSocket; via: 'local' | 'tunnel'; alive: boolean }
+export interface Page { id: string; ws: WebSocket; via: 'local' | 'tunnel'; alive: boolean; /** Whether voice could start in it without the operator: microphone permission, and a click in the tab. */ ready?: { microphone: string; clicked: boolean } }
 
 // Every open companion page. Each one shows the session; a voice session
 // belongs to the page that started it (see VoiceSessions).

@@ -1,3 +1,4 @@
+import { startBlocked } from './sessions.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Timeline } from './timeline.ts';
@@ -53,5 +54,5 @@ export function statusSnapshot(bridge: Harness) {
   const voicePage = live && live.state !== 'closed' ? voice.page?.id ?? null : null;
   // The last voice session that ended on its own, and automatic reconnects in the last five minutes.
   const connection = { lastDrop: voice.lastDrop, reconnects: voice.recentReconnects() };
-  return { type: 'status', agent: observer.state, agentReady: Boolean(bridge.agentReady), live: live?.state ?? 'disconnected', voicePage, pages: bridge.pages.size, cwd: bridge.cwd, sessionId: bridge.sessionId, usageSeconds: live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: bridge.runDir, observation: bridge.observation, prompt, contextDelivery, resume: voice.resumeStatus(), connection, tuning: bridge.tuning, jevTuning: Boolean(bridge.tuner), liveUsage: voice.usage ?? null, voiceAsked: bridge.sessionSwitch.asked ?? null };
+  return { type: 'status', agent: observer.state, agentReady: Boolean(bridge.agentReady), live: live?.state ?? 'disconnected', voicePage, pages: bridge.pages.size, cwd: bridge.cwd, sessionId: bridge.sessionId, usageSeconds: live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: bridge.runDir, observation: bridge.observation, prompt, contextDelivery, resume: voice.resumeStatus(), connection, tuning: bridge.tuning, jevTuning: Boolean(bridge.tuner), liveUsage: voice.usage ?? null, voiceAsked: bridge.sessionSwitch.asked ?? null, voiceBlocked: startBlocked(bridge) ?? null };
 }

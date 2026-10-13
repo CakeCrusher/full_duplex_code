@@ -17,7 +17,7 @@ async function pair(t: TestContext) {
   const a = await harness(t, { cwd: folder('alpha') }, root), b = await harness(t, { cwd: folder('beta') }, root);
   // Beta's open page starts voice when asked, as web/app.ts does.
   const ws = { readyState: 1, bufferedAmount: 0, send(text: string) { const event = JSON.parse(text); if (event.type === 'voice_on') void b.h.startLive(undefined, page, 'fresh'); }, on() {}, terminate() {}, close() {} } as any;
-  const page = { id: 'beta-page', ws, via: 'local', alive: true } as any;
+  const page = { id: 'beta-page', ws, via: 'local', alive: true, ready: { microphone: 'granted', clicked: true } } as any;
   b.h.pages.all.set(ws, page); b.h.pages.send = (p, event) => p.ws.send(JSON.stringify(event));
   a.h.sessionSwitch.goodbyeMs = 10; a.h.sessionSwitch.confirmMs = 3000;
   return { a, b };
@@ -51,7 +51,7 @@ test('a companion that cannot start voice is reported, and this one stays on', a
   await a.h.sessionSwitch.screen('Switch to beta.', 'r1');
   await until(() => a.lives[0].appended.some(([, text]) => /^Voice sessions:/.test(text)));
   const outcome = a.lives[0].appended.find(([, text]) => /^Voice sessions:/.test(text))![1];
-  assert.match(outcome, /beta's voice did not start: no page of it is open; this session stays on/);
+  assert.match(outcome, /beta's voice can't start: no tab of it is open; this session stays on/);
   assert.equal(a.lives[0].state, 'active');
 });
 
@@ -120,4 +120,24 @@ test('the mediator: a handled request is answered to GPT Live\'s delegation and 
   const failing = mediator(t, async () => { throw new Error('Jev returned HTTP 500'); });
   await failing.m.screened('r3', failing.m.history.request(Infinity)!, 'content', 'd3');
   assert.equal(failing.deliveries.length, 1, 'in doubt, it reaches the harness');
+});
+
+test('a tab that has not been clicked, or allowed the microphone, is reported at once instead of waited for', async t => {
+  const { a, b } = await pair(t);
+  const page = [...b.h.pages.all.values()][0];
+  judge(a.h, sessions => ({ turnOn: [id(sessions, 'beta')] }));
+  await a.h.startLive(undefined, undefined, 'fresh');
+  page.ready = { microphone: 'granted', clicked: false };
+  const started = Date.now();
+  await a.h.sessionSwitch.screen('Turn on beta too.', 'r1');
+  await until(() => a.lives[0].appended.some(([, text]) => /^Voice sessions:/.test(text)));
+  assert.match(a.lives[0].appended.find(([, text]) => /^Voice sessions:/.test(text))![1], /beta's voice can't start: its tab has not been clicked since it opened/);
+  assert.ok(Date.now() - started < 2000);
+  page.ready = { microphone: 'prompt', clicked: true };
+  assert.match(b.h.status().voiceBlocked!, /not been allowed the microphone/);
+  page.ready = { microphone: 'denied', clicked: true };
+  assert.match(b.h.status().voiceBlocked!, /blocked from the microphone/);
+  page.ready = { microphone: 'granted', clicked: true };
+  assert.equal(b.h.status().voiceBlocked, null);
+  assert.equal(b.lives.length, 0);
 });
