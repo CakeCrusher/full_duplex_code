@@ -1,7 +1,13 @@
 import type { AgentDefinition } from './adapter.ts';
 
 export interface TimelineItem { id: string; track: string; start: number; end: number; [field: string]: any }
+export interface JevCheck { at: number; kind: string; outcome: string; scores: Record<string, number | string | null>; words?: string; flagged: boolean }
 type Agent = Pick<AgentDefinition, 'profile' | 'receivedRequest'>;
+// Jev's needsAgent below this says an answer would have done: GPT Live passed on what it could have answered.
+const ANSWERABLE = .4;
+/** A check worth the operator's eye: Jev learned an instruction, or disagrees with passing the words on. */
+export const flagged = ({ kind, outcome, scores }: Omit<JevCheck, 'flagged' | 'at'>) =>
+  kind === 'handoff' ? typeof scores?.needsAgent === 'number' && scores.needsAgent < ANSWERABLE : /\blearned I\d+/i.test(outcome);
 
 // Compact visual history. This is independent of the complete context sent to
 // GPT Live: grouping here changes only how the browser draws observations.
@@ -9,12 +15,15 @@ export class Timeline {
   origin: number; agent: Agent;
   sequence = 0; items = new Map<string, TimelineItem>();
   audio = new Map<string, TimelineItem>(); transcripts = new Map<string, TimelineItem>(); requests = new Map<string, TimelineItem>(); context = new Map<string, TimelineItem>();
+  /** Jev's checks of a request whose item has not appeared yet, by request ID. */
+  checks = new Map<string, JevCheck[]>();
   constructor(origin = Date.now(), agent: Agent) { this.origin = origin; this.agent = agent; }
   item(fields: Omit<TimelineItem, 'id'>): TimelineItem {
     const item = { id: `event-${++this.sequence}`, ...fields } as TimelineItem;
     this.items.set(item.id, item);
     return item;
   }
+  attach(item: TimelineItem, check: JevCheck) { item.checks = [...item.checks ?? [], check]; item.flagged = item.checks.some((c: JevCheck) => c.flagged); }
   snapshot() { return { origin: this.origin, items: [...this.items.values()] }; }
   add(event: Record<string, any>): TimelineItem[] {
     const at = event.at ?? Date.now(); const changed: TimelineItem[] = [];
@@ -82,6 +91,8 @@ export class Timeline {
           text: event.text, state: event.state, source: 'Request delivery, not agent execution time',
         });
         this.requests.set(event.id, item);
+        for (const check of this.checks.get(event.id) ?? []) this.attach(item, check);
+        this.checks.delete(event.id);
       }
       item.text = event.text ?? item.text;
       item.notification = event.notification ?? item.notification;
@@ -89,6 +100,13 @@ export class Timeline {
       if (item.state !== 'observed') { item.state = event.state; item.end = Math.max(item.end, at); }
       if (event.state === 'sent') item.sentAt ??= at;
       changed.push(item);
+    }
+    if (event.type === 'jev_check') {
+      // Jev checks the words of a request once it is sent; a check may arrive before its item.
+      const check: JevCheck = { at, kind: event.kind, outcome: event.outcome, scores: event.scores ?? {}, words: event.words, flagged: flagged(event as JevCheck) };
+      const item = this.requests.get(event.requestId);
+      if (item) { this.attach(item, check); changed.push(item); }
+      else this.checks.set(event.requestId, [...this.checks.get(event.requestId) ?? [], check]);
     }
     if (event.type === 'agent_input') {
       // The adapter recognizes its own envelope around a delivered voice request.

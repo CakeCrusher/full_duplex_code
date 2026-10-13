@@ -94,9 +94,9 @@ With Developer mode, the browser shows six tracks:
 | Operator audio | Microphone activity after the noise gate and mute, including quiet word endings. Filtered background noise leaves gaps. |
 | Live speech | Audio actually rendered by the browser, including overlap with your microphone. |
 | API transcript | Input ASR and Live’s output transcript on separate rows. Input text can be inaccurate even during silence; it is not proof you spoke. |
-| Claude hooks | Every raw observation, including tool calls/results, file changes, displayed text, and lifecycle hooks, at bridge receipt time. The filtered Live view goes to thinking; originals remain here. |
+| Harness hooks | Every raw observation, including tool calls/results, file changes, displayed text, and lifecycle hooks, at bridge receipt time. The filtered Live view goes to thinking; originals remain here. |
 | Context to Live | Every actual thinking append and commentary append, from send to acknowledgment. Click for the exact JSON. Acknowledgment does not mean the model has finished using the content. |
-| Requests to Claude | Spoken request delivery and prompts submitted directly in the terminal. |
+| Requests to harness | Spoken request delivery and prompts submitted directly in the terminal. |
 
 Hover over an item to see its text and timing. Click or tap to pin the full details below the chart; keyboard focus works too. Use **Window** to zoom, the arrow buttons or history slider to look back, and **Follow live** to return to the current moment. Inspecting or reviewing the chart does not pause the microphone, the companion, or Claude.
 
@@ -109,6 +109,8 @@ Runs also save `audio.transport` events once per second with the browser receive
 Where supported, the browser requests a 200 ms target for WebRTC’s existing network jitter buffer to help recover late packets. Actual delay is chosen by the browser and varies with the connection. Incoming and outgoing audio continue simultaneously; the app does not hold whole sentences, filter speech, or replace Live’s voice. This cannot correct unwanted narration or words that Live never generated.
 
 Click a voice request to see the **full channel message**. **Copy message** copies that text. Expand **Channel notification JSON** for the content and metadata sent by the channel. Once Claude's `UserPromptSubmit` hook arrives, the inspector shows the captured prompt and checks that its contents match the sent message. Until then, delivery is not presented as verified receipt. A mismatch is shown explicitly.
+
+In Developer mode, a request's details also list **Jev checks of these words**: each check Jev made of the request (the instruction check and the hand-off audit), with its time, scores, outcome and the words it judged. A request is outlined in purple when Jev learned an instruction from it or doubts it needed the agent (needsAgent below 0.4).
 
 Each request carries the voice conversation since the previous request, one utterance per line (words GPT Live transcribed from stretches where it heard only silence are left out, and logged as `bridge.unheard_transcript`): yours marked `user:`, Live's marked `voice assistant:`. A one-sentence note at the top tells the agent that the request is in your lines and Live's lines are context. Speech from before the previous request went with it and is not sent again. The bridge does not rewrite transcription mistakes; the inspector shows what was actually sent.
 
