@@ -16,14 +16,14 @@ type Outcome = { session: Session; ok: boolean; text: string };
 
 const localPages = (bridge: Harness) => [...bridge.pages.all.values()].filter(p => p.via === 'local' && p.ws.readyState === WebSocket.OPEN);
 const readyPages = (bridge: Harness) => localPages(bridge).filter(p => p.ready?.microphone === 'granted' && p.ready.clicked);
-/** Why voice can't start here without the operator, or undefined when a tab of it can. */
+/** Why voice can't start here without the operator, or undefined when a page of it can. */
 export function startBlocked(bridge: Harness): string | undefined {
   const pages = localPages(bridge);
-  if (!pages.length) return 'no tab of it is open';
+  if (!pages.length) return 'no page of it is open (open an fdc page on this computer: it loads every running session)';
   if (readyPages(bridge).length) return;
-  if (pages.some(p => p.ready?.microphone === 'denied')) return 'its tab is blocked from the microphone; allow it in the address bar';
-  if (!pages.some(p => p.ready?.microphone === 'granted')) return 'its tab has not been allowed the microphone yet; start voice there once';
-  return 'its tab has not been clicked since it opened (Chrome allows sound and the microphone only after a click)';
+  if (pages.some(p => p.ready?.microphone === 'denied')) return 'its page is blocked from the microphone; allow it in the address bar';
+  if (!pages.some(p => p.ready?.microphone === 'granted')) return 'its page has not been allowed the microphone yet';
+  return 'its page has not been clicked since it opened (Chrome allows sound and the microphone only after a click)';
 }
 
 const name = (s: Session) => s.current ? 'this session' : s.folder;
@@ -126,7 +126,7 @@ export class SessionSwitch {
     if (action !== 'on') return { ok: false, reason: 'unknown action' };
     if (on) return { ok: true, state: 'already on' };
     if (!bridge.agentReady) return { ok: false, reason: `its ${bridge.agent.profile.name} is not connected` };
-    // A tab on this computer that can start voice without the operator; the newest one.
+    // A page on this computer that can start voice without the operator; the newest one.
     const blocked = startBlocked(bridge);
     if (blocked) return { ok: false, reason: blocked };
     const page = readyPages(bridge).at(-1)!;

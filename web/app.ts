@@ -131,7 +131,8 @@ async function reportReady() {
   let microphone = 'unknown';
   try { microphone = (await navigator.permissions.query({ name: 'microphone' as PermissionName })).state; } catch {}
   if (microphoneAccess.opened && microphone !== 'denied') microphone = 'granted';
-  const ready = { microphone, clicked: navigator.userActivation?.hasBeenActive ?? false }, key = JSON.stringify(ready);
+  // Inside another companion's tab, that tab's click carries over (the frame is allowed autoplay).
+  const ready = { microphone, clicked: (navigator.userActivation?.hasBeenActive ?? false) || window !== window.top }, key = JSON.stringify(ready);
   if (!bridge.open || key === readyReported) return;
   readyReported = key; bridge.send({ type: 'page_ready', ...ready });
 }
@@ -215,7 +216,7 @@ async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false, aske
     if (!current()) return; releaseAudio();
     const { name, message } = error as Error;
     // Asked by another companion: it tells the operator why this one did not start.
-    if (asked && bridge.open) bridge.send({ type: 'voice_on_failed', message: name === 'NotAllowedError' ? 'its tab is not allowed to use the microphone' : message });
+    if (asked && bridge.open) bridge.send({ type: 'voice_on_failed', message: name === 'NotAllowedError' ? 'its page is not allowed to use the microphone' : message });
     notice(name === 'NotAllowedError' ? 'Allow microphone access in Chrome, then click Start voice.'
       : ['OverconstrainedError', 'NotFoundError'].includes(name) ? 'The selected microphone is unavailable. Choose another microphone, then click Start voice.'
       : message);
@@ -253,5 +254,5 @@ addEventListener('pagehide', () => { leaving = true; clearTimeout(retry); stop()
 // A page restored from the back/forward cache connects again.
 addEventListener('pageshow', event => { if (event.persisted) { leaving = false; connect(); } });
 requireMicrophone(reportReady);
-mountCompanions($('companions'), token, () => active || starting);
+mountCompanions($('companions'), token);
 connect();

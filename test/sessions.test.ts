@@ -51,7 +51,7 @@ test('a companion that cannot start voice is reported, and this one stays on', a
   await a.h.sessionSwitch.screen('Switch to beta.', 'r1');
   await until(() => a.lives[0].appended.some(([, text]) => /^Voice sessions:/.test(text)));
   const outcome = a.lives[0].appended.find(([, text]) => /^Voice sessions:/.test(text))![1];
-  assert.match(outcome, /beta's voice can't start: no tab of it is open; this session stays on/);
+  assert.match(outcome, /beta's voice can't start: no page of it is open.*; this session stays on/);
   assert.equal(a.lives[0].state, 'active');
 });
 
@@ -131,7 +131,7 @@ test('a tab that has not been clicked, or allowed the microphone, is reported at
   const started = Date.now();
   await a.h.sessionSwitch.screen('Turn on beta too.', 'r1');
   await until(() => a.lives[0].appended.some(([, text]) => /^Voice sessions:/.test(text)));
-  assert.match(a.lives[0].appended.find(([, text]) => /^Voice sessions:/.test(text))![1], /beta's voice can't start: its tab has not been clicked since it opened/);
+  assert.match(a.lives[0].appended.find(([, text]) => /^Voice sessions:/.test(text))![1], /beta's voice can't start: its page has not been clicked since it opened/);
   assert.ok(Date.now() - started < 2000);
   page.ready = { microphone: 'prompt', clicked: true };
   assert.match(b.h.status().voiceBlocked!, /not been allowed the microphone/);

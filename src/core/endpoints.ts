@@ -74,7 +74,8 @@ export class Endpoints {
   async handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
     const bridge = this.bridge;
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none'");
+    // One tab shows every companion's page (web/companions.ts): locally, or through their tunnels from a phone. A page does nothing without its token.
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; frame-src http://127.0.0.1:* https://*.trycloudflare.com; frame-ancestors 'self' http://127.0.0.1:* https://*.trycloudflare.com");
     const { local, allowed } = this.access(req);
     if (!allowed) { res.writeHead(403); return res.end(); }
     if (req.url === '/hook' && req.method === 'POST') {
