@@ -8,6 +8,7 @@ import { ObservationFeed, type Hold } from './observation-feed.ts';
 import { Floor, operatorSpeaking, type MicrophoneLevel } from './floor.ts';
 import { DEFAULT_TUNING, holdOf, type Tuning } from './tuning.ts';
 import type { InstructionLearner } from './instruction-learner.ts';
+import { ANSWERED_AFTER_MS, type DelegationAudit } from './delegation-audit.ts';
 import { nothingToSend, queueFailed, sessionEndRequest, voiceRequest } from './prompts.ts';
 
 /** The part of a Live session the mediator uses. */
@@ -31,15 +32,17 @@ export class Mediator {
   floor: Floor;
   /** Learns the operator's standing instructions, when Jev is configured. */
   learner?: InstructionLearner; judgedThrough = -1; judgeTimer?: NodeJS.Timeout; previousUtterance = '';
+  /** Records each hand-off decision of GPT Live with Jev's judgment of it, when Jev is configured. Sends nothing. */
+  audit?: DelegationAudit; auditTimer?: NodeJS.Timeout; delegatedAt = 0; auditedThrough = -1;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
-  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, firstRecordId = 0 }: {
+  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, audit, firstRecordId = 0 }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
-    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner;
+    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; audit?: DelegationAudit;
     /** Context records are numbered after this one: a fork's context already holds its source's. */
     firstRecordId?: number;
   }) {
-    this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.learner = learner;
+    this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.learner = learner; this.audit = audit;
     this.agent = agent;
     this.floor = new Floor({ thinkMs: tuning.thinkMs, pauseMs: tuning.pauseMs });
     if (hold === undefined) hold = holdOf(tuning);
@@ -69,6 +72,8 @@ export class Mediator {
       this.floor.hear();
       // Once the operator pauses, Jev judges what they said.
       if (this.learner) { clearTimeout(this.judgeTimer); this.judgeTimer = setTimeout(() => this.judge(), 2500); }
+      // Quiet long enough with nothing passed on: GPT Live answered it; record that with Jev's view.
+      if (this.audit) { clearTimeout(this.auditTimer); this.auditTimer = setTimeout(() => this.auditAnswered(), ANSWERED_AFTER_MS); }
     }
     if (event.type === 'session.input_audio.append' && typeof event.audio === 'string') this.history.hearAudio(event);
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
@@ -78,7 +83,7 @@ export class Mediator {
     if (event.type === 'session.delegation.created' && event.delegation?.target === 'client') {
       const id = event.delegation.id;
       if (this.seenDelegations.has(id)) return;
-      this.seenDelegations.add(id);
+      this.seenDelegations.add(id); this.delegatedAt = Date.now();
       const createdAt = Date.now();
       const attempt = () => {
         const sinceInput = Date.now() - this.history.lastInputAt;
@@ -101,6 +106,15 @@ export class Mediator {
     this.previousUtterance = utterance.utterance;
     this.learner.consider(utterance).catch(error => this.log({ type: 'instruction.error', message: (error as Error).message }));
   }
+  // What the operator said since the last hand-off or audit, which GPT Live kept and answered itself.
+  auditAnswered() {
+    if (!this.audit || this.live.state !== 'active' || Date.now() - this.delegatedAt < ANSWERED_AFTER_MS) return;
+    const fragments = this.history.fragments.filter(f => f.seq > Math.max(this.auditedThrough, this.history.delegatedThrough) && !f.carried);
+    if (!fragments.length) return;
+    this.auditedThrough = fragments.at(-1)!.seq;
+    const said = fragments.filter(f => f.role === 'operator' && !this.history.unheard(f)).map(f => f.text).join('').trim();
+    if (said) void this.audit.record({ handOff: 'answered', said: this.clean(said), voiceSessionId: this.live.id });
+  }
   /** The microphone level of the page this voice session listens to. */
   hear(level: MicrophoneLevel) { if (operatorSpeaking(level)) this.floor.hear(); }
   schedule(fn: () => void, ms: number) { const timer = setTimeout(() => { this.timers.delete(timer); fn(); }, ms); this.timers.add(timer); }
@@ -117,6 +131,11 @@ export class Mediator {
     try {
       this.deliver({ id: randomUUID(), content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now() });
       this.history.markDelivered(request);
+      if (this.audit) {
+        this.auditedThrough = Math.max(this.auditedThrough, request.through);
+        const said = request.utterances.filter(u => u.role === 'operator').map(u => u.text).join(' ').trim();
+        if (said) void this.audit.record({ handOff: 'passed', said: this.clean(said), voiceSessionId: this.live.id, delegationId });
+      }
     } catch (error) {
       this.fault(error as Error);
       this.context.add('thinking', queueFailed(this.agent), delegationId);
@@ -134,7 +153,7 @@ export class Mediator {
     } catch (error) { this.fault(error as Error); }
   }
   stop() {
-    this.feed.stop(); this.context.stop(); for (const timer of this.timers) clearTimeout(timer); this.timers.clear(); clearTimeout(this.judgeTimer);
+    this.feed.stop(); this.context.stop(); for (const timer of this.timers) clearTimeout(timer); this.timers.clear(); clearTimeout(this.judgeTimer); clearTimeout(this.auditTimer);
     this.live.off('event', this.onLive); this.observer.off('observation', this.onObservation);
   }
 }
