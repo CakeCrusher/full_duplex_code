@@ -1,5 +1,5 @@
 // Voice sessions under real event order: moves during a greeting, removals while a session
-// starts or ends, carried speech, what a fork catches up on, the work catcher and Jev's tuning.
+// starts or ends, carried speech, what a fork catches up on and Jev's tuning.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,7 +11,6 @@ import { Harness } from '../src/core/bridge.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
 import { Mediator } from '../src/core/mediator.ts';
-import { WorkCatcher } from '../src/core/work-catcher.ts';
 import { Live, page, harness, learn, disregarded, settle, until } from './live-fake.ts';
 
 test('moving voice while a resumed session greets creates only the moved session, and leaves it in charge', async t => {
@@ -197,48 +196,13 @@ test('after fdc restarts, a fork is not told that work from before its source en
   assert.ok(!catchUp.includes('14 imports'));
 });
 
-test('the work catcher reads the newest words, however many answered questions came before', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
-  const observer = new ClaudeObserver({ sessionId: 'test' });
-  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => { live.state = 'closed'; }; live.append = async () => {};
-  const fetch = async (_url: string, init: any) => ({ ok: true, status: 200, json: async () => ({ answers: { needs_agent: { noul: /merge it/.test(JSON.parse(init.body).state.utterance) ? .95 : .1 } } }) });
-  const deliveries: any[] = [];
-  const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, catcher: new WorkCatcher({ apiKey: 'k', log: () => {}, fetch }) });
-  t.after(() => { mediator.stop(); observer.close(); });
-  const pass = async (ms: number) => { t.mock.timers.tick(ms); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
-  let at = 0;
-  for (let i = 0; i < 7; i++) { live.emit('event', { type: 'session.input_transcript.delta', delta: `Question ${i}: what is the agent doing with the parser refactor and the tests right now, roughly?`, start_ms: at, end_ms: at + 3000 }); at += 20000; await pass(9000); }
-  assert.equal(deliveries.length, 0, 'questions stay answered');
-  live.emit('event', { type: 'session.input_transcript.delta', delta: ' Okay, just go ahead and merge it.', start_ms: at, end_ms: at + 1500 });
-  await pass(9000);
-  assert.equal(deliveries.length, 1);
-});
-
-test('the work catcher still sends a request when GPT Live speaks while Jev is judging', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
-  const observer = new ClaudeObserver({ sessionId: 'test' });
-  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => { live.state = 'closed'; }; live.append = async () => {};
-  let release!: () => void;
-  const catcher = { needsAgent: async () => { await new Promise<void>(resolve => { release = resolve; }); return .95; } } as unknown as WorkCatcher;
-  const deliveries: any[] = [];
-  const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, catcher });
-  t.after(() => { mediator.stop(); observer.close(); });
-  const pass = async (ms: number) => { t.mock.timers.tick(ms); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
-  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Just go ahead and merge it.', start_ms: 0, end_ms: 1500 });
-  live.emit('event', { type: 'session.output_transcript.delta', delta: 'Sure, I will take care of that.', start_ms: 1800, end_ms: 3000 });
-  await pass(8500);
-  live.emit('event', { type: 'session.output_transcript.delta', delta: ' By the way, the tests just passed.', start_ms: 9000, end_ms: 10500 });
-  release(); await pass(10);
-  assert.equal(deliveries.length, 1);
-});
-
 test('instructions restored after a restart bring back the settings Jev chose for them', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-retune-')), sessionId = randomUUID();
   const make = () => {
     const h = new Harness({ agent: claude, root, runDir: path.join(root, `run-${randomUUID()}`), cwd: root, sessionId, apiKey: 'unused', jevKey: 'k', jevTuning: true });
     h.tuner!.choose = async ({ instructions, current }) => instructions.some(i => /talk at length/.test(i)) && current.holdLongestMs !== 20000
       ? { tuning: { ...current, holdLongestMs: 20000 }, changes: [{ name: 'holdLongestMs', from: current.holdLongestMs, to: 20000 }] } : { tuning: current, changes: [] };
-    h.learner!.consider = async () => undefined; h.catcher = undefined;
+    h.learner!.consider = async () => undefined;
     return h;
   };
   const first = make(); await first.start(); first.agentReady = true;
@@ -250,43 +214,6 @@ test('instructions restored after a restart bring back the settings Jev chose fo
   second.status();
   await settle(1300);
   assert.equal(second.tuning.holdLongestMs, 20000);
-});
-
-test('a work request whose judgment failed is judged again at the next pause', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
-  const observer = new ClaudeObserver({ sessionId: 'test' });
-  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => { live.state = 'closed'; }; live.append = async () => {};
-  let calls = 0;
-  const catcher = { needsAgent: async (said: string) => { if (++calls === 1) throw new Error('The operation was aborted due to timeout'); return /merge the feature branch/.test(said) ? .95 : .1; } } as unknown as WorkCatcher;
-  const deliveries: any[] = [];
-  const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, catcher });
-  t.after(() => { mediator.stop(); observer.close(); });
-  const pass = async (ms: number) => { t.mock.timers.tick(ms); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
-  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Please merge the feature branch.', start_ms: 0, end_ms: 1500 });
-  await mediator.catchWork().catch(() => {});
-  live.emit('event', { type: 'session.input_transcript.delta', delta: ' Hmm, okay.', start_ms: 20000, end_ms: 20800 });
-  await pass(8500);
-  assert.equal(deliveries.length, 1);
-});
-
-test('a positive judgment that lands after GPT Live passed the words on owes nothing', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
-  const observer = new ClaudeObserver({ sessionId: 'test' });
-  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => { live.state = 'closed'; }; live.append = async () => {};
-  let release: ((p: number) => void) | undefined;
-  const catcher = { needsAgent: (said: string) => /merge/.test(said) ? new Promise<number>(resolve => { release = resolve; }) : Promise.resolve(.1) } as unknown as WorkCatcher;
-  const deliveries: any[] = [];
-  const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, catcher });
-  t.after(() => { mediator.stop(); observer.close(); });
-  const pass = async (ms: number) => { t.mock.timers.tick(ms); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
-  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Please merge the feature branch.', start_ms: 0, end_ms: 1500 });
-  await pass(8500);
-  live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' }, offset_ms: 2000 });
-  await pass(700);
-  release!(.95); await pass(10);
-  live.emit('event', { type: 'session.input_transcript.delta', delta: 'What is the status of the tests?', start_ms: 30000, end_ms: 31500 });
-  await pass(8500);
-  assert.equal(deliveries.length, 1, "only GPT Live's own request");
 });
 
 test('with the transcript observed, text held behind a later hook at the end of voice reaches the fork', async t => {

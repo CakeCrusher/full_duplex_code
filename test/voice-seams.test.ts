@@ -146,7 +146,6 @@ test('after an automatic reconnect, Jev is not asked again about the carried spe
   const { h, lives } = await harness(t, { jevKey: 'jev-test' });
   const considered: string[] = [];
   h.learner!.consider = async (utterance: any) => { considered.push(utterance.utterance); return undefined; };
-  h.catcher = undefined;
   h.pages.send = () => {};
   const page = openPage('p');
   await h.voiceSessions.start('sdp', page, 'fresh');
