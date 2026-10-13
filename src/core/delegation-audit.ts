@@ -62,9 +62,12 @@ const sessionQuestions = (sessions: Session[]) => ({
   ...Object.fromEntries(sessions.map((session, index) => [`session_${index + 1}`, {
     type: 'choice',
     instructions: `What does the operator ask for session_${index + 1} (${session.folder}${session.current ? ', the session they are speaking to now' : ''})? Its voice is ${session.on ? 'on' : 'off'}.`,
-    criteria: session.on
-      ? { turn_off: session.current ? 'Stop this session\'s voice, or switch away from it to another session.' : 'Stop this session\'s voice or take it out of the conversation.', leave: 'Nothing about this session\'s voice, or keep it on.' }
-      : { turn_on: 'Start this session\'s voice, switch to it, or bring it into the conversation.', leave: 'Nothing about this session\'s voice, or keep it off.' },
+    // The session spoken to is told apart from the others: "turn off video-editing", said to two at once, turned both off.
+    criteria: session.current
+      ? { turn_off: 'The operator asks the session they are speaking to (here, you, this one, or all of them) to stop listening, or to switch away from it to another session.', leave: 'The operator does not ask this session itself to stop. Asking to turn off a different session, named by its folder or project, leaves this one on.' }
+      : session.on
+      ? { turn_off: `The operator names or clearly means ${session.folder} (or all of them) and asks for its voice to stop.`, leave: `The operator does not ask ${session.folder}'s voice to stop.` }
+      : { turn_on: `The operator names or clearly means ${session.folder} and asks to start its voice, switch to it, or bring it into the conversation.`, leave: `The operator does not ask to start ${session.folder}'s voice.` },
   }])),
 });
 const sessionLines = (sessions: Session[]) => sessions.map((s, index) => `session_${index + 1}: ${s.folder} (${s.agent}), voice ${s.on ? 'on' : 'off'}${s.current ? ' (the one the operator is speaking to now)' : ''}`).join('\n');
