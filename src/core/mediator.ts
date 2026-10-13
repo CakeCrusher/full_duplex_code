@@ -3,12 +3,12 @@ import type { EventEmitter } from 'node:events';
 import type { Observation, VoiceRequest } from './adapter.ts';
 import type { AgentObserver, ObservedAgent } from './agent-observer.ts';
 import { ContextQueue, type ContextSink } from './context-queue.ts';
-import { VoiceHistory } from './voice-history.ts';
+import { VoiceHistory, type SpokenRequest } from './voice-history.ts';
 import { ObservationFeed, type Hold } from './observation-feed.ts';
 import { Floor, operatorSpeaking, type MicrophoneLevel } from './floor.ts';
 import { DEFAULT_TUNING, holdOf, type Tuning } from './tuning.ts';
 import type { InstructionLearner } from './instruction-learner.ts';
-import { ANSWERED_AFTER_MS, type DelegationAudit } from './delegation-audit.ts';
+import type { DelegationAudit, HandOff } from './delegation-audit.ts';
 import { nothingToSend, queueFailed, sessionEndRequest, voiceRequest } from './prompts.ts';
 
 /** The part of a Live session the mediator uses. */
@@ -31,9 +31,9 @@ export class Mediator {
   /** Whether the operator is talking: agent updates wait for them. */
   floor: Floor;
   /** Learns the operator's standing instructions, when Jev is configured. */
-  learner?: InstructionLearner; judgedThrough = -1; judgeTimer?: NodeJS.Timeout; previousUtterance = '';
+  learner?: InstructionLearner; previousUtterance = '';
   /** Records each hand-off decision of GPT Live with Jev's judgment of it, when Jev is configured. Sends nothing. */
-  audit?: DelegationAudit; auditTimer?: NodeJS.Timeout; delegatedAt = 0; auditedThrough = -1;
+  audit?: DelegationAudit;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
   constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, audit, firstRecordId = 0 }: {
@@ -70,10 +70,6 @@ export class Mediator {
     // GPT Live's transcript of the operator also shows they are talking, for pages that send no levels.
     if (event.type === 'session.input_transcript.delta' && String(event.delta ?? '').trim()) {
       this.floor.hear();
-      // Once the operator pauses, Jev judges what they said.
-      if (this.learner) { clearTimeout(this.judgeTimer); this.judgeTimer = setTimeout(() => this.judge(), 2500); }
-      // Quiet long enough with nothing passed on: GPT Live answered it; record that with Jev's view.
-      if (this.audit) { clearTimeout(this.auditTimer); this.auditTimer = setTimeout(() => this.auditAnswered(), ANSWERED_AFTER_MS); }
     }
     if (event.type === 'session.input_audio.append' && typeof event.audio === 'string') this.history.hearAudio(event);
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
@@ -83,7 +79,7 @@ export class Mediator {
     if (event.type === 'session.delegation.created' && event.delegation?.target === 'client') {
       const id = event.delegation.id;
       if (this.seenDelegations.has(id)) return;
-      this.seenDelegations.add(id); this.delegatedAt = Date.now();
+      this.seenDelegations.add(id);
       const createdAt = Date.now();
       const attempt = () => {
         const sinceInput = Date.now() - this.history.lastInputAt;
@@ -93,27 +89,21 @@ export class Mediator {
       this.schedule(attempt, 650);
     }
   }
-  // What the operator said since the last judgment, with what came before as context.
-  judge() {
-    // Speech carried over from a dropped session was judged there.
-    const fragments = this.history.fragments.filter(f => f.seq > this.judgedThrough && !f.carried);
-    const said = fragments.filter(f => f.role === 'operator' && !this.history.unheard(f)).map(f => f.text).join('').trim();
-    if (!said || !this.learner) return;
-    this.judgedThrough = fragments.at(-1)!.seq;
-    const firstOperator = fragments.find(f => f.role === 'operator')!.seq;
-    const companion = this.history.fragments.filter(f => f.role === 'intermediary' && f.seq < firstOperator).slice(-40).map(f => f.text).join('').trim().slice(-400);
-    const utterance = { utterance: this.clean(said), previous: this.previousUtterance, companion: this.clean(companion) };
-    this.previousUtterance = utterance.utterance;
-    this.learner.consider(utterance).catch(error => this.log({ type: 'instruction.error', message: (error as Error).message }));
-  }
-  // What the operator said since the last hand-off or audit, which GPT Live kept and answered itself.
-  auditAnswered() {
-    if (!this.audit || this.live.state !== 'active' || Date.now() - this.delegatedAt < ANSWERED_AFTER_MS) return;
-    const fragments = this.history.fragments.filter(f => f.seq > Math.max(this.auditedThrough, this.history.delegatedThrough) && !f.carried);
-    if (!fragments.length) return;
-    this.auditedThrough = fragments.at(-1)!.seq;
-    const said = fragments.filter(f => f.role === 'operator' && !this.history.unheard(f)).map(f => f.text).join('').trim();
-    if (said) void this.audit.record({ handOff: 'answered', said: this.clean(said), voiceSessionId: this.live.id });
+  // Jev checks what reached the harness, once per request: whether it holds a standing instruction
+  // for the companion, and (recorded only) whether it needed the harness at all.
+  check(requestId: string, request: SpokenRequest, handOff: HandOff, delegationId: string | null = null) {
+    const said = this.clean(request.utterances.filter(u => u.role === 'operator').map(u => u.text).join(' ').replace(/\s+/g, ' ').trim());
+    if (!said) return;
+    const companion = this.clean(request.utterances.filter(u => u.role === 'intermediary').map(u => u.text).join(' ').trim().slice(-400));
+    if (this.learner) {
+      const utterance = { utterance: said, previous: this.previousUtterance, companion, requestId };
+      this.learner.consider(utterance).catch(error => this.log({ type: 'instruction.error', message: (error as Error).message }));
+    }
+    this.previousUtterance = said;
+    if (this.audit) void this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId }).then(needsAgent => this.publish({
+      type: 'jev_check', requestId, at: Date.now(), kind: 'handoff', words: said, scores: { needsAgent },
+      outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${handOff === 'passed' ? 'GPT Live passed it on' : 'GPT Live kept it; sent when voice ended'}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})`,
+    }));
   }
   /** The microphone level of the page this voice session listens to. */
   hear(level: MicrophoneLevel) { if (operatorSpeaking(level)) this.floor.hear(); }
@@ -127,15 +117,11 @@ export class Mediator {
       return;
     }
     if (request.unheard) this.log({ type: 'bridge.unheard_transcript', delegationId, text: request.unheard });
-    const content = this.clean(voiceRequest(request.utterances));
+    const content = this.clean(voiceRequest(request.utterances)), id = randomUUID();
     try {
-      this.deliver({ id: randomUUID(), content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now() });
+      this.deliver({ id, content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now() });
       this.history.markDelivered(request);
-      if (this.audit) {
-        this.auditedThrough = Math.max(this.auditedThrough, request.through);
-        const said = request.utterances.filter(u => u.role === 'operator').map(u => u.text).join(' ').trim();
-        if (said) void this.audit.record({ handOff: 'passed', said: this.clean(said), voiceSessionId: this.live.id, delegationId });
-      }
+      this.check(id, request, 'passed', delegationId);
     } catch (error) {
       this.fault(error as Error);
       this.context.add('thinking', queueFailed(this.agent), delegationId);
@@ -150,10 +136,11 @@ export class Mediator {
       this.deliver({ id, content: this.clean(sessionEndRequest(reason, request.utterances)), delegationId: null, voiceSessionId: this.live.id, queuedAt: Date.now() });
       this.history.markDelivered(request);
       this.log({ type: 'bridge.session_end_handoff', id, reason, utterances: request.utterances.length });
+      this.check(id, request, 'answered');
     } catch (error) { this.fault(error as Error); }
   }
   stop() {
-    this.feed.stop(); this.context.stop(); for (const timer of this.timers) clearTimeout(timer); this.timers.clear(); clearTimeout(this.judgeTimer); clearTimeout(this.auditTimer);
+    this.feed.stop(); this.context.stop(); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();
     this.live.off('event', this.onLive); this.observer.off('observation', this.onObservation);
   }
 }

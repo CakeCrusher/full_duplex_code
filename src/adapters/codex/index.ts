@@ -69,6 +69,7 @@ export function doctor() {
 }
 
 export const codex: AgentDefinition = {
+  ask: (prompt, outputFile) => ({ command: 'codex', args: ['exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '-o', outputFile, prompt], output: 'file' }),
   profile: codexProfile,
   context: codexContext,
   readArgs: readCodexArgs,

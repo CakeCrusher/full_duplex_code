@@ -79,6 +79,7 @@ export class VoiceSessions {
     const id = `I${++this.learnedCount}`;
     this.bridge.log({ type: 'instruction.learned', id, text, ...judged });
     await this.appendInstruction(`${id}: ${text}`, { id, text, scope: judged.scope }).catch(error => this.bridge.log({ type: 'instruction.error', id, message: (error as Error).message }));
+    return id;
   }
   /**
    * Removes a learned instruction: later sessions leave it out, and the session it is in

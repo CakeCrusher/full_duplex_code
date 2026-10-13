@@ -142,20 +142,20 @@ test('an instruction Jev learns while voice is connecting waits for the session 
   assert.equal(h.learned.earlier('another-session').length, 1);
 });
 
-test('after an automatic reconnect, Jev is not asked again about the carried speech', async t => {
+test('across an automatic reconnect, Jev is asked about carried speech once, when it reaches the harness', async t => {
   const { h, lives } = await harness(t, { jevKey: 'jev-test' });
   const considered: string[] = [];
   h.learner!.consider = async (utterance: any) => { considered.push(utterance.utterance); return undefined; };
-  h.pages.send = () => {};
+  h.handOffAudit = undefined; h.pages.send = () => {}; h.deliver = () => {};
   const page = openPage('p');
   await h.voiceSessions.start('sdp', page, 'fresh');
   lives[0].say('operator', 'From now on, keep every answer to one sentence.', 0);
-  await until(() => considered.length === 1);
   lives[0].drop();
   await h.voiceSessions.start('sdp2', page, 'resume', true);
-  lives[1].say('operator', 'What is the agent doing?', 0);
-  await until(() => considered.length === 2);
-  assert.equal(considered[1], 'What is the agent doing?');
+  lives[1].emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' }, offset_ms: 100000 });
+  await until(() => considered.length === 1);
+  await settle();
+  assert.deepEqual(considered, ['From now on, keep every answer to one sentence.']);
 });
 
 test('an agent update held while the operator talks reaches the fork that resumes the conversation', async t => {

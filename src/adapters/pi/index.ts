@@ -48,6 +48,7 @@ export function doctor() {
 }
 
 export const pi: AgentDefinition = {
+  ask: prompt => ({ command: 'pi', args: ['-p', '--no-session', '--no-tools', prompt] }),
   profile: piProfile,
   context: piContext,
   readArgs: readPiArgs,

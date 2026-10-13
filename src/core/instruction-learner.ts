@@ -8,8 +8,9 @@
 
 import fs from 'node:fs';
 
-export interface LearnedInstruction { text: string; scope: 'session' | 'always'; behave: number; design: number; lasting: string }
-export interface Utterances { utterance: string; previous?: string; companion?: string }
+export interface LearnedInstruction { text: string; scope: 'session' | 'always'; behave: number; design: number; lasting: string; /** What the operator said, and the turn before it, for writing the instruction. */ said?: string; previous?: string; companion?: string; /** The request to the harness it came from. */ requestId?: string }
+export interface Utterances { utterance: string; previous?: string; companion?: string; requestId?: string }
+export interface Judged { requestId?: string; said: string; behave: number; design: number; lasting: string; learned: boolean }
 type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
 
 const URL = 'https://api.typesafe.ai/v1/systemone';
@@ -47,11 +48,13 @@ export class InstructionLearner {
   apiKey: string; fetch: Fetch;
   log: (event: Record<string, unknown>) => void;
   onLearn: (instruction: LearnedInstruction) => void;
-  constructor({ apiKey, onLearn, log, fetch = globalThis.fetch as unknown as Fetch }: { apiKey: string; onLearn: (instruction: LearnedInstruction) => void; log: (event: Record<string, unknown>) => void; fetch?: Fetch }) {
-    this.apiKey = apiKey; this.onLearn = onLearn; this.log = log; this.fetch = fetch;
+  /** Every judgment, learned or not, for the page. */
+  onJudged?: (judged: Judged) => void;
+  constructor({ apiKey, onLearn, onJudged, log, fetch = globalThis.fetch as unknown as Fetch }: { apiKey: string; onLearn: (instruction: LearnedInstruction) => void; onJudged?: (judged: Judged) => void; log: (event: Record<string, unknown>) => void; fetch?: Fetch }) {
+    this.apiKey = apiKey; this.onLearn = onLearn; this.onJudged = onJudged; this.log = log; this.fetch = fetch;
   }
   /** Asks Jev about one utterance; learns it when it is a lasting instruction to the companion. */
-  async consider({ utterance, previous = '', companion = '' }: Utterances): Promise<LearnedInstruction | undefined> {
+  async consider({ utterance, previous = '', companion = '', requestId }: Utterances): Promise<LearnedInstruction | undefined> {
     const text = utterance.replace(/\s+/g, ' ').trim();
     if (text.split(' ').length < 3) return;
     const state = { setting: SETTING, utterance: text.slice(0, 600), previous_operator_utterance: previous.slice(0, 400), companion_before: companion.slice(0, 400) };
@@ -59,11 +62,13 @@ export class InstructionLearner {
     if (!response.ok) throw new Error(`Jev returned HTTP ${response.status}`);
     const { answers } = await response.json();
     const behave = Number(answers?.behave?.noul), design = Number(answers?.design_talk?.noul), lasting = answers?.lasting?.choice;
-    this.log({ type: 'instruction.judged', behave, design, lasting });
-    if (!(behave >= BEHAVE && design < DESIGN && lasting !== 'this_moment')) return;
+    this.log({ type: 'instruction.judged', behave, design, lasting, requestId });
+    const learned = behave >= BEHAVE && design < DESIGN && lasting !== 'this_moment';
+    this.onJudged?.({ requestId, said: text, behave, design, lasting, learned });
+    if (!learned) return;
     // What gets kept is the operator's own words, within an appended instruction's size limit.
     let kept = text; while (Buffer.byteLength(kept) > 400) kept = kept.slice(0, -10);
-    const instruction: LearnedInstruction = { text: kept === text ? text : `${kept.trim()}…`, scope: lasting === 'always' ? 'always' : 'session', behave, design, lasting };
+    const instruction: LearnedInstruction = { text: kept === text ? text : `${kept.trim()}…`, scope: lasting === 'always' ? 'always' : 'session', behave, design, lasting, said: text, previous, companion, requestId };
     this.onLearn(instruction);
     return instruction;
   }

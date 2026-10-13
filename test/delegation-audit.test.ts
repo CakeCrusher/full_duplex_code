@@ -23,14 +23,15 @@ function fixture(t: TestContext) {
   return { live, mediator, deliveries, recorded, say, settle };
 }
 
-test('words GPT Live answered itself are recorded as answered, and nothing is sent', async t => {
+test('speech GPT Live kept is recorded as answered only when voice ends and it reaches the harness', async t => {
   const f = fixture(t);
   f.say('Oh, definitely. Just go ahead and merge it.', 0);
-  await f.settle(7000); assert.equal(f.recorded.length, 0, 'the operator may still be thinking');
-  await f.settle(1500);
-  assert.deepEqual(f.recorded.map(r => [r.handOff, r.said]), [['answered', 'Oh, definitely. Just go ahead and merge it.']]);
-  assert.equal(f.deliveries.length, 0, 'the audit never sends');
-  await f.settle(9000); assert.equal(f.recorded.length, 1, 'recorded once');
+  await f.settle(20000);
+  assert.equal(f.recorded.length, 0, 'a pause alone records nothing'); assert.equal(f.deliveries.length, 0, 'the audit never sends');
+  f.mediator.handOff('operator ended voice');
+  await f.settle(10);
+  assert.equal(f.deliveries.length, 1, 'the ordinary hand-off when voice ends');
+  assert.deepEqual(f.recorded.map(r => [r.handOff, r.said, r.requestId]), [['answered', 'Oh, definitely. Just go ahead and merge it.', f.deliveries[0].id]]);
 });
 
 test('a request GPT Live passed on is recorded as passed, and not again as answered', async t => {
@@ -39,7 +40,7 @@ test('a request GPT Live passed on is recorded as passed, and not again as answe
   f.live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' }, offset_ms: 900 });
   await f.settle(9000);
   assert.equal(f.deliveries.length, 1, 'the ordinary request');
-  assert.deepEqual(f.recorded.map(r => [r.handOff, r.said, r.delegationId]), [['passed', 'Add a test for the parser.', 'd1']]);
+  assert.deepEqual(f.recorded.map(r => [r.handOff, r.said, r.delegationId, r.requestId]), [['passed', 'Add a test for the parser.', 'd1', f.deliveries[0].id]]);
 });
 
 test('the record keeps the words, what GPT Live did and Jev\'s judgment, owner-only', async t => {

@@ -5,8 +5,9 @@ import type { AgentAdapter, AgentDefinition, AgentLaunch, VoiceRequest } from '.
 import type { AgentObserver } from './agent-observer.ts';
 import { redact } from './redact.ts';
 import { withoutBinary } from './context-rules.ts';
-import { InstructionLearner, LearnedLog } from './instruction-learner.ts';
+import { InstructionLearner, LearnedLog, type LearnedInstruction } from './instruction-learner.ts';
 import { DelegationAudit } from './delegation-audit.ts';
+import { askAgent, distillPrompt, parseDistilled } from './instruction-distiller.ts';
 import { JevTuner, type TuningChange } from './jev-tuner.ts';
 import { UsageLedger } from './usage-ledger.ts';
 import { Timeline } from './timeline.ts';
@@ -81,7 +82,9 @@ export class Harness {
     if (jevKey) this.handOffAudit = new DelegationAudit({ apiKey: jevKey, file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log });
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
     this.voiceSessions = new VoiceSessions(this, { store });
-    if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log, onLearn: instruction => { this.voiceSessions.learn(instruction).catch(error => this.fault(error as Error)); } });
+    if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log,
+      onJudged: judged => { if (!judged.learned) this.jevCheck(judged.requestId, 'instruction', `Not a standing instruction (${judged.behave.toFixed(2)})`, judged); },
+      onLearn: instruction => { this.learnInstruction(instruction).catch(error => this.fault(error as Error)); } });
     this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,
       publish: event => this.publish(event), fault: error => this.fault(error), onSent: entry => this.voiceSessions.confirmDelivery(entry) });
     this.adapter = agent.create({ root, runDir, cwd, sessionId, observation, agentArgs, clean: this.clean, log: this.log });
@@ -127,6 +130,31 @@ export class Harness {
   appendInstruction(text: unknown) { return this.voiceSessions.appendInstruction(text); }
   startLive(sdp?: unknown, page?: Page, mode: 'resume' | 'fresh' = 'fresh', automatic = false) { return this.voiceSessions.start(sdp, page, mode, automatic); }
   deliver(request: VoiceRequest) { this.outbox.add(request); }
+  /** A one-off run of the harness for a short piece of writing (tests replace it). */
+  ask = (prompt: string) => askAgent(this.agent, prompt, { cwd: this.cwd });
+  /** One of Jev's checks of a request to the harness, for the page's request inspector. */
+  jevCheck(requestId: string | undefined, kind: 'instruction' | 'handoff', outcome: string, { said, behave, design, lasting }: { said?: string; behave?: number; design?: number; lasting?: string } = {}) {
+    if (requestId) this.publish({ type: 'jev_check', requestId, at: Date.now(), kind, outcome, words: said, scores: { behave: behave ?? null, design: design ?? null, lasting: lasting ?? null } });
+  }
+  // Jev found a likely standing instruction; a one-off run of the harness writes what it says (the
+  // operator's words are speech), or finds there is none or one in force already says it.
+  async learnInstruction(instruction: LearnedInstruction) {
+    const inForce = this.voiceSessions.additionalInstructions.filter(item => item.learned).map(item => ({ id: item.learned!, text: item.text.replace(`${item.learned}: `, '') }));
+    let text = instruction.text;
+    try {
+      const reply = await this.ask(distillPrompt({ said: instruction.said ?? instruction.text, previous: instruction.previous, companion: instruction.companion, inForce }));
+      const distilled = parseDistilled(this.clean(reply));
+      this.log({ type: 'instruction.distilled', said: instruction.said, distilled, requestId: instruction.requestId });
+      if ('none' in distilled) return this.jevCheck(instruction.requestId, 'instruction', 'Looked like an instruction; the harness found none to add', instruction);
+      if ('same' in distilled) return this.jevCheck(instruction.requestId, 'instruction', `Already in force as ${distilled.same}`, instruction);
+      text = distilled.text;
+    } catch (error) {
+      // Without the harness's wording, the operator's own words are kept, as before.
+      this.log({ type: 'instruction.error', message: `Writing the instruction: ${(error as Error).message}` });
+    }
+    const id = await this.voiceSessions.learn({ ...instruction, text });
+    this.jevCheck(instruction.requestId, 'instruction', `Learned ${id}: ${text}`, instruction);
+  }
   /** New settings for how agent updates reach GPT Live, from now on. */
   setTuning(next: Tuning, changes: TuningChange[] = []) {
     this.tuning = next; this.mediator?.applyTuning(next);

@@ -46,6 +46,7 @@ export function doctor() {
 }
 
 export const claude: AgentDefinition = {
+  ask: prompt => ({ command: 'claude', args: ['-p', '--no-session-persistence', '--tools', '', '--strict-mcp-config', '--disable-slash-commands', '--output-format', 'text'], stdin: prompt }),
   profile: claudeProfile,
   context: claudeContext,
   readArgs: readClaudeArgs,

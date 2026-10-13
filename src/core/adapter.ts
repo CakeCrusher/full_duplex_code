@@ -130,6 +130,12 @@ export interface AgentDefinition {
    * them mid-turn without it. Undefined: the hook answers nothing.
    */
   vouch?(event: Record<string, any>, delivered: (id: string) => boolean, note: string): unknown;
+  /**
+   * A one-off, non-interactive run of this agent with no tools and no saved session, for a short
+   * piece of writing (a learned instruction): the command, its arguments, and how the prompt goes
+   * in and the reply comes out. `outputFile` is a path the agent may write its reply to.
+   */
+  ask?(prompt: string, outputFile: string): { command: string; args: string[]; stdin?: string; output?: 'stdout' | 'file' };
   /** The exact message deliver() sends for a request, shown in the request inspector. */
   wire(request: VoiceRequest): unknown;
   create(session: AgentSession): AgentAdapter;

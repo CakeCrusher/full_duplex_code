@@ -1,8 +1,8 @@
 // Auditing GPT Live's hand-off decisions, optional: on when TYPESAFE_API_KEY is set. Deciding what
-// reaches the agent is GPT Live's job; this only records, for each thing the operator said, what GPT
-// Live did (passed it on, or answered it itself) next to Jev's judgment of whether it needed the
-// agent. Nothing is sent because of it. The record is for learning: how often GPT Live and Jev
-// disagree, and in which direction.
+// reaches the harness is GPT Live's job; this only records, for each request that reaches the
+// harness, whether GPT Live passed it on or it arrived only because voice ended (GPT Live had kept
+// it), next to Jev's judgment of whether it needed the harness. Nothing is sent because of it. The
+// record is for learning: how often GPT Live and Jev disagree, and in which direction.
 import fs from 'node:fs';
 
 type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
@@ -19,9 +19,6 @@ const QUESTIONS = {
     },
   },
 };
-/** How long the operator must have been quiet, with nothing passed on, before what they said counts as answered by GPT Live. */
-export const ANSWERED_AFTER_MS = 8000;
-
 export type HandOff = 'passed' | 'answered';
 
 export class DelegationAudit {
@@ -40,11 +37,12 @@ export class DelegationAudit {
     return Number.isFinite(p) ? p : 0;
   }
   /** Judge what the operator said and record it with what GPT Live did. Never throws. */
-  async record(entry: { handOff: HandOff; said: string; voiceSessionId?: string | null; delegationId?: string | null }) {
+  async record(entry: { handOff: HandOff; said: string; voiceSessionId?: string | null; delegationId?: string | null; requestId?: string }): Promise<number | null> {
     let needsAgent: number | null = null;
     try { needsAgent = await this.needsAgent(entry.said); } catch (error) { this.log({ type: 'audit.error', message: (error as Error).message }); }
     this.log({ type: 'delegation.audit', handOff: entry.handOff, needsAgent, delegationId: entry.delegationId ?? null });
     // Owner-only, local: the operator's words with both judgments, for learning.
     try { fs.appendFileSync(this.file, JSON.stringify({ at: Date.now(), ...entry, needsAgent }) + '\n', { mode: 0o600 }); } catch {}
+    return needsAgent;
   }
 }
