@@ -6,7 +6,7 @@ import { CuePlayer, CueTracker } from './cues.js';
 import { BridgeClient, type BridgeEvent } from './bridge-client.js';
 import { AudioIO, watchMicrophones, type WorkletMessage } from './audio-io.js';
 import { WebRtcPeer } from './webrtc-peer.js';
-import { $, developerMode, notice, resumable, showStatus } from './page-ui.js';
+import { $, developerMode, microphone as microphoneAccess, notice, requireMicrophone, resumable, showStatus } from './page-ui.js';
 import { profile } from './profile.js';
 import { mountCompanions } from './companions.js';
 
@@ -127,6 +127,7 @@ function connect() {
 async function reportReady() {
   let microphone = 'unknown';
   try { microphone = (await navigator.permissions.query({ name: 'microphone' as PermissionName })).state; } catch {}
+  if (microphoneAccess.opened && microphone !== 'denied') microphone = 'granted';
   if (bridge.open) bridge.send({ type: 'page_ready', microphone, clicked: navigator.userActivation?.hasBeenActive ?? false });
 }
 navigator.permissions?.query({ name: 'microphone' as PermissionName }).then(status => { status.onchange = reportReady; }).catch(() => {});
@@ -194,6 +195,7 @@ async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false, aske
     const gate = Number($<HTMLInputElement>('microphone-gate').value);
     const microphone = await audio.open({ deviceId: $<HTMLSelectElement>('microphone-device').value, gate, current, onMessage: measured });
     if (!microphone) return;
+    if (!microphoneAccess.opened) { microphoneAccess.opened = true; reportReady(); }
     bridge.send({ type: 'microphone_gate', threshold: gate });
     const sdp = await peer.offer(microphone, {
       active: () => active, connected: () => bridge.open,
@@ -247,5 +249,6 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 addEventListener('pagehide', () => { leaving = true; clearTimeout(retry); stop(); bridge.close(); });
 // A page restored from the back/forward cache connects again.
 addEventListener('pageshow', event => { if (event.persisted) { leaving = false; connect(); } });
+requireMicrophone(reportReady);
 mountCompanions($('companions'), token, () => active || starting);
 connect();

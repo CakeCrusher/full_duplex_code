@@ -93,3 +93,44 @@ export function showStatus(event: BridgeEvent, voice: { active: boolean; muted: 
   $('usage').textContent = voice.active ? `${Math.floor(event.usageSeconds / 60)}m ${event.usageSeconds % 60}s · $${(event.usageSeconds * 0.05 / 60).toFixed(3)}` : 'Not connected · $0.05/min';
   $('budget').textContent = `Estimated total $${event.committedUsd.toFixed(2)} · includes unfinished sessions`;
 }
+
+// The page is for talking: until Chrome has granted it the microphone, a modal covers everything else.
+// Chrome remembers the grant per address (a companion on a new port asks again). Granting it is also
+// the click Chrome wants before the page may play sound, so another companion can then turn voice on here.
+const TEXT = {
+  ask: ['Allow the microphone', 'Full-Duplex Code needs your microphone before anything else. When Chrome asks, choose "Allow while visiting the site" so it remembers; "Allow this time" asks again on every visit.', 'Allow microphone'],
+  waiting: ['Allow the microphone', 'Choose Allow in the box Chrome shows near the address bar.', 'Waiting for Chrome…'],
+  denied: ['The microphone is blocked', 'Chrome has blocked the microphone for this page. Click the icon at the left of the address bar, set Microphone to Allow, then click Try again.', 'Try again'],
+  missing: ['No microphone found', 'Chrome found no microphone. Connect one, then click Try again.', 'Try again'],
+} as const;
+
+/** Whether this page has opened the microphone: Chrome's "Allow this time" works for the visit while the permission still reads "prompt". */
+export const microphone = { opened: false };
+export function requireMicrophone(onGranted: () => void) {
+  const dialog = document.createElement('dialog'), title = document.createElement('h2'), text = document.createElement('p'), button = document.createElement('button');
+  dialog.className = 'microphone-gate'; dialog.setAttribute('aria-labelledby', 'microphone-gate-title'); title.id = 'microphone-gate-title';
+  dialog.append(title, text, button); document.body.append(dialog);
+  // It can't be dismissed: Escape does nothing until the microphone is granted.
+  dialog.addEventListener('cancel', event => event.preventDefault());
+  const show = (state: keyof typeof TEXT) => {
+    [title.textContent, text.textContent, button.textContent] = TEXT[state];
+    button.disabled = state === 'waiting';
+    if (!dialog.open) dialog.showModal();
+  };
+  let done = false;
+  const granted = () => { if (done) return; done = true; dialog.close(); dialog.remove(); onGranted(); };
+  button.onclick = async () => {
+    show('waiting');
+    try { (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach(track => track.stop()); microphone.opened = true; granted(); }
+    catch (error) { show((error as Error).name === 'NotFoundError' ? 'missing' : 'denied'); }
+  };
+  const check = async () => {
+    try {
+      const status = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+      status.onchange = () => { if (status.state === 'granted') granted(); else if (!done) show(status.state === 'denied' ? 'denied' : 'ask'); };
+      if (status.state === 'granted') return granted();
+      show(status.state === 'denied' ? 'denied' : 'ask');
+    } catch { show('ask'); } // Without the Permissions API, asking is the only way to know.
+  };
+  check();
+}
