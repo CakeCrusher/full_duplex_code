@@ -116,7 +116,7 @@ function connect() {
       if (voiceDropped) notice('Reconnected. Voice ended when the connection dropped; click Start voice to start it again.');
       else if (connections > 1) notice('');
       voiceDropped = false;
-      reportReady();
+      readyReported = ''; reportReady();
     },
     onEvent: handle,
     onClose: disconnected,
@@ -124,15 +124,18 @@ function connect() {
 }
 // Whether voice could start here without the operator: Chrome needs microphone permission and a click in the tab
 // before sound and the microphone work, so another companion turning this one on knows if it can.
+// Checked every second and sent when it changes: Chrome registers a click only after the page's own
+// pointerdown handlers run, so reporting from those said "not clicked" for good.
+let readyReported = '';
 async function reportReady() {
   let microphone = 'unknown';
   try { microphone = (await navigator.permissions.query({ name: 'microphone' as PermissionName })).state; } catch {}
   if (microphoneAccess.opened && microphone !== 'denied') microphone = 'granted';
-  if (bridge.open) bridge.send({ type: 'page_ready', microphone, clicked: navigator.userActivation?.hasBeenActive ?? false });
+  const ready = { microphone, clicked: navigator.userActivation?.hasBeenActive ?? false }, key = JSON.stringify(ready);
+  if (!bridge.open || key === readyReported) return;
+  readyReported = key; bridge.send({ type: 'page_ready', ...ready });
 }
-navigator.permissions?.query({ name: 'microphone' as PermissionName }).then(status => { status.onchange = reportReady; }).catch(() => {});
-for (const type of ['pointerdown', 'keydown'] as const) addEventListener(type, () => { if (!clickedReported) { clickedReported = true; reportReady(); } }, { capture: true });
-let clickedReported = false;
+setInterval(reportReady, 1000);
 function disconnected() {
   const cue = cues.end(); if (cue) cuePlayer.play(cue);
   const hadVoice = active || starting;
