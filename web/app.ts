@@ -46,6 +46,9 @@ function handle(event: BridgeEvent) {
   if (event.type === 'instruction_learned') learned(event);
   if (event.type === 'instruction_removed') removed(event.id);
   if (event.type === 'tuning' && event.changes?.length) tuned(event.changes);
+  // Sessions turned on or off by voice: what fdc is doing, and another companion asking this one to start voice.
+  if (event.type === 'sessions' && !replaying) notice(event.text);
+  if (event.type === 'voice_on' && !active && !starting) { notice(`Voice turned on from ${event.from}.`); start(resumable(currentStatus) ? 'resume' : 'fresh', false, true); }
   if (event.type === 'history') {
     replaying = true;
     try { for (const item of event.events) handle(item); } finally { replaying = false; }
@@ -63,7 +66,7 @@ function handle(event: BridgeEvent) {
     releaseAudio();
     // Voice that ended on its own resumes by itself, a limited number of times.
     if (event.reconnect) { notice(`Voice dropped (${event.reason}). Reconnecting…`); start('resume', true); return; }
-    notice(event.dropped ? `Voice dropped (${event.reason}). Click Resume voice to continue the conversation.` : event.moved ? 'Voice moved to another tab or device. Click Move voice here to bring it back.' : event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? `Voice session ended. ${profile.name} is still available in your terminal.` : 'Voice connection ended. Final usage was not confirmed; the last reported usage is saved and may be incomplete.');
+    notice(/^(Turned off|Switched to)\b/.test(event.reason ?? '') ? `${event.reason}.` : event.dropped ? `Voice dropped (${event.reason}). Click Resume voice to continue the conversation.` : event.moved ? 'Voice moved to another tab or device. Click Move voice here to bring it back.' : event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? `Voice session ended. ${profile.name} is still available in your terminal.` : 'Voice connection ended. Final usage was not confirmed; the last reported usage is saved and may be incomplete.');
   }
 }
 // Jev heard a standing instruction and added it: show what was added, under its ID, with a way to remove it.
@@ -168,7 +171,7 @@ function measured(data: WorkletMessage) {
     if (bridge.open && active) bridge.send({ type: 'audio_level', at: audio.audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, outputRms: data.outputRms });
   }
 }
-async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false) {
+async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false, asked = false) {
   if (active || starting) return; starting = true; $<HTMLButtonElement>('start').disabled = true; $<HTMLButtonElement>('fresh').disabled = true;
   if (!automatic) notice('');
   cuePlayer.unlock(); // Start voice is the user gesture that allows audio cues.
@@ -195,6 +198,8 @@ async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false) {
   } catch (error) {
     if (!current()) return; releaseAudio();
     const { name, message } = error as Error;
+    // Asked by another companion: it tells the operator why this one did not start.
+    if (asked && bridge.open) bridge.send({ type: 'voice_on_failed', message: name === 'NotAllowedError' ? 'its tab is not allowed to use the microphone' : message });
     notice(name === 'NotAllowedError' ? 'Allow microphone access in Chrome, then click Start voice.'
       : ['OverconstrainedError', 'NotFoundError'].includes(name) ? 'The selected microphone is unavailable. Choose another microphone, then click Start voice.'
       : message);

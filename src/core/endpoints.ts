@@ -87,6 +87,12 @@ export class Endpoints {
       const reply = bridge.agent.vouch?.(event, id => bridge.outbox.has(id), voiceProvenance());
       res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(reply ?? {}));
     }
+    // Another companion of this user, on this computer, turning this one's voice on or off.
+    if (req.url === '/api/voice' && req.method === 'POST') {
+      if (!local || !equal(req.headers.authorization, `Bearer ${bridge.browserToken}`)) { res.writeHead(403); return res.end(); }
+      const { action, from } = await body(req, 1024);
+      res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(bridge.sessionSwitch.remote(action, from)));
+    }
     // The companions list carries links, and so tokens: local ones only for a request from this computer.
     if ((req.url === '/api/status' || req.url === '/api/companions') && req.method === 'GET') {
       if (!equal(req.headers.authorization, `Bearer ${bridge.browserToken}`)) { res.writeHead(403); return res.end(); }

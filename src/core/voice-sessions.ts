@@ -253,7 +253,7 @@ export class VoiceSessions {
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean,
-      learner: bridge.learner, audit: bridge.handOffAudit, tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
+      learner: bridge.learner, audit: bridge.handOffAudit, screen: bridge.handOffAudit ? (said, id) => bridge.sessionSwitch.screen(said, id) : undefined, tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map() };
     // A dropped or moved session's unsent speech: this session takes it if it starts; meanwhile it isn't handed off.
     if (this.carried) { clearTimeout(this.carried.timer); mediator.history.carry(this.carried.mediator.history); }

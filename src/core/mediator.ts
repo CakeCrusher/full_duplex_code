@@ -11,6 +11,9 @@ import type { InstructionLearner } from './instruction-learner.ts';
 import type { DelegationAudit, HandOff } from './delegation-audit.ts';
 import { nothingToSend, queueFailed, sessionEndRequest, voiceRequest } from './prompts.ts';
 
+/** What Jev's check before delivery found: its judgment, and when fdc handled the request itself, what GPT Live is told instead. */
+export interface Screened { needsAgent?: number | null; handled?: string }
+
 /** The part of a Live session the mediator uses. */
 export interface MediatedLive extends ContextSink, Pick<EventEmitter, 'on' | 'off'> {
   id?: string;
@@ -34,15 +37,17 @@ export class Mediator {
   learner?: InstructionLearner; previousUtterance = '';
   /** Records each hand-off decision of GPT Live with Jev's judgment of it, when Jev is configured. Sends nothing. */
   audit?: DelegationAudit;
+  /** Checks a request GPT Live passed on before it reaches the harness (session changes), when Jev is configured. */
+  screen?: (said: string, requestId: string) => Promise<Screened>;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
-  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, audit, firstRecordId = 0 }: {
+  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, audit, screen, firstRecordId = 0 }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
-    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; audit?: DelegationAudit;
+    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; audit?: DelegationAudit; screen?: (said: string, requestId: string) => Promise<Screened>;
     /** Context records are numbered after this one: a fork's context already holds its source's. */
     firstRecordId?: number;
   }) {
-    this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.learner = learner; this.audit = audit;
+    this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.learner = learner; this.audit = audit; this.screen = screen;
     this.agent = agent;
     this.floor = new Floor({ thinkMs: tuning.thinkMs, pauseMs: tuning.pauseMs });
     if (hold === undefined) hold = holdOf(tuning);
@@ -91,8 +96,9 @@ export class Mediator {
   }
   // Jev checks what reached the harness, once per request: whether it holds a standing instruction
   // for the companion, and (recorded only) whether it needed the harness at all.
-  check(requestId: string, request: SpokenRequest, handOff: HandOff, delegationId: string | null = null) {
-    const said = this.clean(request.utterances.filter(u => u.role === 'operator').map(u => u.text).join(' ').replace(/\s+/g, ' ').trim());
+  said(request: SpokenRequest) { return this.clean(request.utterances.filter(u => u.role === 'operator').map(u => u.text).join(' ').replace(/\s+/g, ' ').trim()); }
+  check(requestId: string, request: SpokenRequest, handOff: HandOff, delegationId: string | null = null, judged?: number | null) {
+    const said = this.said(request);
     if (!said) return;
     const companion = this.clean(request.utterances.filter(u => u.role === 'intermediary').map(u => u.text).join(' ').trim().slice(-400));
     if (this.learner) {
@@ -100,7 +106,7 @@ export class Mediator {
       this.learner.consider(utterance).catch(error => this.log({ type: 'instruction.error', message: (error as Error).message }));
     }
     this.previousUtterance = said;
-    if (this.audit) void this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId }).then(needsAgent => this.publish({
+    if (this.audit) void this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId }, judged).then(needsAgent => this.publish({
       type: 'jev_check', requestId, at: Date.now(), kind: 'handoff', words: said, scores: { needsAgent, handOff },
       outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${handOff === 'passed' ? 'GPT Live passed it on' : 'GPT Live kept it; sent when voice ended'}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})`,
     }));
@@ -118,10 +124,26 @@ export class Mediator {
     }
     if (request.unheard) this.log({ type: 'bridge.unheard_transcript', delegationId, text: request.unheard });
     const content = this.clean(voiceRequest(request.utterances)), id = randomUUID();
+    if (this.screen) return this.screened(id, request, content, delegationId);
+    this.send(id, request, content, delegationId);
+  }
+  // Jev reads the request first; one that only turns sessions on or off is handled by fdc, and GPT Live
+  // is told so instead. Its words are taken meanwhile, so a later delegation doesn't send them again.
+  async screened(id: string, request: SpokenRequest, content: string, delegationId: string) {
+    this.history.markDelivered(request);
+    const said = this.said(request);
+    let screened: Screened | undefined;
+    try { screened = await this.screen!(said, id); } catch (error) { this.log({ type: 'screen.error', message: (error as Error).message }); }
+    if (screened?.handled === undefined) return this.send(id, request, content, delegationId, screened?.needsAgent);
+    this.log({ type: 'bridge.request_handled', id, delegationId, said });
+    this.previousUtterance = said;
+    if (this.live.state === 'active') this.context.add('thinking', screened.handled, delegationId);
+  }
+  send(id: string, request: SpokenRequest, content: string, delegationId: string, judged?: number | null) {
     try {
       this.deliver({ id, content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now() });
       this.history.markDelivered(request);
-      this.check(id, request, 'passed', delegationId);
+      this.check(id, request, 'passed', delegationId, judged);
     } catch (error) {
       this.fault(error as Error);
       this.context.add('thinking', queueFailed(this.agent), delegationId);

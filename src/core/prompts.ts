@@ -21,6 +21,7 @@ Backend tools:
 - ${product}: investigate, run commands, edit files, and perform coding tasks in the terminal.
 Delegate to the backend when:
 - The operator asks for coding work, a task change, a message to ${name}, or an investigation needing new information.
+- The operator asks to turn the voice of their other sessions on or off, or to switch sessions: the voice tool carries that out, not ${name}, and tells you the outcome. Never say it is done before that.
 Do not delegate to the backend when:
 - You can answer from observed work or the conversation.
 - The operator is directing your conversation, or you need clarification.
@@ -71,6 +72,11 @@ export const voiceProvenance = () =>
 // A voice request echoed back as the agent's prompt: Live has it already.
 export const voiceEcho = ({ profile: { name } }: Agent, id: string) =>
   `[voice request ${id.slice(0, 8)}: the voice command you already have; ${name} has received it]`;
+
+// Session orchestration: what GPT Live is told when fdc turns sessions' voices on or off itself.
+export const sessionsHandled = ({ profile: { product } }: Agent, plan: string) =>
+  `Nothing was sent to ${product}: the operator only asked to turn voice sessions on or off, which the voice tool does itself. ${plan} Tell the operator in a few words; the outcome follows when known.`;
+export const sessionsOutcome = (outcome: string) => `Voice sessions: ${outcome}`;
 
 // Facts the mediator adds when a delegation cannot be sent.
 export const nothingToSend = ({ profile: { name } }: Agent) =>

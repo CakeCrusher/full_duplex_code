@@ -18,6 +18,7 @@ import { Endpoints } from './endpoints.ts';
 import { Pages, type Page } from './pages.ts';
 import { tuning, type Tuning } from './tuning.ts';
 import { CompanionRegistry, type CompanionEntry } from './companions.ts';
+import { SessionSwitch } from './sessions.ts';
 
 export interface HarnessOptions {
   /** The coding agent, from src/adapters. */
@@ -58,6 +59,8 @@ export class Harness {
   /** When this companion started serving; 0 until then. */
   startedAt = 0;
   companions: CompanionRegistry;
+  /** Turns the voice of running companions on and off, by voice. */
+  sessionSwitch: SessionSwitch;
   /** Every open companion page. */
   pages: Pages;
   agentLaunch?: AgentLaunch;
@@ -81,6 +84,7 @@ export class Harness {
     if (jevKey && jevTuning) this.tuner = new JevTuner({ apiKey: jevKey, log: this.log });
     if (jevKey) this.handOffAudit = new DelegationAudit({ apiKey: jevKey, file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log });
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
+    this.sessionSwitch = new SessionSwitch(this);
     this.voiceSessions = new VoiceSessions(this, { store });
     if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log,
       onJudged: judged => { if (!judged.learned) this.jevCheck(judged.requestId, 'instruction', `Not a standing instruction (${judged.behave.toFixed(2)})`, judged); },
