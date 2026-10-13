@@ -1,7 +1,7 @@
 import { capitalized, profile } from './profile.js';
 
-const { name, eventWord, eventsWord, promptEvent, transport, wire } = profile;
-const tracks: Record<string, string> = { operator: 'Operator audio', speech: 'Live speech', transcript: 'API transcript', agent: `${name} ${eventsWord}`, context: 'Context sent to Live', requests: `Requests to ${name}` };
+const { name, eventWord, promptEvent, transport, wire } = profile;
+const tracks: Record<string, string> = { operator: 'Operator audio', speech: 'Live speech', transcript: 'API transcript', agent: 'Harness hooks', context: 'Context sent to Live', requests: 'Requests to harness' };
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 type Item = { id: string; track: string; start: number; end: number; [field: string]: any };
@@ -70,6 +70,7 @@ export class TimelineView {
     $('detail-json-label').textContent = item?.track === 'context' ? 'Exact JSON sent to Live' : ['queued', 'dispatching', 'uncertain'].includes(item?.state) ? `${capitalized(wire)} JSON · delivery not confirmed` : `${capitalized(wire)} JSON`;
     $('detail-observed').hidden = !item?.observedPrompt;
     $('detail-observed-text').textContent = item?.observedPrompt ?? '';
+    this.showChecks(item?.track === 'requests' ? item.checks ?? [] : []);
     $('detail-verification').hidden = !request || !item?.notification;
     $('detail-verification').textContent = item?.contentMatches === true ? `Verified: ${name}’s ${promptEvent} contains exactly this message.`
       : item?.contentMatches === false ? `Content differs: compare the sent message with ${name}’s captured prompt below.`
@@ -83,6 +84,17 @@ export class TimelineView {
     if (item?.peak) extras.push(`Peak level ${Math.round(item.peak * 100)}%`);
     if (item?.injectionStartMs !== undefined) extras.push(`API injection estimate: ${(item.injectionStartMs / 1000).toFixed(2)}–${(item.injectionEndMs / 1000).toFixed(2)}s into voice`);
     $('detail-source').textContent = item ? [item.source, ...extras].join(' · ') : '';
+  }
+  // Jev's checks of the words in a request, each with its outcome and scores.
+  showChecks(checks: { at: number; outcome: string; scores: Record<string, unknown>; words?: string; flagged: boolean }[]) {
+    $('detail-checks').hidden = !checks.length;
+    $('detail-checks-list').replaceChildren(...checks.map(check => {
+      const entry = document.createElement('li'); entry.classList.toggle('flagged', check.flagged);
+      const scores = Object.entries(check.scores).map(([key, value]) => `${key} ${typeof value === 'number' ? value.toFixed(2) : value ?? 'none'}`).join(' · ');
+      entry.append(Object.assign(document.createElement('strong'), { textContent: check.outcome }), Object.assign(document.createElement('small'), { textContent: [elapsed(check.at - this.origin, true), scores].filter(Boolean).join(' · ') }));
+      if (check.words) entry.append(Object.assign(document.createElement('q'), { textContent: check.words }));
+      return entry;
+    }));
   }
   itemLabel(item: Item) {
     if (item.track === 'transcript') return `${item.label}: ${item.text.trim()}`;
@@ -154,6 +166,7 @@ export class TimelineView {
       button.classList.toggle('live-text', item.role === 'intermediary');
       button.classList.toggle('uncertain', item.state === 'uncertain');
       button.classList.toggle('commentary', item.kind === 'commentary');
+      button.classList.toggle('flagged', Boolean(item.flagged));
       button.dataset.role = item.role ?? ''; button.dataset.state = item.state ?? '';
       button.firstChild!.textContent = this.itemLabel(item);
       button.setAttribute('aria-label', `${tracks[item.track]}. ${this.itemLabel(item)}. ${this.timing(item)}`);

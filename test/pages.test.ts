@@ -62,6 +62,18 @@ test('any number of pages connect, each told who it is; one leaving does not aff
   assert.deepEqual(logged(h, 'page.closed').map(e => e.page), [laptop.id]);
 });
 
+test('every page gets Jev\'s checks of a request on the request\'s item, also a page that opens later', async t => {
+  const h = await fixture(t);
+  const laptop = await openPage(t, h);
+  h.publish({ type: 'task', id: 'request-1', queuedAt: Date.now(), state: 'sent', text: 'Add a test for the parser.' });
+  h.publish({ type: 'jev_check', requestId: 'request-1', kind: 'handoff', outcome: 'Hand-off audit: passed on; Jev 0.91 needed the agent', scores: { needsAgent: .91 }, words: 'Add a test for the parser.' });
+  const update = await until(() => laptop.of('timeline_update').find(e => e.items.some((i: any) => i.checks?.length)));
+  assert.deepEqual(update.items[0].checks.map((c: any) => [c.kind, c.scores.needsAgent, c.words, c.flagged]), [['handoff', .91, 'Add a test for the parser.', false]]);
+  const phone = await openPage(t, h);
+  const [request] = phone.of('timeline_history')[0].items.filter((i: any) => i.track === 'requests');
+  assert.equal(request.checks.length, 1, 'a page opened later sees the checks too');
+});
+
 test('a link from an earlier start, and pages beyond the limit, are refused and logged', async t => {
   const h = await fixture(t);
   await assert.rejects(openPage(t, h, 'an-old-token'), /403/);

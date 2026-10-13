@@ -88,3 +88,23 @@ test('request inspection preserves the full wire content and exposes observed mi
   assert.equal(item.contentMatches, false);
   assert.equal(item.text, text, 'the inspector must not rewrite sent content to conceal a mismatch');
 });
+
+test('Jev checks attach to the request they are about, also when they arrive before it, and flag what needs the operator\'s eye', () => {
+  const timeline = new Timeline(0, claude);
+  const check = (requestId: string, at: number, kind: string, outcome: string, scores: Record<string, number | string | null>) => timeline.add({ type: 'jev_check', requestId, at, kind, outcome, scores, words: 'Add a test.' });
+  assert.deepEqual(check('early', 50, 'instruction', 'Instruction check: not an instruction (behave 0.04)', { behave: .04 }), [], 'no item yet: it waits');
+  timeline.add({ type: 'task', id: 'early', queuedAt: 40, at: 40, state: 'queued', text: 'Add a test.' });
+  timeline.add({ type: 'task', id: 'one', queuedAt: 100, at: 100, state: 'sent', text: 'Keep answers short.' });
+  const [changed] = check('one', 200, 'handoff', 'Hand-off audit: passed on; Jev 0.91 needed the agent', { needsAgent: .91 });
+  assert.equal(changed.requestId, 'one', 'the request item changes, so open details update');
+  check('one', 210, 'instruction', 'Instruction learned I3', { behave: .82, design: .1, lasting: 'always' });
+  const [early, one] = timeline.snapshot().items;
+  assert.deepEqual(early.checks.map((c: any) => [c.at, c.outcome, c.words, c.flagged]), [[50, 'Instruction check: not an instruction (behave 0.04)', 'Add a test.', false]]);
+  assert.equal(early.flagged, false);
+  assert.deepEqual(one.checks.map((c: any) => c.flagged), [false, true], 'a learned instruction is flagged');
+  assert.equal(one.flagged, true); assert.equal(timeline.items.size, 2, 'checks are no items of their own');
+  check('early', 300, 'handoff', 'Hand-off audit: passed on; Jev 0.12 an answer would do', { needsAgent: .12 });
+  assert.equal(early.flagged, true, 'Jev doubts it needed the agent');
+  check('unknown', 400, 'handoff', 'Hand-off audit: no judgment', { needsAgent: null });
+  assert.equal(timeline.items.size, 2);
+});
