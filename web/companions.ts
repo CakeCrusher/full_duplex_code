@@ -1,8 +1,8 @@
 import type { CompanionSummary as Companion } from '../src/core/companions.ts';
 
-// Every running companion, to switch between them in this same tab: its
-// folder, agent and state, refreshed while the page is visible. Leaving a page
-// ends the voice it runs, so the switcher says so while voice is on here.
+// Every running companion, to switch between them: its folder, agent and state,
+// refreshed while the page is visible. Each companion has a tab of its own, so
+// switching never leaves a page and never ends the voice it runs.
 const LABELS = { voice: 'Voice on', starting: 'Starting voice', ready: 'Ready', waiting: 'Agent not connected', unreachable: 'Unreachable' };
 const AGENT_STATES: Record<string, string> = { starting: 'starting', idle: 'ready for a request', working: 'working', needs_attention: 'needs your attention', failed: 'reported an error', exited: 'session ended' };
 const stateOf = (c: Companion): keyof typeof LABELS => !c.reachable ? 'unreachable' : c.voice === 'active' ? 'voice' : c.voice === 'connecting' ? 'starting' : c.agentReady ? 'ready' : 'waiting';
@@ -26,16 +26,26 @@ function chip(c: Companion) {
   name.append(element('i', 'companion-dot'), element('strong', '', c.folder));
   if (c.public) name.append(element('b', 'companion-public', 'Public'));
   button.append(name, element('span', 'companion-meta', [c.agent, c.sessionId, LABELS[state]].filter(Boolean).join(' · ')));
-  // The link holds the other page's token: navigate from here rather than show it as an address on hover.
+  // The link holds the other page's token: open it from here rather than show it as an address on hover.
   if (c.current) button.setAttribute('aria-current', 'page');
-  else if (c.link && c.reachable) { const link = c.link; button.onclick = () => location.assign(link); }
+  else if (c.link && c.reachable) { const link = c.link; button.onclick = () => openCompanion(c.id, link); }
   else button.disabled = true;
   return button;
 }
 
+// Brings the companion's own tab forward, opening it the first time. An open one is another
+// origin, unreadable from here; it is left as it is (reloading it would end its voice).
+function openCompanion(id: string, link: string) {
+  const tab = window.open('', tabName(id));
+  if (!tab) return location.assign(link);
+  try { if (tab.location.href === 'about:blank') tab.location.href = link; } catch {}
+  tab.focus();
+}
+const tabName = (id: string) => `fdc-companion-${id}`;
+
 export function mountCompanions(nav: HTMLElement, token: string | null, voiceHere: () => boolean) {
   if (!token) return;
-  const list = element('div', 'companion-list'), hint = element('p', 'companions-hint', 'Switching ends voice here; you can resume it when you come back.');
+  const list = element('div', 'companion-list'), hint = element('p', 'companions-hint', 'Each opens in its own tab; voice here keeps running.');
   nav.replaceChildren(element('span', 'companions-label', 'Running companions'), list, hint);
   let shown = '', others = false, busy = false;
   const showHint = () => { hint.hidden = !(others && voiceHere()); };
@@ -52,6 +62,8 @@ export function mountCompanions(nav: HTMLElement, token: string | null, voiceHer
       const focused = (document.activeElement as HTMLElement | null)?.dataset?.companion;
       const first = !list.children.length;
       list.replaceChildren(...companions.map(chip));
+      // This tab is this companion's: switching from another one brings it forward.
+      const self = companions.find(c => c.current); if (self) window.name = tabName(self.id);
       if (focused) list.querySelector<HTMLElement>(`[data-companion="${focused}"]`)?.focus();
       // On a narrow screen the list scrolls sideways: start with this companion in view.
       const current = list.querySelector('[aria-current]');

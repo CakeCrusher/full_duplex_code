@@ -299,7 +299,7 @@ The launcher finds every agent's command as your shell does: on your PATH, or el
 
 ## Several sessions at once
 
-With more than one `fdc` running from this installation, a strip at the top of the page lists them all: folder, agent and session, whether voice is on, the agent connected and ready, or unreachable, and which are public. Click one to switch this tab to it. Switching ends voice in the session you leave. A page opened through `--public` lists only companions that are public too, and never another's local link.
+With more than one `fdc` running from this installation, a strip at the top of the page lists them all: folder, agent and session, whether voice is on, the agent connected and ready, or unreachable, and which are public. Click one to bring its own tab forward (opened the first time). Each companion keeps its own tab, so switching never ends voice: each voice session runs independently, and each one hears the microphone while it's on. A page opened through `--public` lists only companions that are public too, and never another's local link.
 
 ## Use it from your phone
 
