@@ -58,7 +58,7 @@ fdc pi              # or: fdc pi --continue
 
 1. Open the link `fdc` prints in Chrome.
 2. Press Enter in the terminal to start the agent. Claude Code asks you to confirm its development channel; choose **I am using this for local development**.
-3. Click **Start voice** and allow the microphone.
+3. Allow the microphone when the page asks (choose **Allow while visiting the site**), then click **Start voice**.
 4. Talk: "Ask Claude to add a dark mode." "What is it doing right now?" "Actually, use SQLite."
 
 You can keep typing to the agent too, and ask the companion about it: "What did I just tell Claude?"
@@ -78,6 +78,12 @@ fdc --public claude
 ```
 
 The launcher prints a phone link and a QR code once the link works. Open the page on your computer and your phone, in any order. Voice runs in one of them, and **Move voice here** brings it to the other. Keep the link private: anyone who has it can direct your agent.
+
+## Several sessions
+
+Run `fdc` in more than one folder and one tab holds every running session: a strip at the top lists them, and a click shows one. Sessions whose voice is on keep listening while you look at another.
+
+With a TypeSafe key (`TYPESAFE_API_KEY` in `.env`), Jev turns their voices on and off when you ask: "switch to video-editing", "turn on video-editing too", "stop listening here". A request that asks only for that never reaches the agent; GPT Live tells you what changed. ([More](USAGE.md#several-sessions-at-once))
 
 ## Everyday commands
 

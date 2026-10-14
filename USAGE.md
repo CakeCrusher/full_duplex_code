@@ -59,9 +59,9 @@ fdc claude
 
 Claude works in the folder you run `fdc` from. Everything after `claude` is Claude's own command line, passed through unchanged; see [Pass arguments to Claude Code](#pass-arguments-to-claude-code).
 
-The launcher prints the companion link and waits. Open the link in Chrome, then press Enter to start Claude, or Ctrl-C to quit. Claude fills the terminal once it starts, which hides the link until you exit. Accept Claude's development-channel notice and any workspace trust prompt. Once the channel connects, click **Start voice**, allow microphone access, and wait for the greeting.
+The launcher prints the companion link and waits. Open the link in Chrome, then press Enter to start Claude, or Ctrl-C to quit. Claude fills the terminal once it starts, which hides the link until you exit. Accept Claude's development-channel notice and any workspace trust prompt. The page asks for the microphone before anything else; choose **Allow while visiting the site** so Chrome remembers. Once the channel connects, click **Start voice** and wait for the greeting.
 
-The launcher does not open a browser for you. That link grants access to your local companion, so keep it private. Use one companion tab per running session.
+The launcher does not open a browser for you. That link grants access to your local companion, so keep it private. With several sessions running, one tab holds them all; see [Several sessions at once](#several-sessions-at-once).
 
 A Claude process that was already running must be restarted through this launcher to attach the companion. Use the resume command below to keep an existing conversation.
 
