@@ -3,7 +3,7 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import { Activity, priceOf } from '../src/core/activity.ts';
+import { Activity, priceFor, priceOf } from '../src/core/activity.ts';
 import { DEFAULT_TUNING } from '../src/core/tuning.ts';
 import { STANDBY } from '../src/core/voice-sessions.ts';
 import { Timeline } from '../src/core/timeline.ts';
@@ -134,13 +134,15 @@ test('a page that never reconnects ends Standby rather than leave voice half on'
 });
 
 test('the activity window counts only what happened inside it', () => {
-  const activity = new Activity(), now = 1_000_000;
-  activity.add('tool', 1, now - 5000); activity.add('turn_end', 30, now - 1000);
-  assert.equal(activity.value(2000, now), 30);
-  assert.equal(activity.value(10000, now), 31);
-  assert.equal(activity.latest(2000, now)?.source, 'turn_end');
-  activity.add('text', 0, now); activity.add('event', priceOf(DEFAULT_TUNING, 'event'), now);
-  assert.equal(activity.entries.length, 2, 'free events are not kept');
+  const activity = new Activity(), now = 1_000_000, price = priceFor(DEFAULT_TUNING);
+  activity.add('tool', now - 5000); activity.add('turn_end', now - 1000);
+  assert.equal(activity.value(2000, price, now), 30);
+  assert.equal(activity.value(10000, price, now), 31);
+  assert.equal(activity.latest(2000, price, now)?.source, 'turn_end');
+  assert.equal(activity.value(2000, priceFor({ ...DEFAULT_TUNING, turnEndPrice: 45 }), now), 45, 'priced when read: a new price applies at once');
+  // With nothing new, the window falls under 31 once the tool call leaves it, and under 1 once the turn end does.
+  assert.equal(activity.stallAt(10000, 31, price, now), now - 5000 + 10000);
+  assert.equal(activity.stallAt(10000, 30, price, now), now - 1000 + 10000);
   assert.deepEqual(['tool', 'text', 'turn_end', 'attention'].map(kind => priceOf({ ...DEFAULT_TUNING, messagePrice: 25 }, kind as any)), [1, 25, 30, 100], 'prices are settings');
 });
 

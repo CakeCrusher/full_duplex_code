@@ -19,28 +19,43 @@ export function priceOf(tuning: Tuning, kind: ObservationKind) {
     default: return 0;
   }
 }
+/** What a spend is worth with these settings: the operator's sound or GPT Live's audio (each tenth of a second), a request, or one of the agent's events. */
+export const priceFor = (tuning: Tuning) => (source: string) =>
+  source === 'operator' ? tuning.speechPrice : source === 'live' ? tuning.liveSpeechPrice : source === 'request' ? tuning.requestPrice : priceOf(tuning, source as ObservationKind);
 /** GPT Live audio playing on the page, as the timeline draws it. */
 export const LIVE_SPEECH_RMS = .003;
 // Entries are kept as long as the longest window a setting allows.
 const KEPT_MS = 600000;
 
-export interface Spend { at: number; value: number; source: string }
+export interface Spend { at: number; source: string }
+type Price = (source: string) => number;
 
+// What happened, priced when it is read: a change to the prices or the window applies at once to what is already in it.
 export class Activity {
   entries: Spend[] = [];
-  add(source: string, value: number, at = Date.now()) {
-    if (!(value > 0)) return;
-    this.entries.push({ at, value, source });
+  add(source: string, at = Date.now()) {
+    this.entries.push({ at, source });
     let old = 0;
     while (old < this.entries.length && this.entries[old].at <= at - KEPT_MS) old++;
     if (old) this.entries.splice(0, old);
   }
   /** What happened in the last `windowMs` is worth this much. */
-  value(windowMs: number, now = Date.now()) {
+  value(windowMs: number, price: Price, now = Date.now()) {
     let total = 0;
-    for (let i = this.entries.length - 1; i >= 0 && this.entries[i].at > now - windowMs; i--) total += this.entries[i].value;
+    for (let i = this.entries.length - 1; i >= 0 && this.entries[i].at > now - windowMs; i--) total += price(this.entries[i].source);
     return total;
   }
-  /** The newest spend in the window: what tipped it over. */
-  latest(windowMs: number, now = Date.now()) { const last = this.entries.at(-1); return last && last.at > now - windowMs ? last : undefined; }
+  /** The newest spend in the window worth anything: what tipped it over. */
+  latest(windowMs: number, price: Price, now = Date.now()) {
+    for (let i = this.entries.length - 1; i >= 0 && this.entries[i].at > now - windowMs; i--) if (price(this.entries[i].source) > 0) return this.entries[i];
+  }
+  /** When the window would fall below the threshold if nothing else happened: when the oldest spend still needed leaves it. */
+  stallAt(windowMs: number, threshold: number, price: Price, now = Date.now()) {
+    let total = 0;
+    for (let i = this.entries.length - 1; i >= 0 && this.entries[i].at > now - windowMs; i--) {
+      total += price(this.entries[i].source);
+      if (total >= threshold) return this.entries[i].at + windowMs;
+    }
+    return now;
+  }
 }

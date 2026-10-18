@@ -1,4 +1,5 @@
 import { startBlocked } from './sessions.ts';
+import { priceFor } from './activity.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Timeline } from './timeline.ts';
@@ -53,7 +54,12 @@ export function statusSnapshot(bridge: Harness) {
   // The page running voice (or listening on Standby), so that the others can offer to move it.
   const voicePage = live && live.state !== 'closed' ? voice.page?.id ?? null : voice.standby?.page.id ?? null;
   const standby = voice.standby ? { since: voice.standby.since, waking: Boolean(voice.standby.waking) } : null;
+  // The Standby meter: the currency in the window against the threshold, with today's settings, and when voice would go on Standby.
+  const { standbyAfterMs, wakeThreshold } = bridge.tuning, price = priceFor(bridge.tuning), now = Date.now();
+  const standbyState = voice.standby ? voice.standby.waking ? 'waking' : 'standby' : live?.state === 'active' ? 'live' : live && ['new', 'connecting'].includes(live.state) ? 'connecting' : 'off';
+  const standbyMeter = { state: standbyState, value: voice.activity.value(standbyAfterMs, price, now), threshold: wakeThreshold, windowMs: standbyAfterMs, since: voice.standby?.since ?? null,
+    stallInMs: standbyState === 'live' && standbyAfterMs ? Math.max(0, Math.max(voice.activity.stallAt(standbyAfterMs, wakeThreshold, price, now), (live?.startedAt ?? now) + standbyAfterMs) - now) : null };
   // The last voice session that ended on its own, and automatic reconnects in the last five minutes.
   const connection = { lastDrop: voice.lastDrop, reconnects: voice.recentReconnects() };
-  return { type: 'status', agent: observer.state, agentReady: Boolean(bridge.agentReady), live: live?.state ?? 'disconnected', voicePage, pages: bridge.pages.size, cwd: bridge.cwd, sessionId: bridge.sessionId, usageSeconds: live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: bridge.runDir, observation: bridge.observation, prompt, contextDelivery, resume: voice.resumeStatus(), connection, standby, tuning: bridge.tuning, tuningPinned: bridge.pinned, tuningHistory: bridge.tuningHistory.slice(-30), jevTuning: Boolean(bridge.tuner), liveUsage: voice.usage ?? null, voiceAsked: bridge.sessionSwitch.asked ?? null, voiceBlocked: startBlocked(bridge) ?? null };
+  return { type: 'status', agent: observer.state, agentReady: Boolean(bridge.agentReady), live: live?.state ?? 'disconnected', voicePage, pages: bridge.pages.size, cwd: bridge.cwd, sessionId: bridge.sessionId, usageSeconds: live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: bridge.runDir, observation: bridge.observation, prompt, contextDelivery, resume: voice.resumeStatus(), connection, standby, standbyMeter, tuning: bridge.tuning, tuningPinned: bridge.pinned, tuningHistory: bridge.tuningHistory.slice(-30), jevTuning: Boolean(bridge.tuner), liveUsage: voice.usage ?? null, voiceAsked: bridge.sessionSwitch.asked ?? null, voiceBlocked: startBlocked(bridge) ?? null };
 }

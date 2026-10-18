@@ -11,7 +11,7 @@ import { startupHistory } from './startup-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
 import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, reconnectGreeting, resumeGreeting, standbyNews, standbyWake } from './prompts.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
-import { Activity, LIVE_SPEECH_RMS } from './activity.ts';
+import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
 import { operatorSpeaking, type MicrophoneLevel } from './floor.ts';
 
 export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean; /** Set for an instruction Jev learned: its short ID, such as I3, and the agent session it was learned in. */ learned?: string; learnedIn?: string }
@@ -96,16 +96,15 @@ export class VoiceSessions {
   listensTo(page: Page) { return page === this.page || page === this.standby?.page; }
   /** The listening page's microphone and speaker levels (about 0.1 s each), priced: the operator's sound and GPT Live's. */
   heard(level: MicrophoneLevel & { outputRms?: number }) {
-    const { speechPrice, liveSpeechPrice } = this.bridge.tuning;
-    if (operatorSpeaking(level)) this.activity.add('operator', speechPrice);
-    if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS) this.activity.add('live', liveSpeechPrice);
+    if (operatorSpeaking(level)) this.activity.add('operator');
+    if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS) this.activity.add('live');
   }
   /**
    * Every second: voice that has been quiet for the Standby window goes on Standby, and voice on
    * Standby wakes once what happened in the window is worth the threshold (tuning.ts, activity.ts).
    */
   checkStandby(now = Date.now()) {
-    const bridge = this.bridge, { standbyAfterMs, wakeThreshold } = bridge.tuning, standby = this.standby;
+    const bridge = this.bridge, { standbyAfterMs, wakeThreshold } = bridge.tuning, standby = this.standby, price = priceFor(bridge.tuning);
     if (standby) {
       const waking = standby.waking;
       if (waking) {
@@ -117,8 +116,8 @@ export class VoiceSessions {
       if (this.live && this.live.state !== 'closed') return;
       // Standby turned off meanwhile: voice wakes, as the setting now says.
       if (!standbyAfterMs) return this.wake('Standby was turned off', false);
-      if (this.activity.value(standbyAfterMs, now) >= wakeThreshold) {
-        const source = this.activity.latest(standbyAfterMs, now)?.source ?? 'activity';
+      if (this.activity.value(standbyAfterMs, price, now) >= wakeThreshold) {
+        const source = this.activity.latest(standbyAfterMs, price, now)?.source ?? 'activity';
         this.wake(source, source === 'operator');
       }
       return;
@@ -126,11 +125,11 @@ export class VoiceSessions {
     const live = this.live, run = this.run, page = this.page;
     if (!standbyAfterMs || bridge.stopping || this.moving || !live || live.state !== 'active' || run?.live !== live || !page || page.ws.readyState !== WebSocket.OPEN) return;
     // A voice session gets the whole window before it can go quiet.
-    if (now - (live.startedAt ?? now) < standbyAfterMs || this.activity.value(standbyAfterMs, now) >= wakeThreshold) return;
+    if (now - (live.startedAt ?? now) < standbyAfterMs || this.activity.value(standbyAfterMs, price, now) >= wakeThreshold) return;
     // A request on its way to the agent keeps voice Live until the agent has it.
     if ([...bridge.outbox.values()].some(entry => entry.state === 'queued' || entry.state === 'dispatching')) return;
     this.standby = { since: Date.now(), page };
-    bridge.log({ type: 'voice.standby', liveRun: live.reservation, afterMs: standbyAfterMs, threshold: wakeThreshold, value: this.activity.value(standbyAfterMs, now) });
+    bridge.log({ type: 'voice.standby', liveRun: live.reservation, afterMs: standbyAfterMs, threshold: wakeThreshold, value: this.activity.value(standbyAfterMs, price, now) });
     bridge.publish({ type: 'standby', state: 'on' });
     void live.close(STANDBY);
   }
@@ -416,7 +415,7 @@ export class VoiceSessions {
     }
     if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.bridge.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
     if (event.type === 'session.started') this.begun(run);
-    if (event.type === 'session.delegation.created') this.activity.add('request', this.bridge.tuning.requestPrice);
+    if (event.type === 'session.delegation.created') this.activity.add('request');
     // ...and to the first words it says.
     if (event.type === 'session.output_transcript.delta' && !run.spoke) { run.spoke = true; this.bridge.log({ type: 'voice.first_words', plan: run.plan, automatic: run.automatic, firstWordsMs: Date.now() - run.requested.at }); }
     // Live reports usage about every 15 seconds; the last few minutes of it are enough for the meters.

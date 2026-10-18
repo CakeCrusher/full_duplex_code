@@ -22,7 +22,9 @@ const METERS: { key: Key; label: string; unit: string; floor: number; total(n: n
   { key: 'operator', label: 'Your words', unit: 'words/min', floor: 60, total: (n: number) => `${compact(n)} words this session` },
   { key: 'requests', label: `Requests to ${profile.name}`, unit: 'per min', floor: 2, total: (n: number) => `${n} passed on this session` },
 ];
-type Tile = { value: HTMLElement; total: HTMLElement; line: SVGPathElement; area: SVGPathElement; dot: HTMLElement; cursor: HTMLElement; points: Point[] };
+type Tile = { value: HTMLElement; total: HTMLElement; line: SVGPathElement; area: SVGPathElement; dot: HTMLElement; cursor: HTMLElement; points: Point[]; unit?: HTMLElement; threshold?: SVGPathElement; tile?: HTMLElement };
+/** The bridge's Standby meter (status.standbyMeter): the currency in the quiet window against the threshold, with the current settings. */
+type StandbyMeter = { state: 'live' | 'standby' | 'waking' | 'connecting' | 'off'; value: number; threshold: number; windowMs: number; since: number | null; stallInMs: number | null };
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text = '') {
   const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
@@ -30,7 +32,9 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: strin
 
 export class Meters {
   items: Map<string, Item>; usage: LiveUsage | null = null;
-  tiles = new Map<Key, Tile>(); state: HTMLElement; hover: { key: Key; x: number } | null = null;
+  tiles = new Map<Key, Tile>(); state: HTMLElement; hover: { key: Key | 'standby'; x: number } | null = null;
+  /** The Standby tile: the currency, a point a second, and the threshold it has to stay above. */
+  standby: Tile; standbyMeter: StandbyMeter | null = null; standbyPoints: Point[] = [];
   constructor(items: Map<string, Item>) {
     this.items = items;
     const root = document.getElementById('meters')!, heading = element('div', 'meters-heading');
@@ -57,12 +61,39 @@ export class Meters {
       grid.append(tile);
       this.tiles.set(key, { value, total, line, area, dot, cursor, points: [] });
     }
+    this.standby = this.standbyTile(grid);
     root.append(heading, grid);
     setInterval(() => { if (!document.hidden) this.render(); }, 1000);
     this.render();
   }
+  // Like the others, but its line is the currency in the quiet window, drawn against the threshold.
+  standbyTile(grid: HTMLElement): Tile {
+    const tile = element('article', 'meter meter-standby'); tile.dataset.meter = 'standby'; tile.setAttribute('aria-label', 'Standby');
+    const reading = element('p', 'meter-reading'), value = element('strong', 'meter-value', '–'), unit = element('span', 'meter-unit', 'of the threshold');
+    reading.append(value, unit);
+    const chart = element('div', 'meter-chart'), svg = document.createElementNS(SVG, 'svg');
+    svg.setAttribute('viewBox', '0 0 100 40'); svg.setAttribute('preserveAspectRatio', 'none'); svg.setAttribute('aria-hidden', 'true');
+    const area = document.createElementNS(SVG, 'path'), line = document.createElementNS(SVG, 'path'), threshold = document.createElementNS(SVG, 'path');
+    area.setAttribute('class', 'meter-area'); line.setAttribute('class', 'meter-line'); threshold.setAttribute('class', 'meter-threshold');
+    for (const path of [line, threshold]) path.setAttribute('vector-effect', 'non-scaling-stroke');
+    svg.append(area, threshold, line);
+    const dot = element('i', 'meter-dot'), cursor = element('i', 'meter-cursor'); dot.hidden = cursor.hidden = true;
+    chart.append(svg, dot, cursor);
+    chart.addEventListener('pointermove', event => { const box = chart.getBoundingClientRect(); this.hover = { key: 'standby', x: (event.clientX - box.left) / box.width }; this.render(); });
+    chart.addEventListener('pointerleave', () => { this.hover = null; this.render(); });
+    const total = element('p', 'meter-total');
+    tile.append(element('span', 'meter-label', 'Standby'), reading, chart, total);
+    grid.append(tile);
+    return { value, total, line, area, dot, cursor, points: [], unit, threshold, tile };
+  }
   handle(event: { type: string; [field: string]: any }) {
     if (event.type === 'live_usage') { this.usage = event as unknown as LiveUsage; this.render(); }
+    // The Standby meter arrives with every status, once a second.
+    if (event.type === 'status' && event.standbyMeter) {
+      const meter = this.standbyMeter = event.standbyMeter as StandbyMeter, now = Date.now();
+      if (meter.state !== 'off') this.standbyPoints.push({ t: now, v: meter.value });
+      this.standbyPoints = this.standbyPoints.filter(point => point.t >= now - WINDOW);
+    }
     // A page that connects mid-session learns the session from the status.
     if (event.type === 'status' && 'liveUsage' in event) this.usage = event.liveUsage;
   }
@@ -129,6 +160,38 @@ export class Meters {
       if (tile.value.textContent !== shown) tile.value.textContent = shown;
       if (tile.total.textContent !== total) tile.total.textContent = total;
     }
+    this.renderStandby(now);
+  }
+  // The currency against the threshold: the scale tops out at three times the threshold, so the threshold sits a third of
+  // the way up and talk worth thousands doesn't flatten it; below the line, voice goes on Standby once the window passes.
+  renderStandby(now: number) {
+    const tile = this.standby, meter = this.standbyMeter, from = now - WINDOW;
+    if (!meter) return;
+    const top = Math.max(meter.threshold * 3, 1), y = (v: number) => 39 - Math.min(v, top) / top * 36;
+    tile.points = this.standbyPoints;
+    const xy = tile.points.map(point => [(point.t - from) / WINDOW * 100, y(point.v)] as const);
+    const line = xy.map(([x, yy], i) => `${i ? 'L' : 'M'}${x.toFixed(2)},${yy.toFixed(2)}`).join('');
+    tile.line.setAttribute('d', line);
+    tile.area.setAttribute('d', xy.length > 1 ? `${line}L${xy.at(-1)![0].toFixed(2)},40L${xy[0][0].toFixed(2)},40Z` : '');
+    tile.threshold!.setAttribute('d', `M0,${y(meter.threshold).toFixed(2)}L100,${y(meter.threshold).toFixed(2)}`);
+    tile.dot.hidden = !xy.length || meter.state === 'off';
+    if (xy.length) { tile.dot.style.left = `${xy.at(-1)![0]}%`; tile.dot.style.top = `${xy.at(-1)![1] / 40 * 100}%`; }
+    tile.tile!.dataset.state = meter.state;
+    const windowS = meter.windowMs / 1000;
+    const value = !meter.windowMs ? 'Off' : meter.state === 'off' ? '–' : compact(meter.value);
+    const unit = meter.windowMs ? `of ${meter.threshold} · last ${windowS} s` : 'Standby is turned off';
+    let total = !meter.windowMs ? 'Voice never goes on Standby (window 0).'
+      : meter.state === 'standby' ? `On Standby for ${elapsed(now - (meter.since ?? now))}: not billed. ${meter.threshold} wakes it.`
+      : meter.state === 'waking' ? 'Waking: connecting a new session.'
+      : meter.state === 'connecting' ? 'Connecting voice.'
+      : meter.state === 'off' ? 'Voice is off.'
+      : meter.stallInMs === null ? '' : meter.value >= meter.threshold ? `Above the threshold: Standby in ${Math.ceil(meter.stallInMs / 1000)} s if nothing else happens.` : `Below the threshold: Standby in ${Math.ceil(meter.stallInMs / 1000)} s.`;
+    const hover = this.hover?.key === 'standby' && tile.points.length ? this.nearest(tile, from) : null;
+    tile.cursor.hidden = !hover;
+    if (hover) { tile.cursor.style.left = `${(hover.t - from) / WINDOW * 100}%`; total = `${hover.t >= now - 1500 ? 'Now' : `${elapsed(now - hover.t)} ago`} · ${compact(hover.v)} of ${meter.threshold}: ${hover.v >= meter.threshold ? 'above' : 'below'} the threshold`; }
+    if (tile.value.textContent !== value) tile.value.textContent = value;
+    if (tile.unit!.textContent !== unit) tile.unit!.textContent = unit;
+    if (tile.total.textContent !== total) tile.total.textContent = total;
   }
   nearest(tile: Tile, from: number) {
     const t = from + this.hover!.x * WINDOW;

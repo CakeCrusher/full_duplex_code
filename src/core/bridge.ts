@@ -19,7 +19,6 @@ import { Pages, type Page } from './pages.ts';
 import { DEFAULT_TUNING, tuning, type Tuning } from './tuning.ts';
 import { CompanionRegistry, type CompanionEntry } from './companions.ts';
 import { SessionSwitch } from './sessions.ts';
-import { priceOf } from './activity.ts';
 
 export interface HarnessOptions {
   /** The coding agent, from src/adapters. */
@@ -103,7 +102,7 @@ export class Harness {
     // read can be over a megabyte, and a page connection backed up with it looks like slow playback.
     observer.on('observation', ({ raw, ...event }) => this.publish({ type: 'agent_observation', ...event, text: withoutBinary(event.text) }));
     // The agent's work, priced for Standby (activity.ts): a subagent's events are its parent's business.
-    observer.on('observation', (observation: Observation) => { if (!observation.child) this.voiceSessions.activity.add(observation.kind, priceOf(this.tuning, observation.kind)); });
+    observer.on('observation', (observation: Observation) => { if (!observation.child && observation.kind !== 'event') this.voiceSessions.activity.add(observation.kind); });
     observer.on('status', event => { this.log({ type: 'agent.status', ...event }); this.publish({ type: 'agent_status', ...event }); });
     observer.on('fault', error => this.fault(error));
     const { name, transport } = agent.profile;
