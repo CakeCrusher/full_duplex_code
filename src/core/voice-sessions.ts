@@ -31,6 +31,8 @@ interface Run {
   record: ResumeRecord; recordId?: string;
   /** The instructions it started with, those a fork inherited from its source, and those in force in it now (given and not countermanded). */
   startup: Instruction[]; inherited: SavedInstruction[]; inForce: Map<string, SavedInstruction>;
+  /** When voice was asked to start and how, for its startup times; and whether it has spoken yet. */
+  requested: { at: number; plan: ResumePlan }; spoke?: boolean;
 }
 
 // Voice connections one after another beside the same agent session: startup
@@ -211,8 +213,9 @@ export class VoiceSessions {
     let plan = planFor(record, mode);
     // Starting fresh after a drop: the speech it had not passed on goes to the agent now.
     if (plan === 'fresh') this.handOffCarried();
+    const requested = { at: Date.now(), plan };
     for (;;) {
-      const attempt: { live?: LiveSession } = {};
+      const attempt: { live?: LiveSession; requested: Run['requested'] } = { requested };
       try { return await this.connect(sdp as string | undefined, page, plan, automatic, attempt); }
       catch (error) {
         const live = attempt.live, message = (error as Error).message;
@@ -245,7 +248,7 @@ export class VoiceSessions {
       }
     }
   }
-  async connect(sdp: string | undefined, page: Page | undefined, plan: ResumePlan, automatic: boolean, attempt: { live?: LiveSession } = {}) {
+  async connect(sdp: string | undefined, page: Page | undefined, plan: ResumePlan, automatic: boolean, attempt: { live?: LiveSession; requested?: Run['requested'] } = {}) {
     const bridge = this.bridge, { agent, observer, log, publish, fault, clean } = bridge, { name } = agent.profile;
     const record = this.current(), recordId = this.recordFor, sourceId = plan === 'fork' ? record.liveSessionId : undefined;
     const startup = attachment(agent, bridge.cwd, observer.state);
@@ -265,7 +268,7 @@ export class VoiceSessions {
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean,
       learner: bridge.learner, audit: bridge.handOffAudit, screen: bridge.handOffAudit ? (said, id) => bridge.sessionSwitch.screen(said, id) : undefined, tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
-    const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map() };
+    const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan } };
     // A dropped or moved session's unsent speech: this session takes it if it starts; meanwhile it isn't handed off.
     if (this.carried) { clearTimeout(this.carried.timer); mediator.history.carry(this.carried.mediator.history); }
     if (plan === 'fork') mediator.context.add('thinking', catchUp(agent, bridge.cwd, observer.state) + (history.text ? historyIntro(agent) + history.text : ''), null, '', since);
@@ -307,6 +310,8 @@ export class VoiceSessions {
     }
     if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.bridge.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
     if (event.type === 'session.started') this.begun(run);
+    // ...and to the first words it says.
+    if (event.type === 'session.output_transcript.delta' && !run.spoke) { run.spoke = true; this.bridge.log({ type: 'voice.first_words', plan: run.plan, automatic: run.automatic, firstWordsMs: Date.now() - run.requested.at }); }
     // Live reports usage about every 15 seconds; the last few minutes of it are enough for the meters.
     const usage = this.usage;
     if (event.type === 'session.usage.updated' && usage && usage.voiceSessionId === live.id) {
@@ -331,6 +336,8 @@ export class VoiceSessions {
     this.audit = new AudioAudit({ dir: path.join(bridge.runDir, 'audio', live.reservation!), log: event => log({ liveRun: live.reservation, ...event }), onError: error => fault(error) });
     this.usage = { voiceSessionId: live.id!, startedAt: live.startedAt ?? Date.now(), seconds: 0, ratio: null, points: [] };
     publish({ type: 'live_usage', ...this.usage });
+    // Startup times: from the click (or reconnect) to GPT Live's session starting, fallbacks included.
+    log({ type: 'voice.started', plan, requestedPlan: run.requested.plan, automatic, startMs: Date.now() - run.requested.at });
     publish({ type: 'voice_started', sessionId: live.id, plan, automatic }, page);
     publish(bridge.status());
   }
