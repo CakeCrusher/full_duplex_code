@@ -57,15 +57,6 @@
       <div class="timeline-key dev-only"><span>Bars show time spans.</span><span>Thin markers show instant events.</span><span>Transcript rows: <b class="you-key">input ASR</b> / <b class="live-key">Live</b>.</span></div>
     </section>
     <section id="timeline-detail" class="timeline-detail" aria-labelledby="detail-title"><div class="detail-heading"><span id="detail-kind" class="eyebrow">Inspect the timeline</span><button id="detail-clear" hidden>Unpin details</button></div><h3 id="detail-title">Hover for a closer look.</h3><p id="detail-time">Click an item to pin it. Keyboard focus and tap work too.</p><div class="message-heading"><span id="detail-message-label" class="eyebrow" hidden></span><button id="detail-copy" hidden>Copy message</button></div><pre id="detail-text">Audio, transcripts, every {{name}} {{eventWord}}, context delivery, and requests share the same clock.</pre><p id="detail-verification" hidden></p><section id="detail-checks" class="detail-checks dev-only" hidden><span class="eyebrow">Jev checks of these words</span><ul id="detail-checks-list"></ul></section><details id="detail-payload" class="dev-only" hidden><summary id="detail-json-label">{{Wire}} JSON</summary><pre id="detail-json"></pre></details><details id="detail-observed" class="dev-only" hidden><summary>Prompt captured by {{name}}’s {{promptEvent}} {{eventWord}}</summary><pre id="detail-observed-text"></pre></details><p id="detail-source" class="dev-only"></p></section>
-    <section id="standby-chart" class="standby-chart" aria-labelledby="standby-title">
-      <div class="standby-heading"><div><div class="eyebrow">STANDBY · REPLAYED ON YOUR CONVERSATIONS</div><h2 id="standby-title">What the quiet window saves.</h2></div>
-        <div class="standby-actions"><label for="standby-scope">Conversations</label><select id="standby-scope"><option value="all">All recorded</option><option value="run">This run</option></select><button id="standby-refresh" type="button">Refresh</button></div></div>
-      <p class="standby-note">Each point replays your recorded voice conversations with that quiet window and the current prices and threshold: the share of voice time Standby would not have billed, and how often it would have woken. <span id="standby-status"></span></p>
-      <div class="standby-legend"><span><i class="key-saved"></i>not billed</span><span><i class="key-wakes"></i>wakes an hour</span><span><i class="key-noise"></i>of them noise (sound, no words)</span></div>
-      <svg id="standby-svg" role="img" aria-label="Share of voice time not billed and wakes an hour, for each quiet window"></svg>
-      <details class="standby-table"><summary>Table</summary><table id="standby-table"></table></details>
-      <div id="standby-tooltip" class="standby-tooltip" hidden></div>
-    </section>
     <section id="settings" class="settings-panel dev-only" aria-labelledby="settings-title">
       <div class="eyebrow">DEVELOPER MODE · SETTINGS</div><h2 id="settings-title">How the companion is tuned.</h2>
       <p id="settings-jev" class="settings-note"></p>

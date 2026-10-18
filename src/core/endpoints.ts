@@ -9,7 +9,6 @@ import { voiceProvenance } from './prompts.ts';
 import { attachPage } from './browser-socket.ts';
 import { Pages } from './pages.ts';
 import { listCompanions } from './companions.ts';
-import { recordedSessions, sweep } from './standby-replay.ts';
 import { DEFAULT_TUNING, KNOBS } from './tuning.ts';
 
 const equal = (a: unknown, b: string) => typeof a === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -95,16 +94,6 @@ export class Endpoints {
       if (!local || !equal(req.headers.authorization, `Bearer ${bridge.browserToken}`)) { res.writeHead(403); return res.end(); }
       const { action, from } = await body(req, 1024);
       res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(bridge.sessionSwitch.remote(action, from)));
-    }
-    // The Standby chart: every quiet window replayed over this run's voice conversation, or every recorded run's.
-    if (req.url?.startsWith('/api/standby?') && req.method === 'GET') {
-      if (!equal(req.headers.authorization, `Bearer ${bridge.browserToken}`)) { res.writeHead(403); return res.end(); }
-      const scope = new URL(req.url, 'http://local').searchParams.get('scope') === 'run' ? 'run' : 'all';
-      const sessions = recordedSessions(bridge.root, bridge.runDir, scope), tuning = bridge.tuning;
-      const points = await sweep(sessions, tuning);
-      const hours = sessions.reduce((n, s) => n + (s.end - s.start), 0) / 3600000;
-      res.setHeader('Content-Type', 'application/json');
-      return res.end(JSON.stringify({ scope, hours, sessions: sessions.length, windowS: tuning.standbyAfterMs / 1000, threshold: tuning.wakeThreshold, points }));
     }
     // What each setting does and its levels, as Jev reads them (Developer mode's settings panel).
     if (req.url === '/api/settings' && req.method === 'GET') {

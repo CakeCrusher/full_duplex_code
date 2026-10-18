@@ -96,9 +96,9 @@ export class VoiceSessions {
   listensTo(page: Page) { return page === this.page || page === this.standby?.page; }
   /** The listening page's microphone and speaker levels (about 0.1 s each), priced: the operator's sound and GPT Live's. */
   heard(level: MicrophoneLevel & { outputRms?: number }) {
-    const { speechPrice, liveSpeechPrice } = this.bridge.tuning, log = this.bridge.activityLog;
-    if (operatorSpeaking(level)) { this.activity.add('operator', speechPrice); log.count('speech'); }
-    if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS) { this.activity.add('live', liveSpeechPrice); log.count('live'); }
+    const { speechPrice, liveSpeechPrice } = this.bridge.tuning;
+    if (operatorSpeaking(level)) this.activity.add('operator', speechPrice);
+    if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS) this.activity.add('live', liveSpeechPrice);
   }
   /**
    * Every second: voice that has been quiet for the Standby window goes on Standby, and voice on
@@ -151,7 +151,6 @@ export class VoiceSessions {
     this.standby = undefined;
     const { log, publish } = this.bridge;
     log({ type: 'voice.standby_ended', reason, standbyMs: Date.now() - standby.since });
-    if (!moved) this.bridge.activityLog.voice(false);
     // The speech goes to the agent with why voice ended, not why it paused.
     if (this.carried) this.carried.reason = reason;
     if (!moved) this.handOffCarried();
@@ -417,9 +416,7 @@ export class VoiceSessions {
     }
     if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.bridge.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
     if (event.type === 'session.started') this.begun(run);
-    if (event.type === 'session.delegation.created') { this.activity.add('request', this.bridge.tuning.requestPrice); this.bridge.activityLog.event('request'); }
-    // Transcribed words tell speech from noise in the Standby chart.
-    if (event.type === 'session.input_transcript.delta' && /\w/.test(String(event.delta ?? ''))) this.bridge.activityLog.count('words');
+    if (event.type === 'session.delegation.created') this.activity.add('request', this.bridge.tuning.requestPrice);
     // ...and to the first words it says.
     if (event.type === 'session.output_transcript.delta' && !run.spoke) { run.spoke = true; this.bridge.log({ type: 'voice.first_words', plan: run.plan, automatic: run.automatic, firstWordsMs: Date.now() - run.requested.at }); }
     // Live reports usage about every 15 seconds; the last few minutes of it are enough for the meters.
@@ -448,7 +445,6 @@ export class VoiceSessions {
     publish({ type: 'live_usage', ...this.usage });
     // Startup times: from the click (or reconnect, or wake) to GPT Live's session starting, fallbacks included.
     log({ type: 'voice.started', plan, requestedPlan: run.requested.plan, automatic, startMs: Date.now() - run.requested.at, wake: run.wake?.reason });
-    bridge.activityLog.voice(true);
     if (run.wake && this.standby) { log({ type: 'voice.woke', reason: run.wake.reason, standbyMs: Date.now() - this.standby.since }); this.standby = undefined; publish({ type: 'standby', state: 'off', reason: run.wake.reason }); }
     publish({ type: 'voice_started', sessionId: live.id, plan, automatic }, page);
     publish(bridge.status());
@@ -473,8 +469,6 @@ export class VoiceSessions {
     if (unexpected) this.lastDrop = { reason: result.reason, at: Date.now(), reconnecting: Boolean(reconnect) };
     // Speech not yet passed on goes to the session that replaces this one (whenever Standby wakes); otherwise to the agent now.
     if (reconnect || moved || standby) this.carry(mediator, result.reason, !standby); else own?.handOff(result.reason);
-    // Voice stays on through Standby, a reconnect or a move; otherwise it is off.
-    if (!reconnect && !moved && !standby && this.live === live) bridge.activityLog.voice(false);
     if (reconnect) log({ type: 'voice.reconnecting', reason: result.reason, recent: this.reconnects.length });
     own?.stop();
     publish({ type: 'voice_closed', ...result, moved: moved || undefined, reconnect: reconnect || undefined, dropped: (unexpected && !reconnect) || undefined, standby: standby || undefined }, page);

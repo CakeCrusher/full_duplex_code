@@ -31,10 +31,9 @@ const cues = new CueTracker(), cuePlayer = new CuePlayer();
 let replaying = false;
 developerMode();
 const timeline = new TimelineView(), meters = new Meters(timeline.items);
-// Loaded on their own: an fdc started before these modules existed serves the page without them (it serves
-// only the files it knew when it started), and the rest of the page must still work.
-let standbyChart: { tuning(tuning: Record<string, number> | undefined): void } | undefined, settingsPanel: { update(event: BridgeEvent): void } | undefined;
-import('./standby-chart.js').then(module => { standbyChart = module.mountStandbyChart($('standby-chart'), token); }).catch(() => { $('standby-chart').hidden = true; });
+// Loaded on its own: an fdc started before this module existed serves the page without it (it serves only
+// the files it knew when it started), and the rest of the page must still work.
+let settingsPanel: { update(event: BridgeEvent): void } | undefined;
 import('./settings-panel.js').then(module => { settingsPanel = module.mountSettings($('settings'), token); if (currentStatus) settingsPanel.update(currentStatus); }).catch(() => { $('settings').hidden = true; });
 
 function handle(event: BridgeEvent) {
@@ -49,7 +48,7 @@ function handle(event: BridgeEvent) {
     for (const item of listed) learned({ type: 'instruction_learned', id: item.learned, text: item.text.replace(`${item.learned}: `, '') });
     for (const card of document.querySelectorAll<HTMLElement>('.learned[id^="learned-"]:not(.removed)')) if (!listed.some((item: any) => card.id === `learned-${item.learned}`)) removed(card.id.slice('learned-'.length));
     showStatus(event, { active, muted, starting, standby, waking, elsewhere: Boolean(event.voicePage) && event.voicePage !== pageId });
-    standbyChart?.tuning(event.tuning); settingsPanel?.update(event);
+    settingsPanel?.update(event);
   }
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
   if (event.type === 'instruction_learned') learned(event);
