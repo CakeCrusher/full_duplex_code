@@ -9,7 +9,7 @@ import { Mediator } from './mediator.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { startupHistory } from './startup-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
-import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, reconnectGreeting, resumeGreeting, standbyWake } from './prompts.ts';
+import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, reconnectGreeting, resumeGreeting, standbyNews, standbyWake } from './prompts.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, REQUEST_PRICE, liveSpeechPrice, operatorSpeechPrice } from './activity.ts';
 import { operatorSpeaking, type MicrophoneLevel } from './floor.ts';
@@ -375,6 +375,8 @@ export class VoiceSessions {
     if (wake) {
       mediator.context.add('thinking', standbyWake(agent, wake.operator));
       for (const observation of bridge.adapter.history().filter(o => o.at > wake.since)) mediator.feed.add(observation);
+      // Woken by the agent's news: after it, the cue to report it if it calls for that. Woken by the operator, their words are the cue.
+      if (!wake.operator) { mediator.feed.flush(); mediator.context.add('commentary', standbyNews(agent)); }
     }
     log({ type: 'voice.starting', plan, automatic, from: sourceId, seededTurns: plan === 'seed' ? input.length - (history.text ? 2 : 1) : undefined, store: this.store, wake: wake?.reason });
     publish(bridge.status());

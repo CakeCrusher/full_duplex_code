@@ -56,7 +56,8 @@ test('speech wakes it: about half a second of sound, not a click; the new sessio
   assert.equal(lives[1].options.fork, undefined, 'never a slow fork');
   assert.ok(lives[1].options.input.some((item: any) => item.role === 'user' && /dark mode/.test(item.content[0].text)), 'seeded with the conversation');
   assert.equal(lives[1].greeting, undefined, 'no greeting');
-  await until(() => lives[1].appended.some(([kind, text]) => kind === 'thinking' && /paused while the conversation was quiet.*The operator has started speaking/s.test(text)));
+  await until(() => lives[1].appended.some(([kind, text]) => kind === 'thinking' && /The conversation continues.*Don't greet.*The operator has started speaking/s.test(text)));
+  assert.ok(!lives[1].appended.some(([kind]) => kind === 'commentary'), 'the operator speaking is the cue: nothing else is said first');
 });
 
 test("the agent's news wakes it, a few tool calls don't, and what it did meanwhile arrives as it would have live", async t => {
@@ -74,7 +75,10 @@ test("the agent's news wakes it, a few tool calls don't, and what it did meanwhi
   await until(() => lives[1].appended.some(([kind, text]) => kind === 'thinking' && /Dark mode is in; the tests pass/.test(text)));
   const startup = JSON.stringify(lives[1].options.input);
   assert.ok(!/Dark mode is in/.test(startup), 'not buried in the startup history, where it would not be reported');
-  assert.ok(lives[1].appended.some(([, text]) => /It reopened for Claude's latest work/.test(text)));
+  // After the work it missed, the cue to report it (real GPT Live, Oct 18: 5 of 5 reported the result, without a greeting).
+  const appended = lives[1].appended.map(([kind, text]) => `${kind}: ${text}`), news = appended.findIndex(a => /Dark mode is in/.test(a));
+  assert.match(appended.at(-1)!, /^commentary: Tell the operator now, in a sentence or two, what Claude has done since/);
+  assert.ok(news >= 0 && news < appended.length - 1, 'the cue comes after the work it is about');
 });
 
 test('ten tool calls in the window add up to a wake', async t => {

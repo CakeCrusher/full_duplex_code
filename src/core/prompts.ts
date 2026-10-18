@@ -47,9 +47,12 @@ export const reconnectGreeting = ({ profile: { name } }: Agent) =>
   `The voice connection dropped and reconnected on its own; the conversation continues. Say in a few words that you are back; if you were answering when it dropped, offer to continue. Then listen. Do not greet again for later ${name} observations.`;
 // Waking from Standby, instead of a greeting: the conversation continues where it paused.
 export const standbyWake = ({ profile: { name } }: Agent, operatorSpoke: boolean) =>
-  `The voice connection was paused while the conversation was quiet, to save cost, and has just reopened; the conversation continues. Do not greet, say you are back, or mention the pause. ${operatorSpoke
+  `The conversation continues: the voice connection was paused to save cost while it was quiet. Don't greet the operator or mention the pause. ${operatorSpoke
     ? 'The operator has started speaking: their words are arriving now. Listen, and answer them.'
-    : `It reopened for ${name}'s latest work: speak only if your rules for when to speak call for it; otherwise listen.`}`;
+    : `${name}'s work since the pause follows.`}`;
+// After the work that woke it, the cue to speak about it (as a greeting cues a new session's first words).
+export const standbyNews = ({ profile: { name } }: Agent) =>
+  `Tell the operator now, in a sentence or two, what ${name} has done since: what is ready, or what they need to decide. Don't greet them first.`;
 // A fork keeps its source's startup input; this brings it up to date.
 export const catchUp = ({ profile: { name, product } }: Agent, cwd: string, state: string) =>
   `This voice connection continues an earlier one. You are attached to ${product} in ${cwd}; its current state is ${state}. ${name}'s work since the earlier connection follows, if any. Those requests were already submitted; do not resend them or narrate this history.\n`;
