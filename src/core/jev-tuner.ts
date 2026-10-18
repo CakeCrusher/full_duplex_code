@@ -10,7 +10,7 @@ type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: 
 export interface TuningChange { name: keyof Tuning; from: number; to: number }
 
 const URL = 'https://api.typesafe.ai/v1/systemone';
-const SETTING = "Voice coding session: the operator talks to a voice companion (GPT Live) that answers them, reports on a coding agent's work and passes their requests to the agent. These are the companion's low-level settings for when and how the agent's updates reach it. The core principles, in order: 1 the operator comes first (never lose a work request, don't talk over them); 2 answer the operator's questions instead of delegating them; 3 synthesis, not narration; 4 know as much as possible; 5 fresh enough.";
+const SETTING = "Voice coding session: the operator talks to a voice companion (GPT Live) that answers them, reports on a coding agent's work and passes their requests to the agent. These are the companion's low-level settings for when and how the agent's updates reach it, and for Standby: voice costs $0.05 a minute while GPT Live is connected, and Standby disconnects it while the conversation is quiet, at the price of waking it again. Each setting describes, with measurements from the operator's own recorded conversations, what each level costs and buys and which of the operator's words call for it. The core principles, in order: 1 the operator comes first (never lose a work request, don't talk over them); 2 answer the operator's questions instead of delegating them; 3 synthesis, not narration; 4 know as much as possible; 5 fresh enough.";
 
 export class JevTuner {
   apiKey: string; fetch: Fetch;

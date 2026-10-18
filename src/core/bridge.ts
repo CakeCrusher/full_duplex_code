@@ -16,10 +16,11 @@ import { Outbox } from './outbox.ts';
 import { VoiceSessions } from './voice-sessions.ts';
 import { Endpoints } from './endpoints.ts';
 import { Pages, type Page } from './pages.ts';
-import { tuning, type Tuning } from './tuning.ts';
+import { DEFAULT_TUNING, tuning, type Tuning } from './tuning.ts';
 import { CompanionRegistry, type CompanionEntry } from './companions.ts';
 import { SessionSwitch } from './sessions.ts';
 import { priceOf } from './activity.ts';
+import { ActivityLog } from './standby-replay.ts';
 
 export interface HarnessOptions {
   /** The coding agent, from src/adapters. */
@@ -47,6 +48,8 @@ export class Harness {
   learner?: InstructionLearner; handOffAudit?: DelegationAudit; tuner?: JevTuner; learned: LearnedLog;
   /** Settings the operator set by hand (FDC_TUNING), which Jev leaves alone; Jev's pending and latest asks, and the operator's words awaiting one. */
   pinned: (keyof Tuning)[] = []; tuneTimer?: NodeJS.Timeout; tuneAsks = 0; tuneLatest?: string;
+  /** Every change to the settings in this run, newest last: when, by whom, from what to what (Developer mode lists them). */
+  tuningHistory: { at: number; by: string; changes: TuningChange[] }[] = [];
   root: string; runDir: string; cwd: string; sessionId?: string; apiKey: string;
   voice: string; observation: string; port: number; portFallback: boolean;
   /** How agent updates reach GPT Live; a running voice session takes a change at once. */
@@ -68,6 +71,8 @@ export class Harness {
   clean: (text: unknown) => string;
   statusLog: StatusLog; log: (event: BridgeEvent) => void; publish: (event: BridgeEvent, page?: Page) => void; fault: (error: Error, page?: Page) => void;
   ledger: UsageLedger; timeline: Timeline; outbox: Outbox; voiceSessions: VoiceSessions; endpoints: Endpoints;
+  /** The voice conversation, compact, for the page's Standby chart (standby-replay.ts). */
+  activityLog: ActivityLog;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
   constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides, jevTuning = false, store = true }: HarnessOptions) {
     this.agent = agent; this.root = root; this.runDir = runDir; this.cwd = cwd; this.sessionId = sessionId; this.apiKey = apiKey;
@@ -80,7 +85,11 @@ export class Harness {
     this.statusLog = new StatusLog({ runDir, clean: this.clean, timeline: this.timeline, pages: this.pages });
     this.log = this.statusLog.log; this.publish = this.statusLog.publish; this.fault = this.statusLog.fault;
     this.ledger = new UsageLedger(path.join(root, '.runs', 'budget.json'));
+    // Not for test runs kept beside the real ones (their workspace is inside .runs or .scratch): the chart is about real use.
+    const inside = (dir: string) => !path.relative(path.join(root, dir), cwd).startsWith('..') && !path.isAbsolute(path.relative(path.join(root, dir), cwd));
+    this.activityLog = new ActivityLog(inside('.runs') || inside('.scratch') ? undefined : path.join(runDir, 'activity.jsonl'));
     this.tuning = tuning(overrides); this.pinned = Object.keys(overrides ?? {}) as (keyof Tuning)[];
+    if (this.pinned.length) this.tuningHistory.push({ at: Date.now(), by: 'FDC_TUNING', changes: this.pinned.map(name => ({ name, from: DEFAULT_TUNING[name], to: this.tuning[name] })) });
     this.learned = new LearnedLog(path.join(root, '.runs', 'learned-instructions.jsonl'));
     if (jevKey && jevTuning) this.tuner = new JevTuner({ apiKey: jevKey, log: this.log });
     if (jevKey) this.handOffAudit = new DelegationAudit({ apiKey: jevKey, file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log });
@@ -100,7 +109,10 @@ export class Harness {
     // read can be over a megabyte, and a page connection backed up with it looks like slow playback.
     observer.on('observation', ({ raw, ...event }) => this.publish({ type: 'agent_observation', ...event, text: withoutBinary(event.text) }));
     // The agent's work, priced for Standby (activity.ts): a subagent's events are its parent's business.
-    observer.on('observation', (observation: Observation) => { if (!observation.child) this.voiceSessions.activity.add(observation.kind, priceOf(this.tuning, observation.kind)); });
+    observer.on('observation', (observation: Observation) => {
+      if (observation.child) return;
+      this.voiceSessions.activity.add(observation.kind, priceOf(this.tuning, observation.kind)); this.activityLog.event(observation.kind);
+    });
     observer.on('status', event => { this.log({ type: 'agent.status', ...event }); this.publish({ type: 'agent_status', ...event }); });
     observer.on('fault', error => this.fault(error));
     const { name, transport } = agent.profile;
@@ -162,8 +174,9 @@ export class Harness {
     this.jevCheck(instruction.requestId, 'instruction', `Learned ${id}: ${text}`, instruction);
   }
   /** New settings for how agent updates reach GPT Live, from now on. */
-  setTuning(next: Tuning, changes: TuningChange[] = []) {
+  setTuning(next: Tuning, changes: TuningChange[] = [], by = 'Jev') {
     this.tuning = next; this.mediator?.applyTuning(next);
+    if (changes.length) { this.tuningHistory.push({ at: Date.now(), by, changes }); if (this.tuningHistory.length > 200) this.tuningHistory.shift(); }
     this.log({ type: 'tuning.changed', tuning: next, changes }); this.publish({ type: 'tuning', tuning: next, changes }); this.publish(this.status());
   }
   /**
@@ -218,7 +231,7 @@ export class Harness {
     const agentClosed = this.adapter.close();
     clearInterval(this.statusTimer); clearInterval(this.voiceSessions.audioWatchdog); clearInterval(this.voiceSessions.standbyTimer); clearTimeout(this.agentLostTimer); clearTimeout(this.tuneTimer);
     if (this.live) await this.live.close('harness stopped');
-    this.voiceSessions.handOffCarried();
+    this.voiceSessions.handOffCarried(); this.activityLog.voice(false);
     this.mediator?.stop();
     this.audit?.close(); this.saveTimeline();
     this.pages.close();

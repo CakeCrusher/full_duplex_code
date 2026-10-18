@@ -45,10 +45,10 @@ test('a quiet conversation goes on Standby: GPT Live closes, voice stays on, and
 });
 
 test('speech wakes it, priced like everything else; the new session is seeded, not greeted, and told why', async t => {
-  const { h, lives, sent, goQuiet } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 20 } });
+  const { h, lives, sent, goQuiet } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30 } });
   await goQuiet();
   speak(h, 1); h.voiceSessions.checkStandby();
-  assert.equal(sent('voice_wake').length, 0, `a tenth of a second of sound is worth ${DEFAULT_TUNING.speechPrice}, under a threshold of 20`);
+  assert.equal(sent('voice_wake').length, 0, `a tenth of a second of sound is worth ${DEFAULT_TUNING.speechPrice}, under a threshold of 30`);
   speak(h, 1); h.voiceSessions.checkStandby();
   assert.deepEqual(sent('voice_wake').map(e => e.reason), ['operator']);
   // The page reconnects on the same microphone.

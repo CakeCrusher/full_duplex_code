@@ -66,7 +66,7 @@ You can keep typing to the agent too, and ask the companion about it: "What did 
 ### 4. Stop
 
 - **End voice** closes the voice connection and its billing, about $0.05 a minute. The agent keeps working.
-- When nobody has said anything for 30 seconds, voice goes on **Standby**: GPT Live disconnects and its billing stops until you speak or the agent has news ([more](USAGE.md#standby)).
+- When the conversation has been quiet for 15 seconds, voice goes on **Standby**: GPT Live disconnects and its billing stops until you speak or the agent has news ([more](USAGE.md#standby)).
 - **Resume voice** picks the conversation up where it left off, even after restarting `fdc`; **Start fresh** begins a new one. If the voice connection drops, it reconnects by itself.
 - Exiting the agent stops everything: `/exit` in Claude Code, Ctrl-C twice in Codex or Pi.
 

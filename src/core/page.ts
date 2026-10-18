@@ -4,7 +4,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import type { AgentProfile } from './adapter.ts';
 
 // The page's modules are TypeScript in web/, served as JavaScript.
-const MODULES = ['app', 'audio-io', 'bridge-client', 'page-ui', 'webrtc-peer', 'profile', 'timeline', 'meters', 'cues', 'audio-worklet', 'companions'];
+const MODULES = ['app', 'audio-io', 'bridge-client', 'page-ui', 'webrtc-peer', 'profile', 'timeline', 'meters', 'cues', 'audio-worklet', 'companions', 'standby-chart', 'settings-panel'];
 export const PAGE_FILES: Readonly<Record<string, [file: string, type: string]>> = {
   '/': ['index.html', 'text/html'], '/icon.svg': ['icon.svg', 'image/svg+xml'], '/style.css': ['style.css', 'text/css'],
   ...Object.fromEntries(MODULES.map(name => [`/${name}.js`, [`${name}.ts`, 'text/javascript']])),

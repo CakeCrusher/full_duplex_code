@@ -50,8 +50,11 @@ test("after a request, Jev reads the operator's latest words and keeps the curre
   const fetch = async (_url: string, init: RequestInit) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers: { wakeThreshold: { choice: 'level_100' } } }) }; };
   const tuner = new JevTuner({ apiKey: 'k', log: () => {}, fetch });
   const { changes } = await tuner.choose({ instructions: [], earlier: [], current: DEFAULT_TUNING, latest: 'Stop waking up for every little thing.' });
-  assert.deepEqual(changes, [{ name: 'wakeThreshold', from: 10, to: 100 }]);
+  assert.deepEqual(changes, [{ name: 'wakeThreshold', from: 50, to: 100 }]);
   assert.equal(sent.state.operator_latest_words, 'Stop waking up for every little thing.');
   assert.match(sent.questions.standbyAfterMs.instructions, /Keep the current level unless/);
-  assert.deepEqual(Object.keys(sent.questions.standbyAfterMs.criteria), ['level_0', 'level_20000', 'level_30000', 'level_60000', 'level_120000']);
+  assert.deepEqual(Object.keys(sent.questions.standbyAfterMs.criteria), ['level_0', 'level_10000', 'level_15000', 'level_20000', 'level_30000', 'level_60000', 'level_120000']);
+  // Every Standby setting is Jev's to choose, each level with what it was measured to cost and buy.
+  for (const name of ['speechPrice', 'liveSpeechPrice', 'toolPrice', 'promptPrice', 'messagePrice', 'turnEndPrice', 'failurePrice', 'approvalPrice', 'requestPrice']) assert.ok(sent.questions[name], name);
+  assert.match(sent.questions.wakeThreshold.instructions, /Choose higher when the operator says it wakes up for nothing/);
 });
