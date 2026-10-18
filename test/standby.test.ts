@@ -3,7 +3,8 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import { Activity, PRICES } from '../src/core/activity.ts';
+import { Activity, priceOf } from '../src/core/activity.ts';
+import { DEFAULT_TUNING } from '../src/core/tuning.ts';
 import { STANDBY } from '../src/core/voice-sessions.ts';
 import { Timeline } from '../src/core/timeline.ts';
 import { stripTypes } from '../src/core/page.ts';
@@ -43,12 +44,12 @@ test('a quiet conversation goes on Standby: GPT Live closes, voice stays on, and
   assert.equal(lives.length, 1);
 });
 
-test('speech wakes it: about half a second of sound, not a click; the new session is seeded, not greeted, and told why', async t => {
-  const { h, lives, sent, goQuiet } = await quiet(t);
+test('speech wakes it, priced like everything else; the new session is seeded, not greeted, and told why', async t => {
+  const { h, lives, sent, goQuiet } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 20 } });
   await goQuiet();
   speak(h, 1); h.voiceSessions.checkStandby();
-  assert.equal(sent('voice_wake').length, 0, 'a click or a knock does not wake it');
-  speak(h, 4); h.voiceSessions.checkStandby();
+  assert.equal(sent('voice_wake').length, 0, `a tenth of a second of sound is worth ${DEFAULT_TUNING.speechPrice}, under a threshold of 20`);
+  speak(h, 1); h.voiceSessions.checkStandby();
   assert.deepEqual(sent('voice_wake').map(e => e.reason), ['operator']);
   // The page reconnects on the same microphone.
   await h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true);
@@ -65,7 +66,7 @@ test("the agent's news wakes it, a few tool calls don't, and what it did meanwhi
   await goQuiet();
   for (let i = 0; i < 3; i++) agent(h, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: `npm test ${i}` } });
   h.voiceSessions.checkStandby();
-  assert.equal(sent('voice_wake').length, 0, `three tool calls are worth ${3 * PRICES.tool}`);
+  assert.equal(sent('voice_wake').length, 0, `three tool calls are worth ${3 * DEFAULT_TUNING.toolPrice}`);
   agent(h, { hook_event_name: 'MessageDisplay', message_id: 'm1', index: 0, final: true, delta: 'Dark mode is in; the tests pass.' });
   agent(h, { hook_event_name: 'Stop', last_assistant_message: 'Dark mode is in; the tests pass.' });
   h.voiceSessions.checkStandby();
@@ -138,8 +139,9 @@ test('the activity window counts only what happened inside it', () => {
   assert.equal(activity.value(2000, now), 30);
   assert.equal(activity.value(10000, now), 31);
   assert.equal(activity.latest(2000, now)?.source, 'turn_end');
-  activity.add('text', 0, now); activity.add('event', PRICES.event, now);
+  activity.add('text', 0, now); activity.add('event', priceOf(DEFAULT_TUNING, 'event'), now);
   assert.equal(activity.entries.length, 2, 'free events are not kept');
+  assert.deepEqual(['tool', 'text', 'turn_end', 'attention'].map(kind => priceOf({ ...DEFAULT_TUNING, messagePrice: 25 }, kind as any)), [1, 25, 30, 100], 'prices are settings');
 });
 
 test('the timeline draws a Standby stretch from when it began to when it ended', () => {

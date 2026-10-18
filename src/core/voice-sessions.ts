@@ -11,7 +11,7 @@ import { startupHistory } from './startup-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
 import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, reconnectGreeting, resumeGreeting, standbyNews, standbyWake } from './prompts.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
-import { Activity, LIVE_SPEECH_RMS, REQUEST_PRICE, liveSpeechPrice, operatorSpeechPrice } from './activity.ts';
+import { Activity, LIVE_SPEECH_RMS } from './activity.ts';
 import { operatorSpeaking, type MicrophoneLevel } from './floor.ts';
 
 export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean; /** Set for an instruction Jev learned: its short ID, such as I3, and the agent session it was learned in. */ learned?: string; learnedIn?: string }
@@ -94,11 +94,11 @@ export class VoiceSessions {
   }
   /** Whether this page's microphone is the one voice listens to: the page running voice, or the one on Standby. */
   listensTo(page: Page) { return page === this.page || page === this.standby?.page; }
-  /** The listening page's microphone and speaker levels, priced: the operator's speech and GPT Live's. */
+  /** The listening page's microphone and speaker levels (about 0.1 s each), priced: the operator's sound and GPT Live's. */
   heard(level: MicrophoneLevel & { outputRms?: number }) {
-    const threshold = this.bridge.tuning.wakeThreshold;
-    if (operatorSpeaking(level)) this.activity.add('operator', operatorSpeechPrice(threshold));
-    if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS) this.activity.add('live', liveSpeechPrice(threshold));
+    const { speechPrice, liveSpeechPrice } = this.bridge.tuning;
+    if (operatorSpeaking(level)) this.activity.add('operator', speechPrice);
+    if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS) this.activity.add('live', liveSpeechPrice);
   }
   /**
    * Every second: voice that has been quiet for the Standby window goes on Standby, and voice on
@@ -416,7 +416,7 @@ export class VoiceSessions {
     }
     if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.bridge.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
     if (event.type === 'session.started') this.begun(run);
-    if (event.type === 'session.delegation.created') this.activity.add('request', REQUEST_PRICE);
+    if (event.type === 'session.delegation.created') this.activity.add('request', this.bridge.tuning.requestPrice);
     // ...and to the first words it says.
     if (event.type === 'session.output_transcript.delta' && !run.spoke) { run.spoke = true; this.bridge.log({ type: 'voice.first_words', plan: run.plan, automatic: run.automatic, firstWordsMs: Date.now() - run.requested.at }); }
     // Live reports usage about every 15 seconds; the last few minutes of it are enough for the meters.

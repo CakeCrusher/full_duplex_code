@@ -15,9 +15,19 @@ export interface Tuning {
   compactTokens: number;
   standbyAfterMs: number;
   wakeThreshold: number;
+  // What each input is worth in Standby's currency (activity.ts): speech per tenth of a second of sound, the rest per event.
+  speechPrice: number;
+  liveSpeechPrice: number;
+  toolPrice: number;
+  promptPrice: number;
+  messagePrice: number;
+  turnEndPrice: number;
+  failurePrice: number;
+  approvalPrice: number;
+  requestPrice: number;
 }
 
-/** A setting's range, what it does, and the levels Jev chooses among, each with what it costs and buys. */
+/** A setting's range, what it does, and the levels Jev chooses among, each with what it costs and buys (none: set only by hand). */
 export interface Knob { min: number; max: number; describe: string; levels: { value: number; consequence: string }[] }
 
 export const KNOBS: Record<keyof Tuning, Knob> = {
@@ -67,22 +77,33 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     "How long the conversation must stay quiet before voice goes on Standby (ms): GPT Live disconnects and its billing ($0.05 a minute) stops, while the page keeps listening on the operator's computer and fdc keeps watching the agent. The operator speaking, or agent news worth wakeThreshold, reconnects it in about 1-2 s; the operator's first words are buffered and replayed. Quiet means everything that happened in this window (the operator's and GPT Live's speech, agent events, requests) is worth less than wakeThreshold. Someone was speaking 46% of the time in real sessions, so Standby can save at most about a quarter. Each wake starts a new GPT Live session seeded with the conversation's text: the conversation carries over, but only the most recent agent work does. 0 never goes on Standby.",
     levels: [
     { value: 0, consequence: 'Never on Standby: GPT Live stays connected the whole time voice is on, as before; it never has to wake, and it keeps the most agent detail.' },
-    { value: 20000, consequence: 'Cheapest: saved 18% of the cost of real sessions, but woke about 14 times an hour: 11 times when the operator spoke into Standby (answered a few seconds later), 2 of them noise.' },
-    { value: 30000, consequence: 'The default: saved 14% of the cost of real sessions; woke about 9 times an hour, 7 of them when the operator spoke into Standby (1 of them noise), 1 for agent news.' },
-    { value: 60000, consequence: 'Calmer: saved 9%; woke under 4 times an hour.' },
-    { value: 120000, consequence: 'Only for long pauses, such as the operator stepping away: saved 5%; woke about once an hour.' },
+    { value: 20000, consequence: 'Cheapest: saved 15% of the cost of real sessions, but woke about 13 times an hour: 12 times for sound from the operator (answered a few seconds later), 4 of those noise, and 2 for agent news.' },
+    { value: 30000, consequence: 'The default: saved 12% of the cost of real sessions; woke about 8 times an hour, 7 for sound from the operator (3 of those noise), 1 for agent news.' },
+    { value: 60000, consequence: 'Calmer: saved 7%; woke 3 times an hour.' },
+    { value: 120000, consequence: 'Only for long pauses, such as the operator stepping away: saved 4%; woke under once an hour.' },
   ] },
   wakeThreshold: { min: 1, max: 1000, describe:
-    "How much activity keeps voice Live, and wakes it from Standby, counted in points over the standbyAfterMs window. Agent events are priced by kind: a tool call or typed prompt 1, an agent message 10, a finished or failed turn or a completed task 30, an approval request or a request GPT Live passes on 100. The operator's speech always reaches the threshold within about half a second of sound, and GPT Live's speech keeps voice Live while it talks. Lower: more agent activity keeps voice Live and wakes it; higher: only bigger news wakes it, and GPT Live stays silent about the rest until the operator speaks. In real sessions it barely changed the cost (14-16% saved at 30 s); it changes what wakes the companion.",
+    "How much activity keeps voice Live, and wakes it from Standby, counted in points over the standbyAfterMs window, in one currency with no input privileged. The prices are settings: by default each tenth of a second of the operator's sound or of GPT Live's audio 10, a tool call or prompt 1, an agent message 10, a finished or failed turn or a completed task 30, an approval request or a request GPT Live passes on 100. Lower: more activity keeps voice Live and wakes it; higher: it takes longer sound and bigger news, so voice is on Standby more and wakes less for noise, but GPT Live stays silent about more of the agent's work until the operator speaks.",
     levels: [
-    { value: 1, consequence: 'Any agent activity, every tool call included, wakes it and keeps it Live: GPT Live misses almost nothing it would have said (3 s an hour in real sessions).' },
-    { value: 10, consequence: 'The default: agent messages, finished or failed turns and approvals wake it; tool calls add up (ten within the window wake it). GPT Live missed about 10 s of speech an hour.' },
-    { value: 30, consequence: 'Only finished or failed turns and approvals wake it, not the agent talking mid-turn: GPT Live missed about 18 s of speech an hour.' },
-    { value: 100, consequence: 'Only approval requests (and the operator) wake it: GPT Live missed about 34 s an hour of reports, such as a finished turn, until the operator spoke.' },
+    { value: 1, consequence: 'Any activity, every tool call included, keeps voice Live and wakes it: saved 11% of real sessions at 30 s; GPT Live missed almost nothing it would have said (2 s an hour).' },
+    { value: 10, consequence: 'The default: any sound the noise gate passes, an agent message, a finished or failed turn or an approval wakes it; ten tool calls add up. Saved 12% at 30 s; about 3 wakes an hour were noise; GPT Live missed about 6 s of speech an hour.' },
+    { value: 30, consequence: 'It takes 0.3 s of sound, a finished or failed turn or an approval, not the agent talking mid-turn: saved 14% at 30 s; about 2 noise wakes an hour; GPT Live missed about 16 s of speech an hour.' },
+    { value: 100, consequence: 'It takes a second of sound or an approval request: saved 18% at 30 s, with about 1 noise wake an hour, but GPT Live missed about 44 s an hour of reports, such as a finished turn, until the operator spoke.' },
   ] },
+  // The currency's prices, set by hand for now (FDC_TUNING, or tried out in the Standby sandbox).
+  speechPrice: { min: 0, max: 1000, describe: "What each tenth of a second of the operator's microphone sound that passes the noise gate is worth in Standby's currency. At the default 10, the default threshold, any sound the gate passes keeps voice Live and wakes it from Standby, a click or a knock included; a lower price takes a longer stretch of sound.", levels: [] },
+  liveSpeechPrice: { min: 0, max: 1000, describe: "What each tenth of a second of GPT Live's audio is worth in Standby's currency. At the default 10, the default threshold, voice stays Live while GPT Live talks and for the Standby window after. GPT Live can't talk on Standby, so this never wakes it.", levels: [] },
+  toolPrice: { min: 0, max: 1000, describe: "What each of the agent's tool calls and results, failed ones included, is worth in Standby's currency. At the default 1, ten within the window keep voice Live or wake it.", levels: [] },
+  promptPrice: { min: 0, max: 1000, describe: "What each prompt the agent receives, typed or a request it was given, is worth in Standby's currency (default 1).", levels: [] },
+  messagePrice: { min: 0, max: 1000, describe: "What each message the agent displays, mid-turn ones included, is worth in Standby's currency (default 10: one wakes voice at the default threshold).", levels: [] },
+  turnEndPrice: { min: 0, max: 1000, describe: "What the agent finishing its turn, completing a task or ending its session is worth in Standby's currency (default 30).", levels: [] },
+  failurePrice: { min: 0, max: 1000, describe: "What the agent's turn failing is worth in Standby's currency (default 30).", levels: [] },
+  approvalPrice: { min: 0, max: 1000, describe: "What the agent needing the operator (an approval, a question, a denial) is worth in Standby's currency (default 100).", levels: [] },
+  requestPrice: { min: 0, max: 1000, describe: "What a request GPT Live passes on to the agent is worth in Standby's currency (default 100).", levels: [] },
 };
 
-export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 30000, wakeThreshold: 10 };
+export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 30000, wakeThreshold: 10,
+  speechPrice: 10, liveSpeechPrice: 10, toolPrice: 1, promptPrice: 1, messagePrice: 10, turnEndPrice: 30, failurePrice: 30, approvalPrice: 100, requestPrice: 100 };
 
 /** Settings from partial overrides: unknown names and values out of range are refused. */
 export function tuning(overrides: unknown = {}, base: Tuning = DEFAULT_TUNING): Tuning {

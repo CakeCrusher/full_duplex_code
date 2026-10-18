@@ -1,24 +1,24 @@
 // The activity currency behind Standby. Everything that happens in the voice conversation has a
-// price: the operator's speech, GPT Live's speech, the agent's events by kind, and requests GPT Live
-// passes on. While what happened in the last standbyAfterMs is worth less than wakeThreshold, voice
-// goes on Standby (GPT Live disconnects and its billing stops); once it is worth the threshold again,
-// voice wakes. The window and the threshold are settings (tuning.ts), set by hand or by Jev.
+// price, all in one currency with no input privileged: each tenth of a second of the operator's sound
+// or of GPT Live's audio, each of the agent's events by kind, each request GPT Live passes on. Voice
+// keeps drifting toward Standby: while what happened in the last standbyAfterMs is worth less than
+// wakeThreshold, GPT Live disconnects and its billing stops; once it is worth the threshold again, voice
+// wakes. The prices, the window and the threshold are settings (tuning.ts).
 import type { ObservationKind } from './adapter.ts';
+import type { Tuning } from './tuning.ts';
 
-/** The agent's events by kind: one table for every agent, since all of them share their kinds. */
-export const PRICES: Record<ObservationKind, number> = {
-  tool: 1, prompt: 1, tool_failure: 1, event: 0,
-  text: 10,
-  turn_end: 30, turn_failed: 30, task_completed: 30, session_end: 30,
-  attention: 100,
-};
-/** A request GPT Live passes on: always worth a wake. */
-export const REQUEST_PRICE = 100;
-// Speech, per microphone level report from the page (about 0.1 s each). GPT Live's is worth the
-// threshold, so it stays Live while it talks; the operator's a fifth of it, so about half a second of
-// sound reaches the threshold and a click or a knock doesn't.
-export const operatorSpeechPrice = (threshold: number) => threshold / 5;
-export const liveSpeechPrice = (threshold: number) => threshold;
+/** What one of the agent's events is worth, by kind: one table for every agent, since all of them share their kinds. */
+export function priceOf(tuning: Tuning, kind: ObservationKind) {
+  switch (kind) {
+    case 'tool': case 'tool_failure': return tuning.toolPrice;
+    case 'prompt': return tuning.promptPrice;
+    case 'text': return tuning.messagePrice;
+    case 'turn_end': case 'task_completed': case 'session_end': return tuning.turnEndPrice;
+    case 'turn_failed': return tuning.failurePrice;
+    case 'attention': return tuning.approvalPrice;
+    default: return 0;
+  }
+}
 /** GPT Live audio playing on the page, as the timeline draws it. */
 export const LIVE_SPEECH_RMS = .003;
 // Entries are kept as long as the longest window a setting allows.

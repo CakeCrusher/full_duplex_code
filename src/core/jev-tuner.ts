@@ -20,8 +20,8 @@ export class JevTuner {
   }
   /** The settings that fit the operator's instructions; a setting Jev gives no valid level for keeps its value. */
   async choose({ instructions, earlier, current, pinned = [], latest }: { instructions: string[]; earlier: string[]; current: Tuning; pinned?: (keyof Tuning)[]; /** What the operator just said. */ latest?: string }): Promise<{ tuning: Tuning; changes: TuningChange[] }> {
-    // Settings the operator set by hand are theirs.
-    const knobs = Object.entries(KNOBS).filter(([name]) => !pinned.includes(name as keyof Tuning)) as [keyof Tuning, typeof KNOBS[keyof Tuning]][];
+    // Settings the operator set by hand are theirs; those without measured levels are set only by hand.
+    const knobs = Object.entries(KNOBS).filter(([name, knob]) => !pinned.includes(name as keyof Tuning) && knob.levels.length) as [keyof Tuning, typeof KNOBS[keyof Tuning]][];
     // After a request, the current levels stand unless the operator's words change them: a setting
     // their earlier words changed must not go back on the next unrelated request.
     const ask = latest ? 'Keep the current level unless their instructions, or their latest words, ask for something this setting changes.' : 'Choose the default unless they ask for something this setting changes.';
