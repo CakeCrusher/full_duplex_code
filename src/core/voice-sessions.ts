@@ -302,6 +302,8 @@ export class VoiceSessions {
     if (!bridge.agentReady) throw new Error(`Wait for the voice ${agent.profile.transport} to connect in the ${name} terminal.`);
     if (observer.state === 'exited') throw new Error(`The ${name} session has exited.`);
     const record = this.current();
+    // The operator starting voice: Jev looks at the settings again (a wake or reconnect is not the operator starting it).
+    if (!wake && !automatic) bridge.tuneFromInstructions();
     // A wake must be quick: a new session seeded with the conversation, never a slow fork.
     let plan = wake ? record.turns.length ? 'seed' : 'fresh' : planFor(record, mode);
     // Starting fresh after a drop: the speech it had not passed on goes to the agent now.
@@ -363,7 +365,8 @@ export class VoiceSessions {
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean,
-      learner: bridge.learner, audit: bridge.handOffAudit, screen: bridge.handOffAudit ? (said, id) => bridge.sessionSwitch.screen(said, id) : undefined, tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
+      learner: bridge.learner, audit: bridge.handOffAudit, screen: bridge.handOffAudit ? (said, id) => bridge.sessionSwitch.screen(said, id) : undefined, onSaid: said => bridge.tuneFromInstructions(said),
+      tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake };
     // A dropped or moved session's unsent speech: this session takes it if it starts; meanwhile it isn't handed off.
     if (this.carried) { clearTimeout(this.carried.timer); mediator.history.carry(this.carried.mediator.history); }

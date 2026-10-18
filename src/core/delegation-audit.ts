@@ -29,15 +29,28 @@ export type HandOff = 'passed' | 'answered';
 export interface Session { id: string; folder: string; agent: string; on: boolean; current: boolean; /** Why its voice can't start without the operator. */ blocked?: string | null }
 /** Jev's reading of a request for session orchestration. */
 export interface SessionsJudgment { asked: number; only: number; unlisted: number; turnOn: string[]; turnOff: string[] }
-export interface Judgment { needsAgent: number | null; sessions?: SessionsJudgment }
+export interface Judgment { needsAgent: number | null; sessions?: SessionsJudgment; /** Only about how the voice companion behaves, nothing for the agent. */ companionOnly?: number }
 
 // Probabilities above which Jev's reading is acted on. A request is kept from the harness only when
 // it surely asks for nothing but session changes: a work request kept from it is the costly error.
 // On 8 sample requests (Oct 13): a plain "switch to video editing" scored only .73, the ones that also asked for work .02.
 export const ASKED = .7, ONLY = .7, UNLISTED = .7;
+// A request only about how the companion behaves: on 226 real requests from the audit (Oct 18), 4 scored
+// .7 or more, two of them questions for the harness about the companion's own code (lost work); none .85.
+// Six plain preferences ("stop waking up for every little thing", "don't pause so quickly") scored .85-.93.
+export const COMPANION_ONLY = .85;
 
 const SESSIONS_SETTING = ' The operator may run several companions at once, each beside its own coding session in its own folder (`sessions`); each one\'s voice can be on or off, and several can be on together. fdc, the voice tool itself, turns them on or off; the coding agent does not. Every listed session is already running, so starting, opening or turning on a listed session (named by its folder or project) means turning its voice on, and stopping or closing one means turning its voice off.';
 const sessionQuestions = (sessions: Session[]) => ({
+  // Preferences and frustration about the companion itself: fdc adjusts its own settings from them (Jev's tuning).
+  companion_only: {
+    type: 'noul',
+    instructions: 'Is `utterance` only about how the voice companion itself should behave in this conversation (how much or when it talks, how fast it goes quiet or pauses, what wakes it, what it reports), with nothing for the coding agent to do, change or answer?',
+    criteria: {
+      true: 'Only a preference, complaint or frustration about the voice companion\'s own behavior right now, such as "stop waking up for every little thing", "don\'t pause so quickly" or "talk less", with at most filler or thanks.',
+      false: 'Anything for the coding agent: work, a question, a correction, an instruction for its work, a change to code, including building, changing or discussing the voice tool\'s code or design; or anything else. When in doubt, false.',
+    },
+  },
   sessions_asked: {
     type: 'noul',
     instructions: 'Does the operator, in `utterance`, ask to turn the voice of one or more companion sessions on or off: start one, stop one, switch to another, switch away from this one, or talk to several at once?',
@@ -91,6 +104,7 @@ export class DelegationAudit {
     if (sessions) {
       const chosen = (choice: string) => sessions.filter((_, index) => answers?.[`session_${index + 1}`]?.choice === choice).map(s => s.id);
       judgment.sessions = { asked: p('sessions_asked'), only: p('only_sessions'), unlisted: p('unlisted_session'), turnOn: chosen('turn_on'), turnOff: chosen('turn_off') };
+      judgment.companionOnly = p('companion_only');
     }
     return judgment;
   }

@@ -22,6 +22,7 @@ Backend tools:
 Delegate to the backend when:
 - The operator asks for coding work, a task change, a message to ${name}, or an investigation needing new information.
 - The operator asks to turn the voice of their other sessions on or off, or to switch sessions: the voice tool carries that out, not ${name}, and tells you the outcome. Never say it is done before that.
+- The operator voices a preference or frustration about how you or the voice tool behave (how much you talk, how quickly the voice pauses, what wakes it): the voice tool adjusts its own settings from it and tells you; ${name} does not receive it.
 Do not delegate to the backend when:
 - You can answer from observed work or the conversation.
 - The operator is directing your conversation, or you need clarification.
@@ -82,6 +83,9 @@ export const voiceEcho = ({ profile: { name } }: Agent, id: string) =>
 export const sessionsHandled = ({ profile: { product } }: Agent, plan: string) =>
   `Nothing was sent to ${product}: the operator only asked to turn voice sessions on or off, which the voice tool does itself. ${plan} Tell the operator in a few words; the outcome follows when known.`;
 export const sessionsOutcome = (outcome: string) => `Voice sessions: ${outcome}`;
+// A preference about the companion's own behavior: the voice tool's settings, not the agent's work.
+export const companionHandled = ({ profile: { product } }: Agent) =>
+  `Nothing was sent to ${product}: the operator only asked how you, the voice companion, should behave. The voice tool adjusts its settings from it and keeps it if it is a standing preference. Acknowledge it in a few words and follow it.`;
 
 // Facts the mediator adds when a delegation cannot be sent.
 export const nothingToSend = ({ profile: { name } }: Agent) =>

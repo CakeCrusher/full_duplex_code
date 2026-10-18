@@ -44,3 +44,14 @@ test('earlier instructions meant for their own session only are marked so for Je
   log.add({ session: 'a', id: 'I2', text: 'Never read paths.', scope: 'always' });
   assert.deepEqual(log.earlier('b'), ['(for that session only) Be brief.', 'Never read paths.']);
 });
+
+test("after a request, Jev reads the operator's latest words and keeps the current levels unless they ask for a change", async () => {
+  let sent: any;
+  const fetch = async (_url: string, init: RequestInit) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers: { wakeThreshold: { choice: 'level_100' } } }) }; };
+  const tuner = new JevTuner({ apiKey: 'k', log: () => {}, fetch });
+  const { changes } = await tuner.choose({ instructions: [], earlier: [], current: DEFAULT_TUNING, latest: 'Stop waking up for every little thing.' });
+  assert.deepEqual(changes, [{ name: 'wakeThreshold', from: 10, to: 100 }]);
+  assert.equal(sent.state.operator_latest_words, 'Stop waking up for every little thing.');
+  assert.match(sent.questions.standbyAfterMs.instructions, /Keep the current level unless/);
+  assert.deepEqual(Object.keys(sent.questions.standbyAfterMs.criteria), ['level_0', 'level_20000', 'level_30000', 'level_60000', 'level_120000']);
+});

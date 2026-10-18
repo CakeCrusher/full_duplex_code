@@ -141,3 +141,22 @@ test('a tab that has not been clicked, or allowed the microphone, is reported at
   assert.equal(b.h.status().voiceBlocked, null);
   assert.equal(b.lives.length, 0);
 });
+
+test("a request only about how the companion behaves is handled by fdc: the harness never gets it, Jev learns and tunes from it", async t => {
+  const { a } = await pair(t);
+  a.h.handOffAudit = { judge: async () => ({ needsAgent: .2, companionOnly: .9, sessions: { asked: .05, only: .1, unlisted: 0, turnOn: [], turnOff: [] } }) } as any;
+  const screened = await a.h.sessionSwitch.screen("Stop waking up for every little thing.", 'r1');
+  assert.equal(screened.companion, true);
+  assert.match(screened.handled!, /Nothing was sent to Claude Code: the operator only asked how you, the voice companion, should behave/);
+  // The mediator's side: it is considered as an instruction and handed to Jev's tuning, not delivered.
+  const said: string[] = [], considered: string[] = [];
+  const m = mediator(t, async () => screened);
+  m.m.onSaid = words => said.push(words);
+  m.m.learner = { consider: async (u: any) => { considered.push(u.utterance); } } as any;
+  await m.m.screened('r2', m.m.history.request(Infinity)!, 'content', 'd2');
+  assert.equal(m.deliveries.length, 0);
+  assert.deepEqual([said, considered], [['Switch to beta.'], ['Switch to beta.']]);
+  a.h.handOffAudit = { judge: async () => ({ needsAgent: .9, companionOnly: .3, sessions: { asked: .05, only: .1, unlisted: 0, turnOn: [], turnOff: [] } }) } as any;
+  assert.deepEqual(await a.h.sessionSwitch.screen("Make the companion pause less in the code.", 'r3'), { needsAgent: .9 }, 'in doubt, it reaches the harness');
+});
+

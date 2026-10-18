@@ -45,8 +45,8 @@ export interface HarnessOptions {
 export class Harness {
   agent: AgentDefinition; adapter: AgentAdapter; observer: AgentObserver;
   learner?: InstructionLearner; handOffAudit?: DelegationAudit; tuner?: JevTuner; learned: LearnedLog;
-  /** Settings the operator set by hand (FDC_TUNING), which Jev leaves alone; and Jev's pending and latest asks. */
-  pinned: (keyof Tuning)[] = []; tuneTimer?: NodeJS.Timeout; tuneAsks = 0;
+  /** Settings the operator set by hand (FDC_TUNING), which Jev leaves alone; Jev's pending and latest asks, and the operator's words awaiting one. */
+  pinned: (keyof Tuning)[] = []; tuneTimer?: NodeJS.Timeout; tuneAsks = 0; tuneLatest?: string;
   root: string; runDir: string; cwd: string; sessionId?: string; apiKey: string;
   voice: string; observation: string; port: number; portFallback: boolean;
   /** How agent updates reach GPT Live; a running voice session takes a change at once. */
@@ -166,15 +166,19 @@ export class Harness {
     this.tuning = next; this.mediator?.applyTuning(next);
     this.log({ type: 'tuning.changed', tuning: next, changes }); this.publish({ type: 'tuning', tuning: next, changes }); this.publish(this.status());
   }
-  /** With Jev's tuning on: Jev re-reads the operator's instructions, and those from earlier sessions, and picks the settings that fit. */
-  tuneFromInstructions() {
+  /**
+   * With Jev's tuning on: Jev re-reads the operator's instructions, those from earlier sessions and,
+   * after a request, what the operator just said, and picks the settings that fit.
+   */
+  tuneFromInstructions(latest?: string) {
     if (!this.tuner) return;
+    if (latest) this.tuneLatest = latest;
     clearTimeout(this.tuneTimer);
     this.tuneTimer = setTimeout(async () => {
       // Only the newest ask may change the settings: an older answer arriving late would undo it.
-      const ask = ++this.tuneAsks;
+      const ask = ++this.tuneAsks, words = this.tuneLatest; this.tuneLatest = undefined;
       try {
-        const { tuning: next, changes } = await this.tuner!.choose({ instructions: this.voiceSessions.additionalInstructions.map(item => item.text), earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned });
+        const { tuning: next, changes } = await this.tuner!.choose({ instructions: this.voiceSessions.additionalInstructions.map(item => item.text), earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned, latest: words });
         if (changes.length && ask === this.tuneAsks && !this.stopping) this.setTuning(next, changes);
       } catch (error) { this.log({ type: 'tuning.error', message: (error as Error).message }); }
     }, 1000);

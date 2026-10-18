@@ -8,9 +8,9 @@
 import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import { listCompanions, type CompanionEntry } from './companions.ts';
-import { ASKED, ONLY, UNLISTED, type Session } from './delegation-audit.ts';
+import { ASKED, COMPANION_ONLY, ONLY, UNLISTED, type Session } from './delegation-audit.ts';
 import type { Screened } from './mediator.ts';
-import { sessionsHandled, sessionsOutcome } from './prompts.ts';
+import { companionHandled, sessionsHandled, sessionsOutcome } from './prompts.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
 
@@ -44,8 +44,9 @@ export class SessionSwitch {
     // Only companions this one can reach and turn on or off.
     const sessions: Session[] = companions.filter(c => c.current || (c.reachable && c.link)).map(c => ({ id: c.id, folder: c.folder, agent: c.agent, on: c.voice !== 'none', current: c.current, blocked: c.blocked }));
     const judgment = await bridge.handOffAudit!.judge(said, sessions, 3000), { needsAgent } = judgment, asked = judgment.sessions!;
-    bridge.log({ type: 'sessions.judged', requestId, needsAgent, ...asked });
-    if (asked.asked < ASKED) return { needsAgent };
+    bridge.log({ type: 'sessions.judged', requestId, needsAgent, ...asked, companionOnly: judgment.companionOnly });
+    // Only about how the companion behaves: Jev's tuning and instruction learning take it from here, not the harness.
+    if (asked.asked < ASKED) return (judgment.companionOnly ?? 0) >= COMPANION_ONLY ? { needsAgent, handled: companionHandled(bridge.agent), companion: true } : { needsAgent };
     // A session named that isn't running: Jev still picks the nearest listed one to turn on ("switch to runta" chose
     // video-editing), so nothing is turned on or off; GPT Live is told which ones are running.
     const unlisted = asked.unlisted >= UNLISTED;

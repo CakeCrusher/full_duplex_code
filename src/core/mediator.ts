@@ -12,7 +12,7 @@ import type { DelegationAudit, HandOff } from './delegation-audit.ts';
 import { nothingToSend, queueFailed, sessionEndRequest, voiceRequest } from './prompts.ts';
 
 /** What Jev's check before delivery found: its judgment, and when fdc handled the request itself, what GPT Live is told instead. */
-export interface Screened { needsAgent?: number | null; handled?: string }
+export interface Screened { needsAgent?: number | null; handled?: string; /** Handled because it was only about how the companion behaves. */ companion?: boolean }
 
 /** The part of a Live session the mediator uses. */
 export interface MediatedLive extends ContextSink, Pick<EventEmitter, 'on' | 'off'> {
@@ -39,15 +39,17 @@ export class Mediator {
   audit?: DelegationAudit;
   /** Checks a request GPT Live passed on before it reaches the harness (session changes), when Jev is configured. */
   screen?: (said: string, requestId: string) => Promise<Screened>;
+  /** The operator's words of each request, for Jev to tune the companion from (jev-tuner.ts). */
+  onSaid?: (said: string) => void;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
-  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, audit, screen, firstRecordId = 0 }: {
+  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, audit, screen, onSaid, firstRecordId = 0 }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
-    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; audit?: DelegationAudit; screen?: (said: string, requestId: string) => Promise<Screened>;
+    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; audit?: DelegationAudit; screen?: (said: string, requestId: string) => Promise<Screened>; onSaid?: (said: string) => void;
     /** Context records are numbered after this one: a fork's context already holds its source's. */
     firstRecordId?: number;
   }) {
-    this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.learner = learner; this.audit = audit; this.screen = screen;
+    this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.learner = learner; this.audit = audit; this.screen = screen; this.onSaid = onSaid;
     this.agent = agent;
     this.floor = new Floor({ thinkMs: tuning.thinkMs, pauseMs: tuning.pauseMs });
     if (hold === undefined) hold = holdOf(tuning);
@@ -100,16 +102,21 @@ export class Mediator {
   check(requestId: string, request: SpokenRequest, handOff: HandOff, delegationId: string | null = null, judged?: number | null) {
     const said = this.said(request);
     if (!said) return;
+    this.consider(requestId, request, said);
+    if (this.audit) void this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId }, judged).then(needsAgent => this.publish({
+      type: 'jev_check', requestId, at: Date.now(), kind: 'handoff', words: said, scores: { needsAgent, handOff },
+      outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${handOff === 'passed' ? 'GPT Live passed it on' : 'GPT Live kept it; sent when voice ended'}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})`,
+    }));
+  }
+  // Whether the words hold a standing instruction for the companion (Jev's learner), and Jev's tuning from them.
+  consider(requestId: string, request: SpokenRequest, said: string) {
     const companion = this.clean(request.utterances.filter(u => u.role === 'intermediary').map(u => u.text).join(' ').trim().slice(-400));
     if (this.learner) {
       const utterance = { utterance: said, previous: this.previousUtterance, companion, requestId };
       this.learner.consider(utterance).catch(error => this.log({ type: 'instruction.error', message: (error as Error).message }));
     }
     this.previousUtterance = said;
-    if (this.audit) void this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId }, judged).then(needsAgent => this.publish({
-      type: 'jev_check', requestId, at: Date.now(), kind: 'handoff', words: said, scores: { needsAgent, handOff },
-      outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${handOff === 'passed' ? 'GPT Live passed it on' : 'GPT Live kept it; sent when voice ended'}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})`,
-    }));
+    this.onSaid?.(said);
   }
   /** The microphone level of the page this voice session listens to. */
   hear(level: MicrophoneLevel) { if (operatorSpeaking(level)) this.floor.hear(); }
@@ -135,8 +142,9 @@ export class Mediator {
     let screened: Screened | undefined;
     try { screened = await this.screen!(said, id); } catch (error) { this.log({ type: 'screen.error', message: (error as Error).message }); }
     if (screened?.handled === undefined) return this.send(id, request, content, delegationId, screened?.needsAgent);
-    this.log({ type: 'bridge.request_handled', id, delegationId, said });
-    this.previousUtterance = said;
+    this.log({ type: 'bridge.request_handled', id, delegationId, said, companion: screened.companion });
+    // A preference about the companion is still a standing instruction to learn, and Jev's to tune from.
+    if (screened.companion) this.consider(id, request, said); else this.previousUtterance = said;
     if (this.live.state === 'active') this.context.add('thinking', screened.handled, delegationId);
   }
   send(id: string, request: SpokenRequest, content: string, delegationId: string, judged?: number | null) {
