@@ -119,12 +119,16 @@ export class SessionSwitch {
     const bridge = this.bridge, live = bridge.live, origin = bridge.clean(String(from ?? 'another session')).slice(0, 80);
     const on = Boolean(live) && ['new', 'connecting', 'active'].includes(live!.state);
     bridge.log({ type: 'sessions.remote', action, from: origin });
+    const standby = bridge.voiceSessions.standby;
     if (action === 'off') {
       if (on) void live!.close(`Turned off from ${origin}`);
-      return { ok: true, state: on ? 'turning off' : 'already off' };
+      else if (standby) bridge.voiceSessions.endStandby(`Turned off from ${origin}`);
+      return { ok: true, state: on || standby ? 'turning off' : 'already off' };
     }
     if (action !== 'on') return { ok: false, reason: 'unknown action' };
     if (on) return { ok: true, state: 'already on' };
+    // On Standby, its page is listening already: it wakes.
+    if (standby) { this.asked = { at: Date.now(), from: origin }; bridge.voiceSessions.wake(`turned on from ${origin}`, false); return { ok: true, state: 'waking' }; }
     if (!bridge.agentReady) return { ok: false, reason: `its ${bridge.agent.profile.name} is not connected` };
     // A page on this computer that can start voice without the operator; the newest one.
     const blocked = startBlocked(bridge);

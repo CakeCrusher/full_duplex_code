@@ -32,7 +32,10 @@ export class JevTuner {
     const { answers } = await response.json();
     const tuning = { ...current }, changes: TuningChange[] = [];
     for (const [name, knob] of knobs) {
-      const value = Number(String(answers?.[name]?.choice ?? '').replace(/^level_/, ''));
+      // No answer is no change (an empty choice would read as level 0).
+      const choice = answers?.[name]?.choice;
+      if (typeof choice !== 'string' || !/^level_\d+$/.test(choice)) continue;
+      const value = Number(choice.slice('level_'.length));
       if (!knob.levels.some(level => level.value === value) || value === current[name]) continue;
       changes.push({ name, from: current[name], to: value }); tuning[name] = value;
     }

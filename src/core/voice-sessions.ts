@@ -9,8 +9,10 @@ import { Mediator } from './mediator.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { startupHistory } from './startup-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
-import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, reconnectGreeting, resumeGreeting } from './prompts.ts';
+import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, reconnectGreeting, resumeGreeting, standbyWake } from './prompts.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
+import { Activity, LIVE_SPEECH_RMS, REQUEST_PRICE, liveSpeechPrice, operatorSpeechPrice } from './activity.ts';
+import { operatorSpeaking, type MicrophoneLevel } from './floor.ts';
 
 export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean; /** Set for an instruction Jev learned: its short ID, such as I3, and the agent session it was learned in. */ learned?: string; learnedIn?: string }
 /** The latest voice session's span and GPT Live's usage reports, for the page's meters. */
@@ -22,6 +24,10 @@ export const MEDIA_STALLED = "GPT Live's audio stream stopped";
 const RECONNECTS = 2, RECONNECT_WINDOW_MS = 5 * 60 * 1000, CARRY_MS = 30000;
 // After GPT Live starts, its media gets this long to deliver the first audio; after that, audio may pause 5 s.
 const FIRST_AUDIO_MS = 15000, AUDIO_GAP_MS = 5000;
+/** Why a voice session ends when the conversation goes quiet: voice stays on, on Standby. */
+export const STANDBY = 'Standby: the conversation was quiet';
+// A page asked to wake voice is asked again, then Standby ends: voice can't be left neither on nor off.
+const WAKE_AGAIN_MS = 10000, WAKE_GIVE_UP_MS = 30000;
 const emptyRecord = (): ResumeRecord => ({ stored: false, finalized: false, turns: [] });
 const saved = ({ id, text, learned, learnedIn }: Instruction | SavedInstruction): SavedInstruction => ({ id, text, ...learned ? { learned, learnedIn } : {} });
 
@@ -33,7 +39,15 @@ interface Run {
   startup: Instruction[]; inherited: SavedInstruction[]; inForce: Map<string, SavedInstruction>;
   /** When voice was asked to start and how, for its startup times; and whether it has spoken yet. */
   requested: { at: number; plan: ResumePlan }; spoke?: boolean;
+  /** Set when it woke from Standby: when Standby began, and whether the operator was speaking. */
+  wake?: Wake;
 }
+interface Wake { since: number; operator: boolean; reason: string }
+/**
+ * Voice on Standby: GPT Live is disconnected while the conversation is quiet, and the page that ran
+ * voice keeps its microphone open on the operator's computer, so speech or agent news can wake it.
+ */
+interface Standby { since: number; page: Page; waking?: Wake & { at: number; asked: number } }
 
 // Voice connections one after another beside the same agent session: startup
 // instructions and history, added instructions, the spoken confirmation of
@@ -70,10 +84,79 @@ export class VoiceSessions {
   record = emptyRecord(); recordFor?: string;
   /** Automatic reconnects in the last window, and the last voice session that ended without being asked to. */
   reconnects: number[] = []; lastDrop?: { reason: string; at: number; reconnecting: boolean };
-  /** Speech a dropped or moved session had not passed on, kept for the session that replaces it. */
-  carried?: { mediator: Mediator; reason: string; timer: NodeJS.Timeout };
+  /** Speech a dropped, moved or paused session had not passed on, kept for the session that replaces it. */
+  carried?: { mediator: Mediator; reason: string; timer?: NodeJS.Timeout };
+  /** Voice on Standby, and what is happening in the conversation, priced (activity.ts). */
+  standby?: Standby; activity = new Activity(); standbyTimer: NodeJS.Timeout;
   constructor(bridge: Harness, { store = true, resumeDir = path.join(bridge.root, '.runs', 'voice-resume') }: { store?: boolean; resumeDir?: string } = {}) {
     this.bridge = bridge; this.store = store; this.resumeStore = new ResumeStore(resumeDir);
+    this.standbyTimer = setInterval(() => this.checkStandby(), 1000); this.standbyTimer.unref();
+  }
+  /** Whether this page's microphone is the one voice listens to: the page running voice, or the one on Standby. */
+  listensTo(page: Page) { return page === this.page || page === this.standby?.page; }
+  /** The listening page's microphone and speaker levels, priced: the operator's speech and GPT Live's. */
+  heard(level: MicrophoneLevel & { outputRms?: number }) {
+    const threshold = this.bridge.tuning.wakeThreshold;
+    if (operatorSpeaking(level)) this.activity.add('operator', operatorSpeechPrice(threshold));
+    if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS) this.activity.add('live', liveSpeechPrice(threshold));
+  }
+  /**
+   * Every second: voice that has been quiet for the Standby window goes on Standby, and voice on
+   * Standby wakes once what happened in the window is worth the threshold (tuning.ts, activity.ts).
+   */
+  checkStandby(now = Date.now()) {
+    const bridge = this.bridge, { standbyAfterMs, wakeThreshold } = bridge.tuning, standby = this.standby;
+    if (standby) {
+      const waking = standby.waking;
+      if (waking) {
+        if (now - waking.at > WAKE_GIVE_UP_MS) this.endStandby('the page did not reconnect voice');
+        else if (now - waking.asked > WAKE_AGAIN_MS) this.askWake(standby);
+        return;
+      }
+      // The paused session has to finish closing first.
+      if (this.live && this.live.state !== 'closed') return;
+      // Standby turned off meanwhile: voice wakes, as the setting now says.
+      if (!standbyAfterMs) return this.wake('Standby was turned off', false);
+      if (this.activity.value(standbyAfterMs, now) >= wakeThreshold) {
+        const source = this.activity.latest(standbyAfterMs, now)?.source ?? 'activity';
+        this.wake(source, source === 'operator');
+      }
+      return;
+    }
+    const live = this.live, run = this.run, page = this.page;
+    if (!standbyAfterMs || bridge.stopping || this.moving || !live || live.state !== 'active' || run?.live !== live || !page || page.ws.readyState !== WebSocket.OPEN) return;
+    // A voice session gets the whole window before it can go quiet.
+    if (now - (live.startedAt ?? now) < standbyAfterMs || this.activity.value(standbyAfterMs, now) >= wakeThreshold) return;
+    // A request on its way to the agent keeps voice Live until the agent has it.
+    if ([...bridge.outbox.values()].some(entry => entry.state === 'queued' || entry.state === 'dispatching')) return;
+    this.standby = { since: Date.now(), page };
+    bridge.log({ type: 'voice.standby', liveRun: live.reservation, afterMs: standbyAfterMs, threshold: wakeThreshold, value: this.activity.value(standbyAfterMs, now) });
+    bridge.publish({ type: 'standby', state: 'on' });
+    void live.close(STANDBY);
+  }
+  /** Asks the page on Standby to reconnect voice. */
+  wake(reason: string, operator: boolean) {
+    const standby = this.standby;
+    if (!standby || standby.waking) return;
+    standby.waking = { since: standby.since, operator, reason, at: Date.now(), asked: 0 };
+    this.bridge.log({ type: 'voice.waking', reason, standbyMs: Date.now() - standby.since });
+    this.askWake(standby);
+    this.bridge.publish(this.bridge.status());
+  }
+  askWake(standby: Standby) { standby.waking!.asked = Date.now(); this.bridge.publish({ type: 'voice_wake', reason: standby.waking!.reason }, standby.page); }
+  /** Voice goes off from Standby: the speech it had not passed on goes to the agent, as when voice ends. */
+  endStandby(reason: string, { moved = false } = {}) {
+    const standby = this.standby;
+    if (!standby) return;
+    this.standby = undefined;
+    const { log, publish } = this.bridge;
+    log({ type: 'voice.standby_ended', reason, standbyMs: Date.now() - standby.since });
+    // The speech goes to the agent with why voice ended, not why it paused.
+    if (this.carried) this.carried.reason = reason;
+    if (!moved) this.handOffCarried();
+    publish({ type: 'standby', state: 'off', reason });
+    publish({ type: 'voice_closed', reason, standbyEnded: true, moved: moved || undefined, reserved: false, finalized: true, usageSeconds: 0 }, standby.page);
+    publish(this.bridge.status());
   }
   instructions() {
     const additional = this.additionalInstructions.map(item => item.text).join('\n\n');
@@ -195,6 +278,15 @@ export class VoiceSessions {
   async start(sdp?: unknown, page?: Page, mode: 'resume' | 'fresh' = 'fresh', automatic = false) {
     const bridge = this.bridge, { agent, observer, log, publish } = bridge, { name } = agent.profile;
     if (sdp !== undefined && (typeof sdp !== 'string' || !sdp.trim() || Buffer.byteLength(sdp) > 65536)) throw new Error('Invalid voice connection offer.');
+    // On Standby, the page that listens wakes voice (asked, or clicked); another page takes voice over.
+    let wake: Wake | undefined;
+    const standby = this.standby;
+    if (standby && page === standby.page) {
+      standby.waking ??= { since: standby.since, operator: true, reason: 'the operator asked', at: Date.now(), asked: Date.now() };
+      wake = standby.waking;
+    } else if (standby) { this.endStandby('voice moved to another tab or device', { moved: true }); mode = 'resume'; }
+    // A wake clicked while the paused session is still closing waits for it.
+    if (wake && this.live?.state === 'closing') await this.live.closed;
     const running = this.live && this.live.state !== 'closed' ? this.live : undefined;
     if (running) {
       // Start on another page moves voice there. A repeated start, or one while
@@ -210,12 +302,13 @@ export class VoiceSessions {
     if (!bridge.agentReady) throw new Error(`Wait for the voice ${agent.profile.transport} to connect in the ${name} terminal.`);
     if (observer.state === 'exited') throw new Error(`The ${name} session has exited.`);
     const record = this.current();
-    let plan = planFor(record, mode);
+    // A wake must be quick: a new session seeded with the conversation, never a slow fork.
+    let plan = wake ? record.turns.length ? 'seed' : 'fresh' : planFor(record, mode);
     // Starting fresh after a drop: the speech it had not passed on goes to the agent now.
-    if (plan === 'fresh') this.handOffCarried();
+    if (plan === 'fresh' && !wake) this.handOffCarried();
     const requested = { at: Date.now(), plan };
     for (;;) {
-      const attempt: { live?: LiveSession; requested: Run['requested'] } = { requested };
+      const attempt: { live?: LiveSession; requested: Run['requested']; wake?: Wake } = { requested, wake };
       try { return await this.connect(sdp as string | undefined, page, plan, automatic, attempt); }
       catch (error) {
         const live = attempt.live, message = (error as Error).message;
@@ -240,7 +333,8 @@ export class VoiceSessions {
             return;
           }
         }
-        // The page learns that voice did not start; speech a dropped session left goes to the agent.
+        // The page learns that voice did not start; speech a dropped or paused session left goes to the agent.
+        if (wake && this.standby) { this.standby = undefined; log({ type: 'voice.standby_ended', reason: `waking failed: ${message}` }); publish({ type: 'standby', state: 'off', reason: message }); }
         this.handOffCarried();
         publish({ type: 'voice_closed', ...(this.failed ?? { reserved: false, finalized: false, usageSeconds: 0, reason: message }) }, page);
         publish(bridge.status());
@@ -248,13 +342,15 @@ export class VoiceSessions {
       }
     }
   }
-  async connect(sdp: string | undefined, page: Page | undefined, plan: ResumePlan, automatic: boolean, attempt: { live?: LiveSession; requested?: Run['requested'] } = {}) {
+  async connect(sdp: string | undefined, page: Page | undefined, plan: ResumePlan, automatic: boolean, attempt: { live?: LiveSession; requested?: Run['requested']; wake?: Wake } = {}) {
     const bridge = this.bridge, { agent, observer, log, publish, fault, clean } = bridge, { name } = agent.profile;
     const record = this.current(), recordId = this.recordFor, sourceId = plan === 'fork' ? record.liveSessionId : undefined;
     const startup = attachment(agent, bridge.cwd, observer.state);
     // A fork already has its source's startup input and conversation; it catches up on the work GPT Live had not received.
     const since = record.deliveredThrough ?? record.endedAt ?? 0;
-    const observations = plan === 'fork' ? bridge.adapter.history().filter(o => o.at > since) : bridge.adapter.history();
+    // Waking from Standby, the work from before it is history; the work during it arrives as it would have live (below).
+    const wake = attempt.wake;
+    const observations = plan === 'fork' ? bridge.adapter.history().filter(o => o.at > since) : wake ? bridge.adapter.history().filter(o => o.at <= wake.since) : bridge.adapter.history();
     const history = startupHistory(agent, observations, Math.max(0, 7600 - Buffer.byteLength(startup)));
     let input = [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: startup }] }];
     if (history.text) input.push({ type: 'message', role: 'user', content: [{ type: 'input_text', text: historyIntro(agent) + history.text }] });
@@ -268,11 +364,16 @@ export class VoiceSessions {
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean,
       learner: bridge.learner, audit: bridge.handOffAudit, screen: bridge.handOffAudit ? (said, id) => bridge.sessionSwitch.screen(said, id) : undefined, tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
-    const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan } };
+    const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake };
     // A dropped or moved session's unsent speech: this session takes it if it starts; meanwhile it isn't handed off.
     if (this.carried) { clearTimeout(this.carried.timer); mediator.history.carry(this.carried.mediator.history); }
     if (plan === 'fork') mediator.context.add('thinking', catchUp(agent, bridge.cwd, observer.state) + (history.text ? historyIntro(agent) + history.text : ''), null, '', since);
-    log({ type: 'voice.starting', plan, automatic, from: sourceId, seededTurns: plan === 'seed' ? input.length - (history.text ? 2 : 1) : undefined, store: this.store });
+    // Instead of a greeting, a waking session is told the conversation continues, then gets the agent's work it missed.
+    if (wake) {
+      mediator.context.add('thinking', standbyWake(agent, wake.operator));
+      for (const observation of bridge.adapter.history().filter(o => o.at > wake.since)) mediator.feed.add(observation);
+    }
+    log({ type: 'voice.starting', plan, automatic, from: sourceId, seededTurns: plan === 'seed' ? input.length - (history.text ? 2 : 1) : undefined, store: this.store, wake: wake?.reason });
     publish(bridge.status());
     // A fork that fails falls back to a new session; its errors are logged, not shown.
     live.on('fault', error => plan === 'fork' && !this.started.has(live) ? log({ type: 'voice.fork_fault', message: error.message }) : fault(error, page));
@@ -291,7 +392,7 @@ export class VoiceSessions {
     const kept = new Set(this.additionalInstructions.map(item => item.id));
     for (const item of [...run.inForce.values()]) if (item.learned && !kept.has(item.id) && live.state === 'active') await this.disregard(run, item);
     for (const item of [...this.additionalInstructions]) if (live.state === 'active' && !run.inForce.has(item.id) && !(item.state === 'pending' && item.sessionId === live.id)) await this.applyInstruction(live, item);
-    if (live.state === 'active') await live.greet(plan === 'fresh' ? greeting(agent) : automatic ? reconnectGreeting(agent) : resumeGreeting(agent));
+    if (live.state === 'active' && !wake) await live.greet(plan === 'fresh' ? greeting(agent) : automatic ? reconnectGreeting(agent) : resumeGreeting(agent));
   }
   liveEvent(run: Run, event: any) {
     const { live, page } = run;
@@ -310,6 +411,7 @@ export class VoiceSessions {
     }
     if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.bridge.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
     if (event.type === 'session.started') this.begun(run);
+    if (event.type === 'session.delegation.created') this.activity.add('request', REQUEST_PRICE);
     // ...and to the first words it says.
     if (event.type === 'session.output_transcript.delta' && !run.spoke) { run.spoke = true; this.bridge.log({ type: 'voice.first_words', plan: run.plan, automatic: run.automatic, firstWordsMs: Date.now() - run.requested.at }); }
     // Live reports usage about every 15 seconds; the last few minutes of it are enough for the meters.
@@ -336,8 +438,9 @@ export class VoiceSessions {
     this.audit = new AudioAudit({ dir: path.join(bridge.runDir, 'audio', live.reservation!), log: event => log({ liveRun: live.reservation, ...event }), onError: error => fault(error) });
     this.usage = { voiceSessionId: live.id!, startedAt: live.startedAt ?? Date.now(), seconds: 0, ratio: null, points: [] };
     publish({ type: 'live_usage', ...this.usage });
-    // Startup times: from the click (or reconnect) to GPT Live's session starting, fallbacks included.
-    log({ type: 'voice.started', plan, requestedPlan: run.requested.plan, automatic, startMs: Date.now() - run.requested.at });
+    // Startup times: from the click (or reconnect, or wake) to GPT Live's session starting, fallbacks included.
+    log({ type: 'voice.started', plan, requestedPlan: run.requested.plan, automatic, startMs: Date.now() - run.requested.at, wake: run.wake?.reason });
+    if (run.wake && this.standby) { log({ type: 'voice.woke', reason: run.wake.reason, standbyMs: Date.now() - this.standby.since }); this.standby = undefined; publish({ type: 'standby', state: 'off', reason: run.wake.reason }); }
     publish({ type: 'voice_started', sessionId: live.id, plan, automatic }, page);
     publish(bridge.status());
   }
@@ -354,14 +457,16 @@ export class VoiceSessions {
     Object.assign(record, { finalized: result.finalized, endedAt: Date.now(), deliveredThrough: Number.isFinite(undelivered) ? undelivered - 1 : Date.now(), lastRecordId: mediator.feed.projector.sequence });
     this.saveRun(run);
     // Ended without anyone asking (dropped, closed by GPT Live, or its media stalled): resume on the same page, a limited number of times.
-    const moved = this.moved.has(live), unexpected = !moved && (!live.requested || live.closeReason === MEDIA_STALLED);
+    // Ended for Standby: voice stays on, and the page keeps listening.
+    const standby = live.closeReason === STANDBY && this.standby?.page === page;
+    const moved = this.moved.has(live), unexpected = !moved && !standby && (!live.requested || live.closeReason === MEDIA_STALLED);
     const reconnect = unexpected && this.live === live && !bridge.stopping && page?.ws.readyState === WebSocket.OPEN && this.allowReconnect();
     if (unexpected) this.lastDrop = { reason: result.reason, at: Date.now(), reconnecting: Boolean(reconnect) };
-    // Speech not yet passed on goes to the session that replaces this one; otherwise to the agent now.
-    if (reconnect || moved) this.carry(mediator, result.reason); else own?.handOff(result.reason);
+    // Speech not yet passed on goes to the session that replaces this one (whenever Standby wakes); otherwise to the agent now.
+    if (reconnect || moved || standby) this.carry(mediator, result.reason, !standby); else own?.handOff(result.reason);
     if (reconnect) log({ type: 'voice.reconnecting', reason: result.reason, recent: this.reconnects.length });
     own?.stop();
-    publish({ type: 'voice_closed', ...result, moved: moved || undefined, reconnect: reconnect || undefined, dropped: (unexpected && !reconnect) || undefined }, page);
+    publish({ type: 'voice_closed', ...result, moved: moved || undefined, reconnect: reconnect || undefined, dropped: (unexpected && !reconnect) || undefined, standby: standby || undefined }, page);
     if (this.usage && this.usage.voiceSessionId === live.id) { this.usage.endedAt = Date.now(); publish({ type: 'live_usage', ...this.usage }); }
     if (this.live === live) this.page = undefined;
     publish(bridge.status()); bridge.saveTimeline();
@@ -385,10 +490,10 @@ export class VoiceSessions {
     if (this.reconnects.length >= RECONNECTS) return false;
     this.reconnects.push(now); return true;
   }
-  carry(mediator: Mediator, reason: string) {
+  carry(mediator: Mediator, reason: string, timed = true) {
     this.handOffCarried();
-    this.carried = { mediator, reason, timer: setTimeout(() => this.handOffCarried(), CARRY_MS) };
-    this.carried.timer.unref();
+    this.carried = { mediator, reason, timer: timed ? setTimeout(() => this.handOffCarried(), CARRY_MS) : undefined };
+    this.carried.timer?.unref();
   }
   /** Sends a dropped session's unsent speech to the agent when no replacement took it over. */
   handOffCarried() {

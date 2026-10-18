@@ -20,7 +20,8 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
   pages.send(page, bridge.status());
   pages.send(page, { type: 'timeline_history', ...bridge.timeline.snapshot() });
   pages.send(page, { type: 'history', events: bridge.uiEvents });
-  const runsVoice = () => bridge.voiceSessions.page === page;
+  // The page running voice, or the one listening on Standby.
+  const runsVoice = () => bridge.voiceSessions.listensTo(page);
   ws.on('message', (raw: Buffer, isBinary) => {
     if (isBinary) {
       if (!runsVoice()) return;
@@ -48,7 +49,7 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
       if (!runsVoice()) return;
       // The page's own microphone levels: the watchdog tells a stalled GPT Live stream from a silent page by them.
       if (event.type === 'audio_level') bridge.voiceSessions.pageAudioAt = Date.now();
-      if (event.type === 'stop') bridge.live?.close('operator ended voice');
+      if (event.type === 'stop') { if (bridge.voiceSessions.standby?.page === page) bridge.voiceSessions.endStandby('operator ended voice'); else bridge.live?.close('operator ended voice'); }
       // A backlogged page drops its audit copy first; the audit records the gap.
       if (event.type === 'audit_paused' || event.type === 'audit_resumed') {
         bridge.log({ type: `audio.${event.type}`, liveRun: bridge.live?.reservation, buffered: Number.isFinite(event.buffered) ? event.buffered : undefined, dropped: Number.isSafeInteger(event.dropped) ? event.dropped : undefined });
@@ -78,8 +79,9 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
         && Math.abs(event.at - Date.now()) < 5000 && event.durationMs > 0 && event.durationMs <= 500
         && event.inputRms >= 0 && event.inputRms <= 1 && event.outputRms >= 0 && event.outputRms <= 1) {
         bridge.log({ ...event, liveRun: bridge.live?.reservation, backlogMs: Number.isFinite(event.backlogMs) ? event.backlogMs : undefined });
-        // The voice page's microphone tells the core when the operator is talking.
+        // The voice page's microphone tells the core when the operator is talking, and what the conversation is worth (Standby).
         if (page === bridge.voiceSessions.page) bridge.voiceSessions.mediator?.hear(event);
+        bridge.voiceSessions.heard(event);
         const items = bridge.timeline.add(event);
         if (items.length) pages.broadcast({ type: 'timeline_update', items });
       }
@@ -91,6 +93,7 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
     const hadVoice = runsVoice();
     pages.remove(ws, code, reason.toString());
     if (!hadVoice || bridge.stopping) return;
-    bridge.publish({ type: 'audio_stopped' }); bridge.saveTimeline(); bridge.live?.close('voice client disconnected');
+    bridge.publish({ type: 'audio_stopped' }); bridge.saveTimeline();
+    if (bridge.voiceSessions.standby?.page === page) bridge.voiceSessions.endStandby('voice client disconnected'); else bridge.live?.close('voice client disconnected');
   });
 }

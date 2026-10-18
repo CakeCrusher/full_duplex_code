@@ -19,6 +19,8 @@ export class Timeline {
   origin: number; agent: Agent;
   sequence = 0; items = new Map<string, TimelineItem>();
   audio = new Map<string, TimelineItem>(); transcripts = new Map<string, TimelineItem>(); requests = new Map<string, TimelineItem>(); context = new Map<string, TimelineItem>();
+  /** The Standby stretch in progress, drawn across every track. */
+  standby?: TimelineItem;
   /** Jev's checks of a request whose item has not appeared yet, by request ID. */
   checks = new Map<string, JevCheck[]>();
   constructor(origin = Date.now(), agent: Agent) { this.origin = origin; this.agent = agent; }
@@ -54,6 +56,11 @@ export class Timeline {
     if (event.type === 'voice_closed' || event.type === 'audio_stopped') {
       for (const item of this.audio.values()) if (item.active) { item.active = false; changed.push(item); }
       this.audio.clear();
+    }
+    if (event.type === 'standby') {
+      if (event.state === 'on' && !this.standby) changed.push(this.standby = this.item({ track: 'standby', start: at, end: at, active: true, label: 'Standby',
+        source: 'GPT Live disconnected while the conversation was quiet, not billed; the page kept listening' }));
+      if (event.state === 'off' && this.standby) { Object.assign(this.standby, { end: at, active: false, reason: event.reason }); changed.push(this.standby); this.standby = undefined; }
     }
     if (event.type === 'caption') {
       // API transcript offsets belong to a voice connection, not the entire

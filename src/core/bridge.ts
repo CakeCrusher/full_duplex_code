@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import type { AgentAdapter, AgentDefinition, AgentLaunch, VoiceRequest } from './adapter.ts';
+import type { AgentAdapter, AgentDefinition, AgentLaunch, Observation, VoiceRequest } from './adapter.ts';
 import type { AgentObserver } from './agent-observer.ts';
 import { redact } from './redact.ts';
 import { withoutBinary } from './context-rules.ts';
@@ -19,6 +19,7 @@ import { Pages, type Page } from './pages.ts';
 import { tuning, type Tuning } from './tuning.ts';
 import { CompanionRegistry, type CompanionEntry } from './companions.ts';
 import { SessionSwitch } from './sessions.ts';
+import { PRICES } from './activity.ts';
 
 export interface HarnessOptions {
   /** The coding agent, from src/adapters. */
@@ -98,6 +99,8 @@ export class Harness {
     // Pages show observations without their binary data, which stays in the local log: an image
     // read can be over a megabyte, and a page connection backed up with it looks like slow playback.
     observer.on('observation', ({ raw, ...event }) => this.publish({ type: 'agent_observation', ...event, text: withoutBinary(event.text) }));
+    // The agent's work, priced for Standby (activity.ts): a subagent's events are its parent's business.
+    observer.on('observation', (observation: Observation) => { if (!observation.child) this.voiceSessions.activity.add(observation.kind, PRICES[observation.kind]); });
     observer.on('status', event => { this.log({ type: 'agent.status', ...event }); this.publish({ type: 'agent_status', ...event }); });
     observer.on('fault', error => this.fault(error));
     const { name, transport } = agent.profile;
@@ -209,7 +212,7 @@ export class Harness {
     if (this.stopping) return; this.stopping = true;
     if (this.startedAt) try { this.companions.remove(this.companionEntry()); } catch (error) { this.log({ type: 'companions.failed', message: (error as Error).message }); }
     const agentClosed = this.adapter.close();
-    clearInterval(this.statusTimer); clearInterval(this.voiceSessions.audioWatchdog); clearTimeout(this.agentLostTimer); clearTimeout(this.tuneTimer);
+    clearInterval(this.statusTimer); clearInterval(this.voiceSessions.audioWatchdog); clearInterval(this.voiceSessions.standbyTimer); clearTimeout(this.agentLostTimer); clearTimeout(this.tuneTimer);
     if (this.live) await this.live.close('harness stopped');
     this.voiceSessions.handOffCarried();
     this.mediator?.stop();

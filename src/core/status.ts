@@ -50,9 +50,10 @@ export function statusSnapshot(bridge: Harness) {
     oldestObservationMs: feed?.pending.length ? Date.now() - feed.pending[0].receivedAt : 0,
     pendingEstimatedTokens: context?.inFlightTokens ?? 0,
     estimatedBacklogSeconds: context ? context.inFlightTokens / context.tokensPerSecond : 0 };
-  // The page running voice, so that the others can offer to move it.
-  const voicePage = live && live.state !== 'closed' ? voice.page?.id ?? null : null;
+  // The page running voice (or listening on Standby), so that the others can offer to move it.
+  const voicePage = live && live.state !== 'closed' ? voice.page?.id ?? null : voice.standby?.page.id ?? null;
+  const standby = voice.standby ? { since: voice.standby.since, waking: Boolean(voice.standby.waking) } : null;
   // The last voice session that ended on its own, and automatic reconnects in the last five minutes.
   const connection = { lastDrop: voice.lastDrop, reconnects: voice.recentReconnects() };
-  return { type: 'status', agent: observer.state, agentReady: Boolean(bridge.agentReady), live: live?.state ?? 'disconnected', voicePage, pages: bridge.pages.size, cwd: bridge.cwd, sessionId: bridge.sessionId, usageSeconds: live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: bridge.runDir, observation: bridge.observation, prompt, contextDelivery, resume: voice.resumeStatus(), connection, tuning: bridge.tuning, jevTuning: Boolean(bridge.tuner), liveUsage: voice.usage ?? null, voiceAsked: bridge.sessionSwitch.asked ?? null, voiceBlocked: startBlocked(bridge) ?? null };
+  return { type: 'status', agent: observer.state, agentReady: Boolean(bridge.agentReady), live: live?.state ?? 'disconnected', voicePage, pages: bridge.pages.size, cwd: bridge.cwd, sessionId: bridge.sessionId, usageSeconds: live?.usageSeconds ?? 0, committedUsd: budget.committedUsd, runDir: bridge.runDir, observation: bridge.observation, prompt, contextDelivery, resume: voice.resumeStatus(), connection, standby, tuning: bridge.tuning, jevTuning: Boolean(bridge.tuner), liveUsage: voice.usage ?? null, voiceAsked: bridge.sessionSwitch.asked ?? null, voiceBlocked: startBlocked(bridge) ?? null };
 }

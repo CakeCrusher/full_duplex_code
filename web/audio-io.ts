@@ -87,6 +87,12 @@ export class AudioIO {
     this.remote = this.context!.createMediaStreamSource(received); this.remote.connect(this.node!, 0, 1);
   }
   gate(threshold: number) { this.node?.port.postMessage({ type: 'gate', threshold }); }
+  /** The gated microphone track, kept open on Standby for the next connection. */
+  get microphone() { return this.microphoneDestination?.stream; }
+  /** On Standby: hold the microphone, keeping its last seconds; waking: keep all of it; connected: replay it. */
+  hold() { this.node?.port.postMessage({ type: 'hold' }); }
+  wakeHold() { this.node?.port.postMessage({ type: 'wake' }); }
+  replay() { this.node?.port.postMessage({ type: 'replay' }); }
   mute(muted: boolean) { this.node?.port.postMessage({ type: 'mute', muted }); }
   auditStart(sessionId: string) { this.node?.port.postMessage({ type: 'audit_start', sessionId }); }
   stopCapture() { this.stream?.getTracks().forEach(track => track.stop()); this.stream = null; }

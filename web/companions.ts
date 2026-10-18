@@ -2,10 +2,10 @@ import type { CompanionSummary as Companion } from '../src/core/companions.ts';
 
 // Every running companion, to switch between them in this tab: its folder, agent and state,
 // refreshed every few seconds. Switching never leaves a page and never ends the voice it runs.
-const LABELS = { voice: 'Voice on', starting: 'Starting voice', ready: 'Ready', notReady: 'Not ready', waiting: 'Agent not connected', unreachable: 'Unreachable' };
+const LABELS = { voice: 'Voice on', standby: 'Standby', starting: 'Starting voice', ready: 'Ready', notReady: 'Not ready', waiting: 'Agent not connected', unreachable: 'Unreachable' };
 const AGENT_STATES: Record<string, string> = { starting: 'starting', idle: 'ready for a request', working: 'working', needs_attention: 'needs your attention', failed: 'reported an error', exited: 'session ended' };
 // Ready only when its voice could start: its agent connected and a page with the microphone allowed and clicked.
-const stateOf = (c: Companion): keyof typeof LABELS => !c.reachable ? 'unreachable' : c.voice === 'active' ? 'voice' : c.voice === 'connecting' ? 'starting' : !c.agentReady ? 'waiting' : c.blocked ? 'notReady' : 'ready';
+const stateOf = (c: Companion): keyof typeof LABELS => !c.reachable ? 'unreachable' : c.voice === 'active' ? 'voice' : c.voice === 'standby' ? 'standby' : c.voice === 'connecting' ? 'starting' : !c.agentReady ? 'waiting' : c.blocked ? 'notReady' : 'ready';
 // What a companion that is not ready lacks, in a few words.
 const lacks = (blocked: string) => /no page/.test(blocked) ? 'No page open' : /blocked from/.test(blocked) ? 'Microphone blocked' : /not been allowed/.test(blocked) ? 'Microphone not allowed' : /not been clicked/.test(blocked) ? 'Needs a click' : 'Not ready';
 

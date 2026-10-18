@@ -10,9 +10,17 @@ class DuplexAudio extends AudioWorkletProcessor {
   auditSession: string | null = null; auditOffset = 0;
   gateThreshold = .008; gateHoldSamples = 0; rawInputPower = 0;
   inputGain = 4;
+  // On Standby, the gated microphone is held instead of sent: its last 3 seconds, then, once voice is
+  // waking, everything. When the new connection is up, the held audio goes out first and the live
+  // microphone follows behind it; silence in the backlog is skipped, so it catches up at the first pause.
+  holding = false; keepAll = false; replaying = false;
+  held: Float32Array[] = []; heldSamples = 0;
   constructor() {
     super();
     this.port.onmessage = ({ data }) => {
+      if (data.type === 'hold') { this.holding = true; this.keepAll = false; this.replaying = false; this.held = []; this.heldSamples = 0; this.auditSession = null; }
+      if (data.type === 'wake') this.keepAll = true;
+      if (data.type === 'replay') { this.holding = false; this.replaying = this.held.length > 0; }
       if (data.type === 'mute') { this.muted = data.muted; if (this.muted) this.gateHoldSamples = 0; }
       if (data.type === 'audit_start') { this.auditSession = data.sessionId; this.auditOffset = 0; }
       if (data.type === 'gate' && Number.isFinite(data.threshold) && data.threshold >= 0 && data.threshold <= .05) {
@@ -47,6 +55,19 @@ class DuplexAudio extends AudioWorkletProcessor {
       microphoneOutput[i] = sent / 32768;
       output[i] = remote?.[i] ?? 0;
       this.outputPower += output[i] * output[i];
+    }
+    if (this.holding || this.replaying) {
+      this.held.push(Float32Array.from(microphoneOutput)); this.heldSamples += microphoneOutput.length;
+      if (this.holding) {
+        const limit = sampleRate * (this.keepAll ? 120 : 3);
+        while (this.heldSamples - this.held[0].length >= limit) this.heldSamples -= this.held.shift()!.length;
+        microphoneOutput.fill(0);
+      } else {
+        while (this.held.length > 1 && this.held[0].every(x => x === 0)) this.heldSamples -= this.held.shift()!.length;
+        const next = this.held.shift()!; this.heldSamples -= next.length;
+        microphoneOutput.set(next.subarray(0, microphoneOutput.length));
+        if (!this.held.length) this.replaying = false;
+      }
     }
     this.levelSamples += output.length;
     if (this.auditSession) {

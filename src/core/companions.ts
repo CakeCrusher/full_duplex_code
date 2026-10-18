@@ -15,7 +15,7 @@ export interface CompanionEntry {
 export interface CompanionSummary {
   id: string; current: boolean; folder: string; agent: string; sessionId: string | null;
   reachable: boolean; agentReady: boolean; agentState: string | null;
-  voice: 'none' | 'connecting' | 'active'; voicePage: boolean; pages: number;
+  voice: 'none' | 'connecting' | 'active' | 'standby'; voicePage: boolean; pages: number;
   public: boolean; startedAt: number;
   /** Why its voice can't start without the operator (no tab, no microphone permission, no click), or null when it can. */
   blocked: string | null;
@@ -83,7 +83,7 @@ export function summarize(entry: CompanionEntry, status: Record<string, any> | u
   return {
     id: `${entry.pid}-${entry.port}`, current, folder: path.basename(entry.cwd) || entry.cwd, agent: entry.agent, sessionId: sessionId?.slice(0, 8) ?? null,
     reachable: Boolean(status), agentReady: status?.agentReady === true, agentState: typeof status?.agent === 'string' ? status.agent : null,
-    voice: status?.live === 'active' ? 'active' : ['new', 'connecting'].includes(status?.live) ? 'connecting' : 'none',
+    voice: status?.live === 'active' ? 'active' : ['new', 'connecting'].includes(status?.live) ? 'connecting' : status?.standby ? 'standby' : 'none',
     voicePage: Boolean(status?.voicePage), pages: Number.isInteger(status?.pages) ? status!.pages : 0,
     public: Boolean(entry.publicUrl), startedAt: entry.startedAt, blocked: typeof status?.voiceBlocked === 'string' ? status.voiceBlocked : null,
     // Through the tunnel, only links the tunnel already exposes: never a local-only companion's token.

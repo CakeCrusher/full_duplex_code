@@ -3,17 +3,24 @@
 
 // Decides which cue an incoming bridge event deserves. Kept free of audio so it
 // can be tested without a browser.
-export type Cue = 'start' | 'end' | 'delegate' | 'learned';
+export type Cue = 'start' | 'end' | 'delegate' | 'learned' | 'standby';
 
 export class CueTracker {
   session: string | null = null;
+  /** Voice is on Standby: its session ended, voice did not. */
+  paused = false;
   tasks = new Set<string>();
   // replaying: events restored from history after a page reload are old news.
   cue(event: { type: string; [field: string]: any }, { replaying = false } = {}): Cue | null {
     if (event.type === 'voice_started') {
       if (replaying || this.session === event.sessionId) return null;
-      this.session = event.sessionId ?? null;
+      this.session = event.sessionId ?? null; this.paused = false;
       return 'start';
+    }
+    if (event.type === 'voice_closed' && event.standby) {
+      if (!this.session) return null;
+      this.session = null; this.paused = true;
+      return replaying ? null : 'standby';
     }
     if (event.type === 'voice_closed') return this.end();
     // An instruction Jev added: once, and never from restored history.
@@ -31,16 +38,18 @@ export class CueTracker {
   }
   // Also called when the page loses the bridge, since no voice_closed will follow.
   end(): Cue | null {
-    if (!this.session) return null;
-    this.session = null;
+    if (!this.session && !this.paused) return null;
+    this.session = null; this.paused = false;
     return 'end';
   }
 }
 
 // Notes as [frequency Hz, start s, duration s]. Start rises, end falls,
 // delegation is a quick double tick, and an instruction Jev added is a soft
-// three-note rise, so none can be mistaken for another.
+// three-note rise, so none can be mistaken for another. Standby is two soft,
+// slow, low notes falling: settling down, not ending.
 const PATTERNS: Record<Cue, { type: OscillatorType; gain: number; notes: [number, number, number][] }> = {
+  standby: { type: 'sine', gain: .09, notes: [[523, 0, .32], [392, .3, .6]] },
   start: { type: 'sine', gain: .16, notes: [[660, 0, .11], [990, .11, .16]] },
   end: { type: 'sine', gain: .16, notes: [[990, 0, .11], [590, .11, .2]] },
   delegate: { type: 'triangle', gain: .09, notes: [[1320, 0, .05], [1320, .09, .05]] },
@@ -58,15 +67,25 @@ export class CuePlayer {
     const pattern = PATTERNS[name], context = this.context;
     if (!pattern || !context || context.state === 'closed') return;
     const now = context.currentTime + .02;
-    for (const [frequency, offset, duration] of pattern.notes) {
-      const oscillator = context.createOscillator(), envelope = context.createGain();
-      oscillator.type = pattern.type; oscillator.frequency.value = frequency;
-      // A short attack and release avoid clicks at note boundaries.
-      envelope.gain.setValueAtTime(0, now + offset);
-      envelope.gain.linearRampToValueAtTime(pattern.gain, now + offset + .01);
-      envelope.gain.exponentialRampToValueAtTime(.0001, now + offset + duration);
-      oscillator.connect(envelope).connect(context.destination);
-      oscillator.start(now + offset); oscillator.stop(now + offset + duration + .02);
-    }
+    for (const [frequency, offset, duration] of pattern.notes) this.tone(pattern.type, pattern.gain, frequency, now + offset, duration);
+  }
+  tone(type: OscillatorType, gain: number, frequency: number, at: number, duration: number, attack = .01) {
+    const context = this.context!, oscillator = context.createOscillator(), envelope = context.createGain();
+    oscillator.type = type; oscillator.frequency.value = frequency;
+    // A short attack and release avoid clicks at note boundaries.
+    envelope.gain.setValueAtTime(0, at);
+    envelope.gain.linearRampToValueAtTime(gain, at + attack);
+    envelope.gain.exponentialRampToValueAtTime(.0001, at + duration);
+    oscillator.connect(envelope).connect(context.destination);
+    oscillator.start(at); oscillator.stop(at + duration + .02);
+  }
+  pulseTimer?: ReturnType<typeof setInterval>;
+  /** While voice wakes from Standby: a soft pulse, like breathing, until it is connected (then the start cue). */
+  waking(on: boolean) {
+    clearInterval(this.pulseTimer); this.pulseTimer = undefined;
+    const context = this.context;
+    if (!on || !context || context.state === 'closed') return;
+    const beat = () => this.tone('sine', .07, 440, context.currentTime + .02, .55, .25);
+    beat(); this.pulseTimer = setInterval(beat, 700);
   }
 }

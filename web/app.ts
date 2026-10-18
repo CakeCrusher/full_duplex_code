@@ -17,6 +17,9 @@ if (location.hash) { sessionStorage.setItem('fd-voice-token', token!); history.r
 addEventListener('hashchange', () => { if (location.hash.length > 1) location.reload(); });
 const bridge = new BridgeClient(), audio = new AudioIO(), peer = new WebRtcPeer();
 let active = false, starting = false, muted = false, currentStatus: BridgeEvent | undefined;
+// On Standby: GPT Live is disconnected while the conversation is quiet, and this page keeps its microphone
+// open, held, so the operator's speech (or the agent's news, through the bridge) can wake voice.
+let standby = false, waking = false;
 let voiceSessionId: string | null = null;
 let generation = 0;
 // The audit copy pauses while the bridge connection is backlogged, and how many packets it dropped.
@@ -40,7 +43,7 @@ function handle(event: BridgeEvent) {
     const listed = (event.prompt?.additional ?? []).filter((item: any) => item.learned);
     for (const item of listed) learned({ type: 'instruction_learned', id: item.learned, text: item.text.replace(`${item.learned}: `, '') });
     for (const card of document.querySelectorAll<HTMLElement>('.learned[id^="learned-"]:not(.removed)')) if (!listed.some((item: any) => card.id === `learned-${item.learned}`)) removed(card.id.slice('learned-'.length));
-    showStatus(event, { active, muted, starting, elsewhere: Boolean(event.voicePage) && event.voicePage !== pageId });
+    showStatus(event, { active, muted, starting, standby, waking, elsewhere: Boolean(event.voicePage) && event.voicePage !== pageId });
   }
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
   if (event.type === 'instruction_learned') learned(event);
@@ -48,7 +51,8 @@ function handle(event: BridgeEvent) {
   if (event.type === 'tuning' && event.changes?.length) tuned(event.changes);
   // Sessions turned on or off by voice: what fdc is doing, and another companion asking this one to start voice.
   if (event.type === 'sessions' && !replaying) notice(event.text);
-  if (event.type === 'voice_on' && !active && !starting) { notice(`Voice turned on from ${event.from}.`); start(resumable(currentStatus) ? 'resume' : 'fresh', false, true); }
+  if (event.type === 'voice_on' && !active && !starting && !standby) { notice(`Voice turned on from ${event.from}.`); start(resumable(currentStatus) ? 'resume' : 'fresh', false, true); }
+  if (event.type === 'voice_wake') wake();
   if (event.type === 'history') {
     replaying = true;
     try { for (const item of event.events) handle(item); } finally { replaying = false; }
@@ -59,10 +63,14 @@ function handle(event: BridgeEvent) {
   if (event.type === 'voice_started') {
     voiceSessionId = event.sessionId;
     audio.auditStart(event.sessionId);
-    active = true; starting = false; notice(event.automatic ? 'Reconnected. The conversation continues.' : '');
+    const woke = waking;
+    active = true; starting = false; standby = false; waking = false; cuePlayer.waking(false);
+    if (woke) replayWhenConnected(); else notice(event.automatic ? 'Reconnected. The conversation continues.' : '');
     $<HTMLButtonElement>('mute').disabled = false; $<HTMLButtonElement>('stop').disabled = false; $('audioState').textContent = 'Microphone on';
   }
   if (event.type === 'voice_closed') {
+    // Quiet: voice goes on Standby, and this page keeps listening.
+    if (event.standby && (active || starting)) { pause(); return; }
     releaseAudio();
     // Voice that ended on its own resumes by itself, a limited number of times.
     if (event.reconnect) { notice(`Voice dropped (${event.reason}). Reconnecting…`); start('resume', true); return; }
@@ -183,21 +191,23 @@ function measured(data: WorkletMessage) {
   }
   if (data.type === 'level') {
     $<HTMLMeterElement>('level').value = Math.min(1, (data.rawRms ?? data.rms) * 5);
-    $('gate-state').textContent = !active ? 'Waiting for Live' : muted ? 'Muted' : data.rms > 0 ? 'Passing audio to Live' : 'Gate closed · sending silence';
-    if (bridge.open && active) bridge.send({ type: 'audio_level', at: audio.audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, outputRms: data.outputRms });
+    $('gate-state').textContent = standby ? muted ? 'Muted' : data.rms > 0 ? 'Standby · speech wakes voice' : 'Standby · listening here' : !active ? 'Waiting for Live' : muted ? 'Muted' : data.rms > 0 ? 'Passing audio to Live' : 'Gate closed · sending silence';
+    // On Standby too: the bridge hears the operator start speaking from these.
+    if (bridge.open && (active || standby)) bridge.send({ type: 'audio_level', at: audio.audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, outputRms: data.outputRms });
   }
 }
-async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false, asked = false) {
+async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false, asked = false, fromStandby = false) {
   if (active || starting) return; starting = true; $<HTMLButtonElement>('start').disabled = true; $<HTMLButtonElement>('fresh').disabled = true;
   if (!automatic) notice('');
   cuePlayer.unlock(); // Start voice is the user gesture that allows audio cues.
   const attempt = ++generation, current = () => attempt === generation;
   // The input is captured once per voice connection; change it after End voice.
   $<HTMLSelectElement>('microphone-device').disabled = true;
-  $<HTMLButtonElement>('stop').disabled = false; $('audioState').textContent = 'Waiting for microphone…';
+  $<HTMLButtonElement>('stop').disabled = false; if (!fromStandby) $('audioState').textContent = 'Waiting for microphone…';
   try {
     const gate = Number($<HTMLInputElement>('microphone-gate').value);
-    const microphone = await audio.open({ deviceId: $<HTMLSelectElement>('microphone-device').value, gate, current, onMessage: measured });
+    // Waking from Standby, the microphone is already open: the held audio rides on the same track.
+    const microphone = fromStandby && audio.microphone ? audio.microphone : await audio.open({ deviceId: $<HTMLSelectElement>('microphone-device').value, gate, current, onMessage: measured });
     if (!microphone) return;
     if (!microphoneAccess.opened) { microphoneAccess.opened = true; reportReady(); }
     bridge.send({ type: 'microphone_gate', threshold: gate });
@@ -209,7 +219,7 @@ async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false, aske
       fail: message => { notice(message); stop(); },
     });
     if (!current()) return;
-    muted = false; $('mute').textContent = 'Mute microphone'; $('mute').setAttribute('aria-pressed', 'false');
+    if (!fromStandby) { muted = false; $('mute').textContent = 'Mute microphone'; $('mute').setAttribute('aria-pressed', 'false'); }
     bridge.send({ type: 'start', sdp, mode, automatic });
     $<HTMLButtonElement>('stop').disabled = false; $('audioState').textContent = 'Connecting voice…';
   } catch (error) {
@@ -223,8 +233,27 @@ async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false, aske
     if (currentStatus) handle(currentStatus);
   }
 }
+// GPT Live has disconnected; the microphone stays open and is held for the next connection.
+function pause() {
+  voiceSessionId = null; active = false; starting = false; standby = true; waking = false;
+  peer.close(); audio.hold();
+  $('audioState').textContent = 'Standby · listening here';
+  if (currentStatus) handle(currentStatus);
+}
+// Speech or news woke voice (or the operator clicked): a new connection on the same microphone.
+function wake() {
+  if (!standby || waking || active || starting) return;
+  waking = true; audio.wakeHold(); cuePlayer.waking(true);
+  $('audioState').textContent = 'Waking…';
+  start('resume', true, false, true);
+}
+// The held audio goes out once the new connection carries media, ahead of the live microphone.
+async function replayWhenConnected() {
+  for (let i = 0; i < 100 && peer.connection && peer.connection.connectionState !== 'connected'; i++) await new Promise(resolve => setTimeout(resolve, 50));
+  audio.replay();
+}
 function releaseAudio() {
-  voiceSessionId = null;
+  voiceSessionId = null; standby = false; waking = false; cuePlayer.waking(false);
   if (audio.node && bridge.open) bridge.send({ type: 'audio_stopped' });
   generation++;
   active = false; starting = false; audio.stopCapture();
@@ -235,7 +264,8 @@ function releaseAudio() {
 }
 function stop() { if (bridge.open) bridge.send({ type: 'stop' }); releaseAudio(); }
 // Start continues the conversation when there is one (Resume voice); Start fresh never does.
-$('start').onclick = () => start(resumable(currentStatus) ? 'resume' : 'fresh'); $('fresh').onclick = () => start('fresh'); $('stop').onclick = stop;
+// On Standby, Start wakes voice now.
+$('start').onclick = () => standby ? wake() : start(resumable(currentStatus) ? 'resume' : 'fresh'); $('fresh').onclick = () => start('fresh'); $('stop').onclick = stop;
 $<HTMLInputElement>('microphone-gate').oninput = e => {
   const threshold = Number((e.target as HTMLInputElement).value);
   $('gate-label').textContent = threshold === 0 ? 'Off' : `${(threshold * 100).toFixed(1)}%`;

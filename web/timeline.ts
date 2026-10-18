@@ -11,6 +11,8 @@ export function elapsed(ms: number, precise = false) {
 }
 export class TimelineView {
   items = new Map<string, Item>(); nodes = new Map<string, HTMLButtonElement>(); origin = Date.now(); windowMs = 60000;
+  /** Standby stretches, drawn as gray bands across every track rather than in a lane. */
+  bands = new Map<string, HTMLElement>();
   follow = true; viewStart = this.origin; selected: string | null = null; hovered: string | null = null;
   plot = $('timeline-plot'); tooltip = $('timeline-tooltip');
   detailItem?: Item | null; detailSelected?: string | null; timer: ReturnType<typeof setInterval>;
@@ -110,6 +112,20 @@ export class TimelineView {
     this.tooltip.style.top = `${Math.max(12, box.top - rect.height - 12)}px`;
   }
   hideTooltip() { this.tooltip.hidden = true; }
+  // GPT Live was disconnected (not billed) while the conversation was quiet; one in progress runs to now.
+  band(item: Item, now: number, end: number) {
+    let node = this.bands.get(item.id);
+    const stop = item.active ? now : item.end;
+    if (stop < this.viewStart || item.start > end) { if (node) node.hidden = true; return; }
+    if (!node) {
+      node = document.createElement('div'); node.className = 'standby-band'; node.setAttribute('aria-hidden', 'true');
+      node.append(Object.assign(document.createElement('span'), { textContent: 'Standby' }));
+      this.plot.append(node); this.bands.set(item.id, node);
+    }
+    const left = clamp((item.start - this.viewStart) / this.windowMs * 100, 0, 100), right = clamp((stop - this.viewStart) / this.windowMs * 100, 0, 100);
+    node.hidden = false; node.style.left = `${left}%`; node.style.width = `${right - left}%`;
+    node.title = `Standby ${this.timing({ ...item, end: stop })}: not billed`;
+  }
   makeNode(item: Item) {
     const button = document.createElement('button'); button.type = 'button'; button.className = `timeline-item track-${item.track}`;
     button.dataset.id = item.id; button.dataset.track = item.track;
@@ -153,6 +169,7 @@ export class TimelineView {
     ($('timeline-now').firstElementChild as HTMLElement).style.left = xNow > 90 ? '-30px' : xNow < 10 ? '4px' : '-13px';
     const visible = new Set<string>(); const laneCounts: Record<string, number> = {};
     for (const item of this.items.values()) {
+      if (item.track === 'standby') { this.band(item, now, end); continue; }
       if (item.end < this.viewStart || item.start > end) continue;
       visible.add(item.id); laneCounts[item.track] = (laneCounts[item.track] ?? 0) + 1;
       const button = this.nodes.get(item.id) ?? this.makeNode(item);
@@ -172,6 +189,7 @@ export class TimelineView {
       button.setAttribute('aria-label', `${tracks[item.track]}. ${this.itemLabel(item)}. ${this.timing(item)}`);
     }
     for (const [id, node] of this.nodes) if (!visible.has(id)) { node.remove(); this.nodes.delete(id); }
+    for (const [id, node] of this.bands) if (!this.items.has(id)) { node.remove(); this.bands.delete(id); }
     for (const track of Object.keys(tracks)) this.plot.querySelector<HTMLElement>(`[data-lane="${track}"] .lane-empty`)!.hidden = Boolean(laneCounts[track]);
     $('timeline-empty').hidden = this.items.size > 0;
     const inspecting = this.selected ?? this.hovered;

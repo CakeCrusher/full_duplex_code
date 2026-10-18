@@ -1,4 +1,5 @@
-// The low-level settings that decide when and how agent updates reach GPT Live.
+// The low-level settings that decide when and how agent updates reach GPT Live,
+// and when voice goes on Standby to save its cost while the conversation is quiet.
 // Each one trades the core principles in the README against each other; its
 // description says how, from measurements on replayed real sessions, so that
 // whoever sets it (a person, or Jev from the operator's instructions) knows
@@ -12,6 +13,8 @@ export interface Tuning {
   thinkMs: number;
   pauseMs: number;
   compactTokens: number;
+  standbyAfterMs: number;
+  wakeThreshold: number;
 }
 
 /** A setting's range, what it does, and the levels Jev chooses among, each with what it costs and buys. */
@@ -59,9 +62,27 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     { value: 3000, consequence: 'Only very heavy tool work becomes one line: more detail reaches GPT Live, but a reader was wrong more often with more detail (13 of 30 at 2000, against 6 at 900).' },
     { value: 1000000, consequence: 'Never compact: GPT Live sees every tool result and can answer the most questions itself; its context fills faster.' },
   ] },
+  // Measured by replaying 181 real voice sessions (59 hours, Sep 13 – Oct 18) through activity.ts's prices.
+  standbyAfterMs: { min: 0, max: 600000, describe:
+    "How long the conversation must stay quiet before voice goes on Standby (ms): GPT Live disconnects and its billing ($0.05 a minute) stops, while the page keeps listening on the operator's computer and fdc keeps watching the agent. The operator speaking, or agent news worth wakeThreshold, reconnects it in about 1-2 s; the operator's first words are buffered and replayed. Quiet means everything that happened in this window (the operator's and GPT Live's speech, agent events, requests) is worth less than wakeThreshold. Someone was speaking 46% of the time in real sessions, so Standby can save at most about a quarter. Each wake starts a new GPT Live session seeded with the conversation's text: the conversation carries over, but only the most recent agent work does. 0 never goes on Standby.",
+    levels: [
+    { value: 0, consequence: 'Never on Standby: GPT Live stays connected the whole time voice is on, as before; it never has to wake, and it keeps the most agent detail.' },
+    { value: 20000, consequence: 'Cheapest: saved 18% of the cost of real sessions, but woke about 14 times an hour: 11 times when the operator spoke into Standby (answered a few seconds later), 2 of them noise.' },
+    { value: 30000, consequence: 'The default: saved 14% of the cost of real sessions; woke about 9 times an hour, 7 of them when the operator spoke into Standby (1 of them noise), 1 for agent news.' },
+    { value: 60000, consequence: 'Calmer: saved 9%; woke under 4 times an hour.' },
+    { value: 120000, consequence: 'Only for long pauses, such as the operator stepping away: saved 5%; woke about once an hour.' },
+  ] },
+  wakeThreshold: { min: 1, max: 1000, describe:
+    "How much activity keeps voice Live, and wakes it from Standby, counted in points over the standbyAfterMs window. Agent events are priced by kind: a tool call or typed prompt 1, an agent message 10, a finished or failed turn or a completed task 30, an approval request or a request GPT Live passes on 100. The operator's speech always reaches the threshold within about half a second of sound, and GPT Live's speech keeps voice Live while it talks. Lower: more agent activity keeps voice Live and wakes it; higher: only bigger news wakes it, and GPT Live stays silent about the rest until the operator speaks. In real sessions it barely changed the cost (14-16% saved at 30 s); it changes what wakes the companion.",
+    levels: [
+    { value: 1, consequence: 'Any agent activity, every tool call included, wakes it and keeps it Live: GPT Live misses almost nothing it would have said (3 s an hour in real sessions).' },
+    { value: 10, consequence: 'The default: agent messages, finished or failed turns and approvals wake it; tool calls add up (ten within the window wake it). GPT Live missed about 10 s of speech an hour.' },
+    { value: 30, consequence: 'Only finished or failed turns and approvals wake it, not the agent talking mid-turn: GPT Live missed about 18 s of speech an hour.' },
+    { value: 100, consequence: 'Only approval requests (and the operator) wake it: GPT Live missed about 34 s an hour of reports, such as a finished turn, until the operator spoke.' },
+  ] },
 };
 
-export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900 };
+export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 30000, wakeThreshold: 10 };
 
 /** Settings from partial overrides: unknown names and values out of range are refused. */
 export function tuning(overrides: unknown = {}, base: Tuning = DEFAULT_TUNING): Tuning {
