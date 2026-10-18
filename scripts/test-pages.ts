@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, type Page as BrowserPage } from 'playwright';
 import { claude } from '../src/adapters/claude/index.ts';
 import { Harness } from '../src/core/bridge.ts';
+import { CompanionRegistry } from '../src/core/companions.ts';
 import { startTunnel, type Tunnel } from '../src/launcher/tunnel.ts';
 
 // Companion pages in real Chrome, in the orders people open them: before the
@@ -17,7 +18,10 @@ import { startTunnel, type Tunnel } from '../src/launcher/tunnel.ts';
 // With --public, the phone uses a real Cloudflare tunnel, opened the moment it is handed out.
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-pages-'));
-const harness = await new Harness({ agent: claude, root, runDir: dir, cwd: dir, sessionId: randomUUID(), apiKey: 'unused-pages-test-key' }).start();
+const harness = new Harness({ agent: claude, root, runDir: dir, cwd: dir, sessionId: randomUUID(), apiKey: 'unused-pages-test-key' });
+// Registered apart from the companions really running here, whose tabs would open this one too.
+harness.companions = new CompanionRegistry(path.join(dir, 'companions'));
+await harness.start();
 let tunnel: Tunnel | undefined;
 if (process.argv.includes('--public')) {
   tunnel = await startTunnel({ port: new URL(harness.baseUrl).port, log: line => harness.log({ type: 'tunnel.log', line }), onAddress: url => harness.setPublicUrl(url) });
@@ -37,7 +41,7 @@ try {
   browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
   // Each device is its own browser context, with a quiet virtual microphone.
   const device = async () => {
-    const page = await (await browser!.newContext()).newPage();
+    const page = await (await browser!.newContext({ permissions: ['microphone'] })).newPage();
     await page.addInitScript(() => {
       navigator.mediaDevices.getUserMedia = async () => {
         const audio = new AudioContext({ sampleRate: 24000 }); await audio.resume();
