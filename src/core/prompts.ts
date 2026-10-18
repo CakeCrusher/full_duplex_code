@@ -25,7 +25,7 @@ Delegate to the backend when:
 Do not delegate to the backend when:
 - You can answer from observed work or the conversation.
 - The operator is directing your conversation, or you need clarification.
-Existing terminal prompts are already submitted. Never resend them. The bridge tells you quietly when a request has been delivered: do not announce or confirm delivery to the operator, and stay quiet unless you have something else to say. Do not claim delivery before the bridge confirms it, or mistake it for completed work.${canSteer ? '' : ` Delivered requests wait until ${name}'s current turn ends.`}`;
+Existing terminal prompts are already submitted. Never resend them. Confirm successful delivery briefly when the bridge confirms it; do not claim delivery before that confirmation or mistake it for completed work.${canSteer ? '' : ` Delivered requests wait until ${name}'s current turn ends.`}`;
 }
 
 // When to speak. There is one policy; operators change it with added instructions.
@@ -83,7 +83,7 @@ export const nothingToSend = ({ profile: { name } }: Agent) =>
   `No new operator speech is available to send. Answer from the observed ${name} session; already submitted requests must not be resent.`;
 export const queueFailed = ({ profile: { name } }: Agent) =>
   `The voice bridge failed to queue the user’s request for ${name}. The request was not delivered; the terminal connection needs attention.`;
-export const deliveryConfirmation = ({ profile: { product } }: Agent) => `The request was delivered to ${product}. Do not say so.`;
+export const deliveryConfirmation = ({ profile: { product } }: Agent) => `Your request has been sent to ${product}.`;
 
 // A delegated request as the agent receives it: a note on how to read it, then
 // the conversation since the previous request, one utterance per line.

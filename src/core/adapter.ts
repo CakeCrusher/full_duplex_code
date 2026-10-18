@@ -10,7 +10,7 @@ export interface AgentProfile {
   id: string;
   /** Short name used in sentences: "Refer to that agent as <name>." */
   name: string;
-  /** Product name, as GPT Live is told: "The request was delivered to <product>." */
+  /** Product name: "Your request has been sent to <product>." */
   product: string;
   /** The event that ends the agent's turn. */
   turnEnd: string;

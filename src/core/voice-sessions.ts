@@ -401,11 +401,10 @@ export class VoiceSessions {
     const live = this.live;
     if (task.confirmationSent || !task.voiceSessionId || live?.state !== 'active' || task.voiceSessionId !== live.id) return;
     task.confirmationSent = true;
-    // GPT Live learns the request was delivered, independent of the observation
-    // backlog, without saying so: the operator doesn't want to hear it. The adapter
-    // confirms its own write; this does not claim that the agent has started or
-    // completed the work. Never replay it in a new voice session.
-    live.append('thinking', deliveryConfirmation(this.bridge.agent), task.delegationId ?? null).catch(error => {
+    // Delivery is an operator-facing fact, independent of the observation
+    // backlog. The adapter confirms its own write; this does not claim that the
+    // agent has started or completed the work. Never replay it in a new voice session.
+    live.append('commentary', deliveryConfirmation(this.bridge.agent), task.delegationId ?? null).catch(error => {
       if (this.live === live && live.state === 'active') this.bridge.fault(new Error(`The request was sent, but its voice confirmation failed: ${error.message}`));
     });
   }
