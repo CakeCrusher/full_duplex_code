@@ -9,7 +9,7 @@
 // arrived only because voice ended (GPT Live had kept it), next to Jev's judgment, for learning how
 // often GPT Live and Jev disagree, and in which direction.
 import fs from 'node:fs';
-import type { StageView } from './stage.ts';
+import type { StageCommand, StageView } from './stage.ts';
 
 type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
 
@@ -69,6 +69,8 @@ const pageQuestions = (page: StageView) => {
     page_work: { type: 'noul', instructions: 'Besides moving, showing or highlighting things on the page, does the operator ask the coding agent to make, add, change, fix, explain or look into anything?', criteria: { true: 'Some work, change, research or answer is asked of the coding agent in `utterance`, even alongside a page command: changing how the page looks (bigger, bolder, colours, wording) is work.', false: 'Only page commands, or naming, describing, finding or pointing at a part of the page to go to, with at most filler or thanks. Judge `utterance` alone, not `earlier`.' } },
   };
 };
+/** The part a command goes to, by its name without a number before it ("stage 3: DNS lookup" is "dns lookup"). */
+const partOf = (command: StageCommand) => (command.name ?? '').toLowerCase().replace(/^(stage|slide|step|part|section)\s*\d+\s*[:.\-–]?\s*/, '').replace(/[^a-z0-9]+/g, ' ').trim();
 /** The step choice for "another action on the page". */
 export const OTHER = 'other_action';
 const pageLine = (page: StageView) => `${page.title} (${page.url})${page.about ? `: ${page.about}` : ''}. The viewer is at: ${page.where}`.slice(0, 900);
@@ -143,10 +145,16 @@ export class DelegationAudit {
       judgment.companionOnly = p('companion_only');
     }
     if (page) {
+      // Commands for one part (its heading, the page's own command, an annotation on it) split Jev's confidence between
+      // them ("connecting to the server": .43, .38 and .11): they count together, and the page's own command runs.
       const step = (name: string) => {
-        const answer = answers?.[name], id = answer?.choice;
-        const likely = Number(answer?.probabilities?.[id] ?? answer?.confidence ?? 1);
-        return typeof id === 'string' && likely >= PAGE_STEP && page.commands.some(c => c.id === id) ? id : undefined;
+        const answer = answers?.[name], id = answer?.choice, chosen = page.commands.find(c => c.id === id);
+        if (!chosen) return;
+        const likely: Record<string, number> = answer.probabilities ?? { [chosen.id]: Number(answer.confidence ?? 1) };
+        const group = partOf(chosen) ? page.commands.filter(c => partOf(c) === partOf(chosen)) : [chosen];
+        if (group.reduce((sum, c) => sum + Number(likely[c.id] ?? 0), 0) < PAGE_STEP) return;
+        const ranked = group.sort((a, b) => Number(likely[b.id] ?? 0) - Number(likely[a.id] ?? 0));
+        return (ranked.find(c => c.id.startsWith('page_') && likely[c.id] !== undefined) ?? chosen).id;
       };
       // Another action at any step: the whole request goes to a one-off action, which can do the rest too.
       const other = Math.max(0, ...['page_step_1', 'page_step_2', 'page_step_3'].map(name => answers?.[name]?.choice === OTHER ? Number(answers[name].probabilities?.[OTHER] ?? answers[name].confidence ?? 1) : 0));
@@ -156,8 +164,11 @@ export class DelegationAudit {
       // runs anyway. With work asked too, that shows the part being worked on ("add a summary to the sessions part"),
       // and the request still goes to the agent: skipping it missed 1 in 7 navigation requests on the synthetic set.
       let chosen = steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id);
+      // Two steps that came to the same command through different commands for its part are one step, not a repeat.
+      const raw = ['page_step_1', 'page_step_2', 'page_step_3'].map(name => answers?.[name]?.choice);
+      chosen = chosen.filter((id, index) => !index || id !== chosen[index - 1] || raw[index] === raw[index - 1]);
       // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
-      if (steps[0] && steps[1] === steps[0] && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
+      if (steps[0] && steps[1] === steps[0] && raw[1] === raw[0] && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
       // Work unanswered counts as asked, so the words still reach the agent: keeping them from it is the costly mistake.
       judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: p('page_work', 1), other, count, unhappy: p('page_unhappy') };
       // Each step's likeliest commands, for tuning the page questions.
