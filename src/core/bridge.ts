@@ -10,8 +10,7 @@ import { DelegationAudit } from './delegation-audit.ts';
 import { askAgent, distillPrompt, parseDistilled } from './instruction-distiller.ts';
 import { JevTuner, type TuningChange } from './jev-tuner.ts';
 import { Stage } from './stage.ts';
-import { CueMatcher } from './speech-cues.ts';
-import { cueMovedNote, cueShown } from './prompts.ts';
+import { Presenter } from './presenter.ts';
 import { FastAction } from './fast-action.ts';
 import { UsageLedger } from './usage-ledger.ts';
 import { Timeline } from './timeline.ts';
@@ -75,8 +74,8 @@ export class Harness {
   ledger: UsageLedger; timeline: Timeline; outbox: Outbox; voiceSessions: VoiceSessions; endpoints: Endpoints;
   /** The page the agent last showed the operator, which the gate can move (stage.ts). */
   stage: Stage;
-  /** GPT Live's own words that move the page (speech-cues.ts). */
-  speechCues = new CueMatcher();
+  /** Shows the operator the stage in step with GPT Live: speech cues, the following ring, the gate's page requests. */
+  presenter: Presenter;
   /** One-off actions on the stage when no page command fits (fast-action.ts). */
   fastAction?: FastAction;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
@@ -98,6 +97,7 @@ export class Harness {
     if (jevKey) this.handOffAudit = new DelegationAudit({ apiKey: jevKey, file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log });
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
     this.stage = new Stage({ log: this.log, onChange: () => void this.voiceSessions?.briefStage() });
+    this.presenter = new Presenter(this);
     if (apiKey && apiKey !== 'unused') this.fastAction = new FastAction({ apiKey });
     this.sessionSwitch = new SessionSwitch(this);
     this.voiceSessions = new VoiceSessions(this, { store });
@@ -198,31 +198,6 @@ export class Harness {
         if (changes.length && ask === this.tuneAsks && !this.stopping) this.setTuning(next, changes);
       } catch (error) { this.log({ type: 'tuning.error', message: (error as Error).message }); }
     }, 1000);
-  }
-  /** GPT Live's sentence so far, and when the page last moved by its words or the gate: then it is presenting. */
-  sentence = ''; presentedAt = 0;
-  /** GPT Live said more: a cue in it moves the page now, and GPT Live quietly hears what is on screen. */
-  heardSpeech(delta: string) {
-    this.sentence = (this.sentence + delta).slice(-600);
-    // At the end of each sentence, while presenting, the ring follows what the sentence was about.
-    if (/[.!?]["”’)]?\s*$/.test(delta)) {
-      const sentence = this.sentence.trim(); this.sentence = '';
-      if (Date.now() - this.presentedAt < 60000) this.stage.follow(sentence).then(on => { if (on) this.log({ type: 'stage.followed', sentence: sentence.slice(-160), ...on }); }).catch(() => {});
-    }
-    for (const cue of this.speechCues.hear(delta)) {
-      this.presentedAt = Date.now(); this.sentence = '';
-      // Answering the operator by moving the page: their words still go to the gate and, unless the move was all they
-      // asked, to the agent, noted, so neither moves it again.
-      const history = this.mediator?.history;
-      if (history && Date.now() - history.lastInputAt < 15000) history.cueLatest(cueMovedNote);
-      const started = Date.now();
-      if (this.mediator) this.mediator.cueAt = started;
-      this.stage.run([cue.run]).then(({ onScreen }) => {
-        this.log({ type: 'stage.cue', run: cue.run, label: cue.label, ms: Date.now() - started });
-        this.publish({ type: 'stage', done: [cue.label], onScreen, cue: true });
-        this.mediator?.context.add('thinking', cueShown(onScreen), null);
-      }).catch(error => this.log({ type: 'stage.cue_failed', run: cue.run, label: cue.label, message: (error as Error).message }));
-    }
   }
   /** The operator removes an instruction Jev learned, by its ID. */
   removeInstruction(id: unknown) { return this.voiceSessions.removeLearned(id); }

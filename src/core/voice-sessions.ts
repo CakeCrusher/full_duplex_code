@@ -426,7 +426,7 @@ export class VoiceSessions {
     if (!view) return false;
     if (live.state !== 'active') return;
     const cues = Stage.cues(view), names = cues.filter(c => c.name).map(c => c.label).slice(0, 24), phrases = cues.filter(c => !c.name).map(c => c.label).slice(0, 12);
-    this.bridge.speechCues.set(cues);
+    this.bridge.presenter.speechCues.set(cues);
     // A reload (often with a new query to bust the cache) is the same page unless its parts changed.
     const others = [...this.bridge.stage.pages].filter(([tabId]) => tabId !== view.tabId).map(([, page]) => page.title);
     const signature = JSON.stringify([view.url.replace(/[?#].*$/, ''), names, phrases, others]);
@@ -454,7 +454,7 @@ export class VoiceSessions {
     if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.bridge.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
     if (event.type === 'session.started') this.begun(run);
     // GPT Live's words can move the page as it says them.
-    if (event.type === 'session.output_transcript.delta' && this.live === live) this.bridge.heardSpeech(String(event.delta ?? ''));
+    if (event.type === 'session.output_transcript.delta' && this.live === live) this.bridge.presenter.heard(String(event.delta ?? ''));
     if (event.type === 'session.delegation.created') this.activity.add('request');
     // ...and to the first words it says.
     if (event.type === 'session.output_transcript.delta' && !run.spoke) { run.spoke = true; this.bridge.log({ type: 'voice.first_words', plan: run.plan, automatic: run.automatic, firstWordsMs: Date.now() - run.requested.at }); }

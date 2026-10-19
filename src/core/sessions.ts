@@ -5,14 +5,15 @@
 // Turning one on asks it to start voice in its open page (Resume when it has a conversation);
 // turning one off ends its voice. Companions that start come first: this one goes off only once
 // another is on, so the operator is never left without a voice. Several can be on at once.
+//
+// The gate routes every request GPT Live passes on: session changes are carried out here, page requests by the
+// presenter (presenter.ts), and the rest goes to the agent, with what the page could not do noted for it.
 import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import { listCompanions, type CompanionEntry } from './companions.ts';
-import { StageError, StageNothing } from './stage.ts';
-import type { PageAction } from './fast-action.ts';
-import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, PAGE_OTHER, PAGE_UNHAPPY, PAGE_WORK, UNLISTED, type PageJudgment, type Session } from './delegation-audit.ts';
+import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, PAGE_OTHER, PAGE_UNHAPPY, PAGE_WORK, UNLISTED, type Session } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
-import { companionHandled, controllerNote, cueHandled, improvisedFailedNote, lookingNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
+import { companionHandled, controllerNote, lookingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
 
@@ -50,10 +51,10 @@ export class SessionSwitch {
     const judgment = await bridge.handOffAudit!.judge(said, sessions, 3000, page, earlier, companion), { needsAgent } = judgment, asked = judgment.sessions!;
     bridge.log({ type: 'sessions.judged', requestId, needsAgent, ...asked, companionOnly: judgment.companionOnly, page: judgment.page });
     if (asked.asked < ASKED) {
-      if (judgment.page?.steps.length) return cued ? this.cued(judgment.page, needsAgent) : this.present(judgment.page, needsAgent);
+      if (judgment.page?.steps.length) return cued ? bridge.presenter.cued(judgment.page, needsAgent) : bridge.presenter.present(judgment.page, needsAgent);
       // Something asked of the page that no command does: a one-off action (none for words the voice already moved the
       // page for). With work in the request too, the request still goes to the agent, noting the page part is done.
-      if (judgment.page && (judgment.page.other ?? 0) >= PAGE_OTHER && bridge.fastAction) return cued ? this.cued(judgment.page, needsAgent) : this.improvise(said, needsAgent, !(judgment.page.only >= PAGE_ONLY && (judgment.page.work ?? 1) < PAGE_WORK));
+      if (judgment.page && (judgment.page.other ?? 0) >= PAGE_OTHER && bridge.fastAction) return cued ? bridge.presenter.cued(judgment.page, needsAgent) : bridge.presenter.improvise(said, needsAgent, !(judgment.page.only >= PAGE_ONLY && (judgment.page.work ?? 1) < PAGE_WORK));
       // Only about how the companion behaves: Jev's tuning and instruction learning take it from here, not the harness.
       if ((judgment.companionOnly ?? 0) >= COMPANION_ONLY) return { needsAgent, handled: companionHandled(bridge.agent), companion: true };
       // Unhappy with the page, and no command answers it: the page's controls are what's lacking, so the agent improves them.
@@ -77,57 +78,6 @@ export class SessionSwitch {
     // Asked together with something for the harness: the request goes on, and GPT Live hears what changes.
     this.tell(plan);
     return { needsAgent };
-  }
-
-  /** The voice moved the page as it answered: nothing moves again ("next slide" twice is two slides), and only the page asked for, nothing goes to the agent. */
-  cued({ only, work = 0 }: PageJudgment, needsAgent: number | null): Gated {
-    if (only >= PAGE_ONLY && work < PAGE_WORK) return { needsAgent, handled: cueHandled(this.bridge.agent), page: true };
-    return { needsAgent };
-  }
-
-  /**
-   * The page commands Jev picked run on the stage at once. Only page commands: fdc handled it.
-   * With more in it: the request goes on, noting the page part is done. If the page's controls
-   * fail, the request goes to the harness with the error, to fix them.
-   */
-  async present({ steps, only, work = 0 }: PageJudgment, needsAgent: number | null): Promise<Gated> {
-    const bridge = this.bridge, { agent } = bridge;
-    try {
-      const { done, onScreen } = await bridge.stage.run(steps);
-      bridge.presentedAt = Date.now();
-      bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });
-      if (only >= PAGE_ONLY && work < PAGE_WORK) return { needsAgent, handled: pageHandled(agent, done, onScreen), page: true };
-      return { needsAgent, note: pageDoneNote(done), told: pageAlongside(agent, done, onScreen) };
-    } catch (error) {
-      // Nothing to do there: not the page's fault, but not done either, so the request goes on.
-      if (error instanceof StageNothing) return { needsAgent, note: pageNothingNote(error.failed), told: pageNothing(agent, error.failed) };
-      // The agent gets the request with the error, to fix its page; GPT Live hears how far it got.
-      const message = (error as Error).message, failed = error instanceof StageError ? [error.failed] : steps.map(id => bridge.stage.view?.commands.find(c => c.id === id) ?? { id, say: id });
-      const done = error instanceof StageError ? error.done : [];
-      if (done.length) bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen: (error as StageError).onScreen });
-      return { needsAgent, note: pageFailedNote(failed, message, bridge.stage.view), told: pageFailed(agent, message, done) };
-    }
-  }
-
-  /** No command fits: a fast model writes a one-off action for the page, which runs at once. A failure goes to the agent. */
-  async improvise(said: string, needsAgent: number | null, alongside = false): Promise<Gated> {
-    const bridge = this.bridge, { agent } = bridge, started = Date.now();
-    let steps: PageAction[] = [];
-    try {
-      const { actions } = await bridge.fastAction!.write(said, await bridge.stage.digest());
-      steps = actions;
-      // What the stage reads on screen afterwards, not the fast model's account of what it meant to do.
-      const onScreen = await bridge.stage.act(actions);
-      const done = [{ id: 'one_off', say: `A one-off action for "${said.slice(0, 80)}"` }];
-      bridge.log({ type: 'stage.improvised', said, actions, ms: Date.now() - started });
-      bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });
-      if (alongside) return { needsAgent, note: pageDoneNote(done), told: pageAlongside(agent, done, onScreen) };
-      return { needsAgent, handled: pageHandled(agent, done, onScreen), page: true };
-    } catch (error) {
-      const message = (error as Error).message;
-      bridge.log({ type: 'stage.improvise_failed', said, actions: steps, message, ms: Date.now() - started });
-      return { needsAgent, note: improvisedFailedNote(message), told: pageNothing(agent, { say: `a one-off action (${message.slice(0, 120)})` }) };
-    }
   }
 
   async carryOut(on: Session[], off: Session[]) {
