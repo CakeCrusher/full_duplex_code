@@ -10,8 +10,9 @@ const normalize = (text: string) => text.toLowerCase().replace(/[’']/g, '').re
 const LEADING = new Set(['the', 'my', 'your', 'our', 'a', 'this', 'that']);
 export const cueWords = (text: string) => { const words = normalize(text).split(' ').filter(Boolean); while (words.length > 1 && LEADING.has(words[0])) words.shift(); return words; };
 /** What GPT Live says just before a part's name to move there ("let's look at", "now to"). */
-// Spoken loosely too: "let's look the flow" (as GPT Live said after a wake), "now the flow", "next, the flow".
-const TURNS = [['look', 'at'], ['go', 'to'], ['turn', 'to'], ['move', 'to'], ['jump', 'to'], ['head', 'to'], ['on', 'to'], ['onto'], ['over', 'to'], ['back', 'to'], ['look'], ['see'], ['next'], ['now']];
+// Also "let's look the flow", as GPT Live said after a wake. Not "now" or "next": narrating the agent's work
+// ("now the options parser is fixed") would move the page.
+const TURNS = [['look', 'at'], ['go', 'to'], ['turn', 'to'], ['move', 'to'], ['jump', 'to'], ['head', 'to'], ['on', 'to'], ['onto'], ['over', 'to'], ['back', 'to'], ['look']];
 
 export class CueMatcher {
   cues: SpeechCue[] = [];
