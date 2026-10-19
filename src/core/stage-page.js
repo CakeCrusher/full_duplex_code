@@ -75,7 +75,9 @@
   };
   const go = async (el, block = 'center') => {
     if (!el) return null;
-    if (stage.at && stage.at !== el) stage.history.push(stage.at);
+    // Where the viewer was, even before any move (the paragraph at the top of the view): back returns there.
+    const from = current('paragraph');
+    if (from && from !== el) stage.history.push(from);
     stage.at = el; stage.ringOn = true;
     reveal(el, block);
     await settle();
