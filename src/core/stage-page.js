@@ -112,7 +112,12 @@
     }
     // An annotation the page's own controller already offers isn't offered twice: a near-duplicate splits the choice.
     const offered = page().map(c => c.say.toLowerCase()).join('\n');
+<<<<<<< HEAD
     for (const el of document.querySelectorAll('[data-fdc]')) if (!offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), name: el.dataset.fdc, run: () => go(el) });
+=======
+    // Only what is shown: an annotation on a hidden slide or tab is the page's own controller's to show.
+    for (const el of document.querySelectorAll('[data-fdc]')) if (visible(el) && !offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), run: () => go(el) });
+>>>>>>> presenter/controller
     return commands;
   };
   // What the page holds, section by section, for the voice to present from: each section's name and its opening words.
@@ -124,7 +129,9 @@
   const page = () => {
     const c = window.fdcController;
     if (!c?.commands) return [];
-    return c.commands().map(cmd => ({ id: `page_${slug(cmd.id)}`, say: cmd.say, run: async () => { const out = await c.run(cmd.id); return typeof out === 'string' ? out : describe(stage.at); } }));
+    // A command's name is what people call its target: given, or the quoted title in what it says ('Go to slide 3: "Margins"').
+    const quoted = say => [...String(say ?? '').matchAll(/["“]([^"”]{2,60})["”]/g)].at(-1)?.[1];
+    return c.commands().map(cmd => ({ id: `page_${slug(cmd.id)}`, say: cmd.say, name: cmd.name ?? quoted(cmd.say), run: async () => { const out = await c.run(cmd.id); return typeof out === 'string' ? out : describe(stage.at); } }));
   };
   const stage = window.__fdcStage = {
     version: VERSION, history: [], at: null, ringOn: false,
