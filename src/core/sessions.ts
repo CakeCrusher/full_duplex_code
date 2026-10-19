@@ -82,6 +82,7 @@ export class SessionSwitch {
     const bridge = this.bridge, { agent } = bridge;
     try {
       const { done, onScreen } = await bridge.stage.run(steps);
+      bridge.presentedAt = Date.now();
       bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });
       if (only >= PAGE_ONLY && work < PAGE_WORK) return { needsAgent, handled: pageHandled(agent, done, onScreen), page: true };
       return { needsAgent, note: pageDoneNote(done), told: pageAlongside(agent, done, onScreen) };
