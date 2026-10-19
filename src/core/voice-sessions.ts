@@ -412,15 +412,20 @@ export class VoiceSessions {
    * GPT Live learns the page on the stage: the words that move it as it talks, and what it says.
    * Once per page per session, again when the page or its parts change.
    */
-  async briefStage(run = this.run) {
+  async briefStage(run = this.run, attempt = 0) {
     // Whatever goes wrong here (a page's odd data, a closed session) is logged, never thrown: callers don't wait.
-    try { await this.brief(run); } catch (error) { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); }
+    try {
+      // A page that can't be read yet (a new tab's blank page while the agent's code navigates it) is read again shortly.
+      if (await this.brief(run) === false && attempt < 5) setTimeout(() => void this.briefStage(run, attempt + 1), 1500).unref();
+    } catch (error) { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); }
   }
-  async brief(run = this.run) {
+  /** Resolves to false when the page couldn't be read. */
+  async brief(run = this.run): Promise<boolean | void> {
     const live = run?.live;
     if (!run || !live || live.state !== 'active' || this.live !== live) return;
     const view = await this.bridge.stage.describe(0).catch(error => { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; });
-    if (!view || live.state !== 'active') return;
+    if (!view) return false;
+    if (live.state !== 'active') return;
     const cues = Stage.cues(view), names = cues.filter(c => c.name).map(c => c.label).slice(0, 24), phrases = cues.filter(c => !c.name).map(c => c.label).slice(0, 12);
     this.bridge.speechCues.set(cues);
     // A reload (often with a new query to bust the cache) is the same page unless its parts changed.
