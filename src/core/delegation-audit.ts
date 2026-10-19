@@ -154,7 +154,8 @@ export class DelegationAudit {
       let chosen = none ? [] : steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id);
       // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
       if (steps[0] && steps[1] === steps[0] && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
-      judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: p('page_work'), other, count };
+      // A missing answer about work counts as work: the request then reaches the agent.
+      judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: answers?.page_work ? p('page_work') : 1, other, count };
       // Each step's likeliest commands, for tuning the page questions.
       const top = (name: string) => Object.entries(answers?.[name]?.probabilities ?? {}).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 3).map(([id, v]) => `${id} ${Number(v).toFixed(2)}`).join(', ');
       this.log({ type: 'page.judged', utterance: state.utterance, count: answers?.page_steps?.choice, step_1: top('page_step_1'), step_2: top('page_step_2'), step_3: top('page_step_3'), only: p('page_only'), work: p('page_work'), other });

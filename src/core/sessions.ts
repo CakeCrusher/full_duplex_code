@@ -9,6 +9,7 @@ import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import { listCompanions, type CompanionEntry } from './companions.ts';
 import { StageError, StageNothing } from './stage.ts';
+import type { PageAction } from './fast-action.ts';
 import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, PAGE_OTHER, PAGE_WORK, UNLISTED, type PageJudgment, type Session } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
 import { companionHandled, improvisedFailedNote, lookingNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
@@ -52,7 +53,7 @@ export class SessionSwitch {
       if (judgment.page?.steps.length) return this.present(judgment.page, needsAgent);
       // Something asked of the page that no command does: a one-off action. With work in the request too,
       // the request still goes to the agent, noting the page part is done.
-      if (judgment.page && (judgment.page.other ?? 0) >= PAGE_OTHER && bridge.fastAction) return this.improvise(said, needsAgent, (judgment.page.work ?? 1) >= PAGE_WORK);
+      if (judgment.page && (judgment.page.other ?? 0) >= PAGE_OTHER && bridge.fastAction) return this.improvise(said, needsAgent, !(judgment.page.only >= PAGE_ONLY && (judgment.page.work ?? 1) < PAGE_WORK));
       // Only about how the companion behaves: Jev's tuning and instruction learning take it from here, not the harness.
       if ((judgment.companionOnly ?? 0) >= COMPANION_ONLY) return { needsAgent, handled: companionHandled(bridge.agent), companion: true };
       // For the agent: what the user was looking at when they said it ("make this bigger").
@@ -103,19 +104,20 @@ export class SessionSwitch {
   /** No command fits: a fast model writes a one-off action for the page, which runs at once. A failure goes to the agent. */
   async improvise(said: string, needsAgent: number | null, alongside = false): Promise<Gated> {
     const bridge = this.bridge, { agent } = bridge, started = Date.now();
-    let code = '';
+    let steps: PageAction[] = [];
     try {
-      code = await bridge.fastAction!.write(said, await bridge.stage.digest());
-      const onScreen = await bridge.stage.act(code);
+      const { actions, say } = await bridge.fastAction!.write(said, await bridge.stage.digest());
+      steps = actions;
+      const shown = await bridge.stage.act(actions), onScreen = say ? `${say} (${shown})` : shown;
       const done = [{ id: 'one_off', say: `A one-off action for "${said.slice(0, 80)}"` }];
-      bridge.log({ type: 'stage.improvised', said, code, ms: Date.now() - started });
+      bridge.log({ type: 'stage.improvised', said, actions, ms: Date.now() - started });
       bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });
       if (alongside) return { needsAgent, note: pageDoneNote(done), told: pageAlongside(agent, done, onScreen) };
       return { needsAgent, handled: pageHandled(agent, done, onScreen), page: true };
     } catch (error) {
       const message = (error as Error).message;
-      bridge.log({ type: 'stage.improvise_failed', said, code, message, ms: Date.now() - started });
-      return { needsAgent, note: improvisedFailedNote(message), told: pageFailed(agent, message) };
+      bridge.log({ type: 'stage.improvise_failed', said, actions: steps, message, ms: Date.now() - started });
+      return { needsAgent, note: improvisedFailedNote(message), told: pageNothing(agent, { say: `a one-off action (${message.slice(0, 120)})` }) };
     }
   }
 

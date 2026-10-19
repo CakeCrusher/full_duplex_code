@@ -58,7 +58,7 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   const audit = new DelegationAudit({ apiKey: 'k', file: '/dev/null', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers }) }; } });
   const choice = (id: string, p = .95) => ({ choice: id, probabilities: { [id]: p } });
   answers = { needs_agent: { noul: .2 }, page_steps: { choice: '2' }, page_step_1: choice('goto_options'), page_step_2: choice('show_the_recommendation'), page_step_3: choice('show_the_recommendation'), page_only: { noul: .8 } };
-  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, work: 0, other: 0, count: 2 });
+  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, work: 1, other: 0, count: 2 });
   assert.match(sent.state.page, /Briefing .*The viewer is at: section "Intro"/);
   assert.deepEqual(Object.keys(sent.questions.page_step_1.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation', 'other_action']);
   answers = { ...answers, page_steps: { choice: '0' }, page_step_2: choice('none') };
@@ -128,12 +128,14 @@ test('the mediator tells GPT Live what the page shows and sends the harness the 
   assert.match(deliveries[0].content, /Earlier speech went with earlier voice requests\. The voice tool already did the page part\.\n\nuser: Show me the options and fix the typo\.$/);
 });
 
-test('a one-off action that reaches outside the page is refused before it runs', async () => {
-  const { FastAction } = await import('../src/core/fast-action.ts');
-  const reply = (code: string) => new FastAction({ apiKey: 'k', fetch: async () => ({ ok: true, status: 200, json: async () => ({ output_text: code }) }) });
-  assert.equal(await reply('el(3).click();\nreturn "The table is open.";').write('open the table', 'digest'), 'el(3).click();\nreturn "The table is open.";');
-  assert.equal(await reply('```js\nel(1).click();\n```').write('x', 'digest'), 'el(1).click();', 'fences are dropped');
-  for (const code of ['await fetch("https://x")', 'location.href = "https://x"', 'localStorage.clear()', 'window.open("x")', 'document.cookie']) await assert.rejects(reply(code).write('x', 'digest'), /Refused an action that reaches outside the page/, code);
+test('a one-off is only the fixed page steps: anything else, code included, is refused', async () => {
+  const { FastAction, parseOneOff } = await import('../src/core/fast-action.ts');
+  const reply = (text: string) => new FastAction({ apiKey: 'k', fetch: async () => ({ ok: true, status: 200, json: async () => ({ output_text: text }) }) });
+  assert.deepEqual(await reply('{"actions":[{"do":"click","n":3},{"do":"wait","ms":9000},{"do":"find","text":"Q3"}],"say":"The Q3 row."}').write('open the table and point at Q3', 'digest'),
+    { actions: [{ do: 'click', n: 3 }, { do: 'wait', ms: 3000 }, { do: 'find', text: 'Q3' }], say: 'The Q3 row.' });
+  assert.deepEqual(parseOneOff('```json\n{"actions":[{"do":"scroll","to":"down"}]}\n```'), { actions: [{ do: 'scroll', to: 'down' }], say: '' }, 'fences are dropped');
+  for (const text of ['el(3).click();', '{"actions":[{"do":"eval","code":"fetch(1)"}]}', '{"actions":[{"do":"click","n":"3; fetch(1)"}]}', '{"actions":[]}', '{"actions":[{"do":"scroll","to":"https://x"}]}'])
+    assert.throws(() => parseOneOff(text), /fast model|Refused a page step/, text);
 });
 
 test('requests reach the agent in the order made, however long each one\'s gate takes', async t => {

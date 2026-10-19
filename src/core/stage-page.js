@@ -222,6 +222,30 @@
     show: async el => { if (!el) throw new Error('Nothing to show'); return go(el); },
     wait: ms => new Promise(resolve => setTimeout(resolve, Math.min(ms, 3000))),
     now: () => describe(stage.at?.isConnected ? stage.at : current('paragraph')),
+    /** A one-off's steps (fast-action.ts), carried out here: only these, and never a link to another site. */
+    async perform(actions) {
+      for (const a of actions) {
+        if (a.do === 'click') {
+          const el = stage.el(a.n), link = el.closest('a[href]');
+          if (link && new URL(link.href, location.href).origin !== location.origin) throw new Error(`Won't follow a link to another site (${new URL(link.href, location.href).host})`);
+          el.click(); await new Promise(r => setTimeout(r, 120));
+        } else if (a.do === 'show') await go(stage.el(a.n));
+        else if (a.do === 'find') {
+          // Every word, anywhere in it: "Q4 42%" is a row whose cells say Q4 and 42%.
+          const want = String(a.text).toLowerCase().split(/\s+/).filter(Boolean);
+          const hits = [...document.querySelectorAll('body *')].filter(el => { if (el.closest('#__fdc_ring') || !visible(el)) return false; const t = (el.textContent || '').toLowerCase(); return want.every(w => t.includes(w)); });
+          const smallest = hits.filter(el => !hits.some(other => other !== el && el.contains(other)));
+          if (!smallest.length) throw new Error(`Nothing on the page says "${a.text}"`);
+          await go(smallest.map(el => el.closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? el)[0]);
+        } else if (a.do === 'scroll') {
+          if (a.to === 'top' || a.to === 'bottom') scrollTo({ top: a.to === 'top' ? 0 : document.documentElement.scrollHeight, behavior: 'smooth' });
+          else scrollBy({ top: (a.to === 'down' ? 1 : -1) * innerHeight * 0.6, behavior: 'smooth' });
+          await new Promise(r => setTimeout(r, 450));
+        } else if (a.do === 'wait') await new Promise(r => setTimeout(r, Math.min(3000, Number(a.ms) || 0)));
+        else throw new Error(`Unknown page step ${a.do}`);
+      }
+      return stage.now();
+    },
     commands: () => [...page(), ...base()],
     describe() {
       const c = window.fdcController;
