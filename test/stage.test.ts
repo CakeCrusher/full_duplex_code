@@ -30,6 +30,13 @@ test('the stage is the tab the agent last showed with the browser tools', () => 
   assert.equal(stage.tabId, 13, 'reading a page or a file does not change the stage');
 });
 
+test('a closed stage tab ends the stage', async () => {
+  const stage = new Stage({ log: () => {}, browser: { evaluate: async () => { throw new Error('Tab 7 is not in the MCP group.'); }, close() {} } as any });
+  stage.tabId = 7;
+  await assert.rejects(stage.describe());
+  assert.equal(stage.tabId, undefined);
+});
+
 test('the stage runs the script and its commands in the stage tab, in order', async () => {
   const calls: string[] = [];
   const browser = { evaluate: async (tabId: number, expression: string) => { calls.push(`${tabId}:${expression.slice(-360)}`); return expression.endsWith('window.__fdcStage.describe()') ? { ...view, tabId: undefined } : expression.includes('"next_section"') ? { said: ['one'], error: 'Already broken' } : expression.includes('"back"') ? { said: [], nothing: true } : { said: ['one', 'two'] }; }, close() {} } as any;
