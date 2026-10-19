@@ -10,16 +10,16 @@ export type PageAction = { do: 'click'; n: number } | { do: 'show'; n: number } 
 /** The kind of thing a find is for, when the operator named it ("the Gemini row"). */
 export type FindKind = 'row' | 'item' | 'cell' | 'heading' | 'paragraph';
 const KINDS = new Set(['row', 'item', 'cell', 'heading', 'paragraph']);
-export interface OneOff { actions: PageAction[]; say: string }
+export interface OneOff { actions: PageAction[] }
 
 const INSTRUCTIONS = `You steer a web page for someone who asked for something by voice. Choose the steps that do it, from these only:
 {"do":"click","n":N} clicks interactive element [N] of the digest (a tab, button, toggle, link on this site);
 {"do":"show","n":N} scrolls element [N] into view and rings it;
-{"do":"find","text":"...","in":"row"} finds the smallest thing anywhere on the page, on screen or not, whose text contains these words (a row, a number, a phrase), scrolls to it and rings it: use the operator's own words for what to find ("Gemini", "Q3"); "in" (optional) is the kind of thing they named: "row" (a table row), "item" (a list item), "cell", "heading" or "paragraph";
+{"do":"find","text":"...","in":"row"} finds the smallest thing anywhere on the page, on screen or not, whose text contains these words (a row, a number, a phrase), scrolls to it and rings it: use the operator's own words for what to find ("Gemini", "Q3"), except when they describe a thing by where it is (the explanation under a heading, the value in a row): then find words from that thing itself, as the digest shows it, not the heading or label beside it; "in" (optional) is the kind of thing they named: "row" (a table row), "item" (a list item), "cell", "heading" or "paragraph";
 {"do":"scroll","to":"up"|"down"|"top"|"bottom"};
 {"do":"wait","ms":M} waits up to 3000 ms in all (after a click that animates).
-Use what the digest says is on screen to answer questions about it: point at the answer with find. Find already scrolls to and rings what it finds: don't add a show after it. Use show only with a number from the digest.
-Reply with JSON only: {"actions":[...],"say":"one short sentence saying what is on screen now, with the answer if one was asked"}. At most 6 steps.`;
+To answer a question about what is on screen, point at the answer with find. Find already scrolls to and rings what it finds: don't add a show after it. Use show only with a number from the digest.
+Reply with JSON only: {"actions":[...]}. At most 6 steps.`;
 
 const VERBS = new Set(['click', 'show', 'find', 'scroll', 'wait']);
 export const WAITS_MS = 3000;
@@ -38,7 +38,7 @@ export function parseOneOff(text: string): OneOff {
     if (a.do === 'scroll' && !['up', 'down', 'top', 'bottom'].includes(a.to)) throw new Error(`Refused a page step: ${JSON.stringify(a)}`);
     if (a.do === 'wait') { a.ms = Math.max(0, Math.min(waits, Number(a.ms) || 0)); waits -= a.ms; }
   }
-  return { actions, say: typeof body.say === 'string' ? body.say.slice(0, 300) : '' };
+  return { actions };
 }
 
 export class FastAction {
