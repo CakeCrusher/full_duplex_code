@@ -132,7 +132,7 @@ export class DelegationAudit {
     const response = await this.fetch(URL, { method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'jev-latest', state, questions }), signal: AbortSignal.timeout(timeoutMs) });
     if (!response.ok) throw new Error(`Jev returned HTTP ${response.status}`);
     const { answers } = await response.json();
-    const p = (name: string) => { const value = Number(answers?.[name]?.noul); return Number.isFinite(value) ? value : 0; };
+    const p = (name: string, missing = 0) => { const value = Number(answers?.[name]?.noul); return Number.isFinite(value) ? value : missing; };
     const judgment: Judgment = { needsAgent: p('needs_agent') };
     if (sessions) {
       const chosen = (choice: string) => sessions.filter((_, index) => answers?.[`session_${index + 1}`]?.choice === choice).map(s => s.id);
@@ -154,12 +154,12 @@ export class DelegationAudit {
       let chosen = none ? [] : steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id);
       // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
       if (steps[0] && steps[1] === steps[0] && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
-      // A missing answer about work counts as work: the request then reaches the agent.
+      // Work unanswered counts as asked, so the words still reach the agent: keeping them from it is the costly mistake.
       const first = Number(answers?.page_step_1?.probabilities?.[answers?.page_step_1?.choice] ?? answers?.page_step_1?.confidence ?? 0);
-      judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: answers?.page_work ? p('page_work') : 1, other, count, first };
+      judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: p('page_work', 1), other, count, first };
       // Each step's likeliest commands, for tuning the page questions.
       const top = (name: string) => Object.entries(answers?.[name]?.probabilities ?? {}).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 3).map(([id, v]) => `${id} ${Number(v).toFixed(2)}`).join(', ');
-      this.log({ type: 'page.judged', utterance: state.utterance, count: answers?.page_steps?.choice, step_1: top('page_step_1'), step_2: top('page_step_2'), step_3: top('page_step_3'), only: p('page_only'), work: p('page_work'), other });
+      this.log({ type: 'page.judged', utterance: state.utterance, count: answers?.page_steps?.choice, step_1: top('page_step_1'), step_2: top('page_step_2'), step_3: top('page_step_3'), only: p('page_only'), work: answers?.page_work?.noul ?? null, other });
     }
     return judgment;
   }

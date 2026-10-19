@@ -124,7 +124,11 @@
       commands.push({ id: `next_${kind}`, say: `Go to the next ${label}`, run: () => go(step(kind, 1), kind === 'section' || kind === 'heading' ? 'start' : 'center') });
       commands.push({ id: `previous_${kind}`, say: `Go to the previous ${label}`, run: () => go(step(kind, -1), kind === 'section' || kind === 'heading' ? 'start' : 'center') });
     }
-    commands.push({ id: 'back', say: 'Go back to wherever the viewer was just before the last move (only when they say go back without naming a part)', run: async () => { const el = stage.history.pop(); if (!el) return null; stage.at = el; stage.ringOn = true; reveal(el, 'center'); await settle(); return describe(el); } });
+    // Back: to the named place shown before the last one (a slide, a section, a part), else the element before.
+    commands.push({ id: 'back', say: 'Go back to wherever the viewer was just before the last move (only when they say go back without naming a part)', run: async () => {
+      if (stage.trail.length >= 2) { stage.trail.pop(); return stage.run(stage.trail.at(-1), { again: true }); }
+      const el = stage.history.pop(); if (!el) return null; stage.at = el; stage.ringOn = true; reveal(el, 'center'); await settle(); return describe(el);
+    } });
     const scroll = async direction => { scrollBy({ top: direction * innerHeight * 0.6, behavior: 'smooth' }); await new Promise(r => setTimeout(r, 450)); stage.at = null; return describe(current('paragraph')); };
     commands.push({ id: 'scroll_down', say: 'Scroll down a bit, when they name no unit (not paragraphs, sections or items)', run: () => scroll(1) });
     commands.push({ id: 'scroll_up', say: 'Scroll up a bit, when they name no unit (not paragraphs, sections or items)', run: () => scroll(-1) });
@@ -201,6 +205,8 @@
   const words = s => new Set((String(s).toLowerCase().match(/[a-z0-9][a-z0-9'’-]{2,}/g) ?? []).filter(w => !STOP.has(w)).map(stem));
   const inView = el => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight; };
   const followSpeech = sentence => {
+    // A highlight the viewer asked off stays off while GPT Live talks on; their next move brings it back.
+    if (stage.quiet) return null;
     const said = words(sentence);
     if (said.size < 2) return null;
     let best = null, bestScore = 0;
@@ -216,7 +222,7 @@
     return { on: text(best).slice(0, 100), score: Math.round(bestScore * 100) / 100 };
   };
   const stage = window.__fdcStage = {
-    version: VERSION, history: [], at: null, ringOn: false, indexed: [], digest, follow: followSpeech,
+    version: VERSION, history: [], trail: [], at: null, ringOn: false, quiet: false, indexed: [], digest, follow: followSpeech,
     /** For action code: element [n] of the last digest, showing an element (scroll and ring), waiting. */
     el: n => { const el = stage.indexed[n - 1]; if (!el) throw new Error(`No element [${n}]`); return el; },
     show: async el => { if (!el) throw new Error('Nothing to show'); return go(el); },
@@ -227,16 +233,30 @@
       for (const a of actions) {
         if (a.do === 'click') {
           const el = stage.el(a.n), link = el.closest('a[href]');
-          if (link && new URL(link.href, location.href).origin !== location.origin) throw new Error(`Won't follow a link to another site (${new URL(link.href, location.href).host})`);
-          el.click(); await new Promise(r => setTimeout(r, 120));
+          const away = url => new URL(url, location.href).origin !== location.origin;
+          if (link && away(link.href)) throw new Error(`Won't follow a link to another site (${new URL(link.href, location.href).host})`);
+          // A control that submits sends its form to its own address or the form's: never to another site.
+          // (Attributes, not formAction or action: those fall back to this page's address when unset.)
+          const submitter = el.closest('button:not([type=button]):not([type=reset]), input[type=submit], input[type=image]');
+          if (submitter?.form && away(submitter.getAttribute('formaction') || submitter.form.getAttribute('action') || location.href)) throw new Error("Won't send a form to another site");
+          // SVG controls have no click(): a click event does it.
+          if (typeof el.click === 'function') el.click(); else el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          await new Promise(r => setTimeout(r, 120));
         } else if (a.do === 'show') await go(stage.el(a.n));
         else if (a.do === 'find') {
-          // Every word, anywhere in it: "Q4 42%" is a row whose cells say Q4 and 42%.
-          const want = String(a.text).toLowerCase().split(/\s+/).filter(Boolean);
-          const hits = [...document.querySelectorAll('body *')].filter(el => { if (el.closest('#__fdc_ring') || !visible(el)) return false; const t = (el.textContent || '').toLowerCase(); return want.every(w => t.includes(w)); });
-          const smallest = hits.filter(el => !hits.some(other => other !== el && el.contains(other)));
-          if (!smallest.length) throw new Error(`Nothing on the page says "${a.text}"`);
-          await go(smallest.map(el => el.closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? el)[0]);
+          // Every word, anywhere in it: "Q4 42%" is a row whose cells say Q4 and 42%. The exact phrase first.
+          const want = String(a.text).toLowerCase().replace(/\s+/g, ' ').trim(), words = want.split(' ').filter(Boolean);
+          const flat = el => (el.textContent || '').toLowerCase().replace(/\s+/g, ' ');
+          const all = [...document.querySelectorAll('body *')].filter(el => { const t = flat(el); return words.every(w => t.includes(w)) && !el.closest('#__fdc_ring'); });
+          // Every ancestor of a match matches too: keep the ones with no matching child (one pass, not pairs).
+          const matched = new Set(all);
+          let hits = all.filter(el => ![...el.children].some(c => matched.has(c)) && visible(el));
+          const exact = hits.filter(el => flat(el).includes(want));
+          if (exact.length) hits = exact;
+          // Words scattered over a whole section don't count: nothing far longer than what was asked for.
+          hits = hits.filter(el => flat(el).length <= Math.max(400, want.length * 20));
+          if (!hits.length) throw new Error(`Nothing on the page says "${a.text}"`);
+          await go(hits[0].closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? hits[0]);
         } else if (a.do === 'scroll') {
           if (a.to === 'top' || a.to === 'bottom') scrollTo({ top: a.to === 'top' ? 0 : document.documentElement.scrollHeight, behavior: 'smooth' });
           else scrollBy({ top: (a.to === 'down' ? 1 : -1) * innerHeight * 0.6, behavior: 'smooth' });
@@ -258,11 +278,15 @@
         outline: c?.outline?.() ?? outline(),
       };
     },
-    async run(id) {
+    async run(id, { again = false } = {}) {
       const command = stage.commands().find(c => c.id === id);
       if (!command) throw new Error(`No command "${id}" on this page`);
+      stage.quiet = id === 'clear_highlight';
       // Nothing to do (no earlier place to go back to, no next item): null, and fdc sends the request on.
-      return (await command.run()) ?? null;
+      const out = (await command.run()) ?? null;
+      // A move to a named place joins the trail that back follows; relative moves (next, scroll) don't.
+      if (out !== null && !again && !/(^|_)(next|previous|prev|back|scroll|top|bottom|clear|here)(_|$)/.test(id) && stage.trail.at(-1) !== id) stage.trail.push(id);
+      return out;
     },
   };
 })();

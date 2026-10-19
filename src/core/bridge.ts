@@ -214,9 +214,10 @@ export class Harness {
     for (const cue of this.speechCues.hear(delta)) {
       if (Date.now() - this.aheadAt < 4000) { this.log({ type: 'stage.cue_skipped', run: cue.run, reason: 'just moved ahead' }); continue; }
       this.presentedAt = Date.now(); this.sentence = '';
-      // Answering the operator by moving the page: their words still reach the agent, noted, so it doesn't move it again.
+      // Answering the operator by moving the page: their words still go to the gate and, unless the move was all they
+      // asked, to the agent, noted, so neither moves it again.
       const history = this.mediator?.history;
-      if (history && Date.now() - history.lastInputAt < 15000) history.noteLatest(cueMovedNote);
+      if (history && Date.now() - history.lastInputAt < 15000) history.cueLatest(cueMovedNote);
       const started = Date.now();
       if (this.mediator) this.mediator.cueAt = started;
       this.stage.run([cue.run]).then(({ onScreen }) => {

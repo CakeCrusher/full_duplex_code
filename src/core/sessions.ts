@@ -12,7 +12,7 @@ import { StageError, StageNothing } from './stage.ts';
 import type { PageAction } from './fast-action.ts';
 import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, PAGE_OTHER, PAGE_WORK, UNLISTED, type PageJudgment, type Session } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
-import { companionHandled, improvisedFailedNote, lookingNote, pageAhead, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
+import { companionHandled, cueHandled, improvisedFailedNote, lookingNote, pageAhead, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
 
@@ -43,7 +43,7 @@ export class SessionSwitch {
   constructor(bridge: Harness) { this.bridge = bridge; }
 
   /** The gate: Jev's check of a request GPT Live passed on, before it reaches the harness. */
-  async gate(said: string, requestId: string, earlier?: string, companion?: string): Promise<Gated> {
+  async gate(said: string, requestId: string, earlier?: string, companion?: string, cued?: boolean): Promise<Gated> {
     const bridge = this.bridge;
     // The page on the stage is read meanwhile; without one, Jev is asked nothing about a page.
     const [companions, page] = await Promise.all([listCompanions(bridge, true, 800), bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
@@ -52,10 +52,10 @@ export class SessionSwitch {
     const judgment = await bridge.handOffAudit!.judge(said, sessions, 3000, page, earlier, companion), { needsAgent } = judgment, asked = judgment.sessions!;
     bridge.log({ type: 'sessions.judged', requestId, needsAgent, ...asked, companionOnly: judgment.companionOnly, page: judgment.page });
     if (asked.asked < ASKED) {
-      if (judgment.page?.steps.length) return this.present(judgment.page, needsAgent);
-      // Something asked of the page that no command does: a one-off action. With work in the request too,
-      // the request still goes to the agent, noting the page part is done.
-      if (judgment.page && (judgment.page.other ?? 0) >= PAGE_OTHER && bridge.fastAction) return this.improvise(said, needsAgent, !(judgment.page.only >= PAGE_ONLY && (judgment.page.work ?? 1) < PAGE_WORK));
+      if (judgment.page?.steps.length) return cued ? this.cued(judgment.page, needsAgent) : this.present(judgment.page, needsAgent);
+      // Something asked of the page that no command does: a one-off action (none for words the voice already moved the
+      // page for). With work in the request too, the request still goes to the agent, noting the page part is done.
+      if (judgment.page && (judgment.page.other ?? 0) >= PAGE_OTHER && bridge.fastAction) return cued ? this.cued(judgment.page, needsAgent) : this.improvise(said, needsAgent, !(judgment.page.only >= PAGE_ONLY && (judgment.page.work ?? 1) < PAGE_WORK));
       // Only about how the companion behaves: Jev's tuning and instruction learning take it from here, not the harness.
       if ((judgment.companionOnly ?? 0) >= COMPANION_ONLY) return { needsAgent, handled: companionHandled(bridge.agent), companion: true };
       // For the agent: what the user was looking at when they said it ("make this bigger").
@@ -76,6 +76,12 @@ export class SessionSwitch {
     if (only) return { needsAgent, handled: sessionsHandled(bridge.agent, plan) };
     // Asked together with something for the harness: the request goes on, and GPT Live hears what changes.
     this.tell(plan);
+    return { needsAgent };
+  }
+
+  /** The voice moved the page as it answered: nothing moves again ("next slide" twice is two slides), and only the page asked for, nothing goes to the agent. */
+  cued({ only, work = 0 }: PageJudgment, needsAgent: number | null): Gated {
+    if (only >= PAGE_ONLY && work < PAGE_WORK) return { needsAgent, handled: cueHandled(this.bridge.agent), page: true };
     return { needsAgent };
   }
 
