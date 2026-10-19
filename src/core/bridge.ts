@@ -215,9 +215,10 @@ export class Harness {
     for (const cue of this.speechCues.hear(delta)) void this.runCue(cue);
   }
   async runCue(cue: SpeechCue) {
-    // Listening ahead may be moving the page for the operator's words right now: the cue waits to see.
-    const looking = this.mediator?.looking;
-    if (looking) await looking.catch(() => {});
+    // Listening ahead may be moving the page for the operator's words right now, with another look queued behind it:
+    // the cue waits to see.
+    // (Only a different look is waited for again: a finished one can't hold the cue forever.)
+    for (let looking = this.mediator?.looking; looking;) { await looking.catch(() => {}); const next = this.mediator?.looking; looking = next !== looking ? next : undefined; }
     if (this.aheadMoved && Date.now() - this.aheadAt < 4000) { this.aheadMoved = false; this.log({ type: 'stage.cue_skipped', run: cue.run, reason: 'just moved ahead' }); return; }
     this.presentedAt = Date.now(); this.sentence = '';
     // Answering the operator by moving the page: their words still go to the gate and, unless the move was all they

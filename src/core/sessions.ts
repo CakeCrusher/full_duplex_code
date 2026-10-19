@@ -145,7 +145,7 @@ export class SessionSwitch {
     return p;
   }
   /** Runs what aheadJudge found, if confident; `since` is when the operator began the words it is for. */
-  async aheadAct(p: PageJudgment | undefined, since: number, said = ''): Promise<{ told: string } | undefined> {
+  async aheadAct(p: PageJudgment | undefined, since: number, said = ''): Promise<{ told: string } | { failed: string } | undefined> {
     const bridge = this.bridge;
     if (!p || p.only < AHEAD_ONLY || (p.work ?? 1) >= AHEAD_WORK) return;
     // A page command Jev is sure of, or, when none fits, a one-off action (as the gate would do once GPT Live delegated).
@@ -157,7 +157,10 @@ export class SessionSwitch {
     if (command) ({ done, onScreen } = await bridge.stage.run(p.steps));
     else {
       const started = Date.now(), { actions, say } = await bridge.fastAction!.write(said, await bridge.stage.digest());
-      const shown = await bridge.stage.act(actions);
+      let shown: string;
+      // Once steps run, a failure goes on to the agent with the error: running them again could undo a click.
+      try { shown = await bridge.stage.act(actions); }
+      catch (error) { bridge.log({ type: 'stage.improvise_failed', said, actions, message: (error as Error).message, ms: Date.now() - started, ahead: true }); return { failed: improvisedFailedNote((error as Error).message) }; }
       bridge.log({ type: 'stage.improvised', said, actions, ms: Date.now() - started, ahead: true });
       done = [{ say: `A one-off action for "${said.slice(0, 80)}"` }]; onScreen = say ? `${say} (${shown})` : shown;
     }

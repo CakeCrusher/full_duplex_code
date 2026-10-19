@@ -122,7 +122,8 @@ export class VoiceHistory {
   }
   /** Marks the operator's latest words that no request took yet: the voice moved the page for them. */
   cueLatest(note: string) {
-    const pending = this.fragments.filter(f => f.role === 'operator' && !f.sent && !f.claim && !f.note);
+    // Words a look holds are marked too: the gate then moves nothing again for them, should the look let them go.
+    const pending = this.fragments.filter(f => f.role === 'operator' && !f.sent && (!f.claim || f.claim.startsWith('ahead-')) && !f.note);
     let noted = 0;
     // The latest utterance: back to a pause of over 2 s.
     for (let i = pending.length - 1; i >= 0 && (i === pending.length - 1 || pending[i + 1].startMs - pending[i].endMs <= 2000); i--) { pending[i].cued = note; noted++; }

@@ -24,7 +24,8 @@ const AHEAD_READ_MS = 120;
 /** Listening ahead: what the operator's latest words ask of the page, then the move, once they've paused. */
 export interface Ahead {
   judge: (said: string, earlier?: string, companion?: string) => Promise<PageJudgment | undefined>;
-  act: (judgment: PageJudgment | undefined, since: number, said?: string) => Promise<{ told: string } | undefined>;
+  /** What GPT Live is told when the page moved, or, when a one-off failed partway, the note its words go on with. */
+  act: (judgment: PageJudgment | undefined, since: number, said?: string) => Promise<{ told: string } | { failed: string } | undefined>;
 }
 export interface Gated {
   needsAgent?: number | null; handled?: string;
@@ -75,7 +76,7 @@ export class Mediator {
   /** When the operator's latest words began arriving, and the last of them arrived. */
   wordsAt = 0; lastWordAt = 0;
   /** When GPT Live last said something, and whether a read of the operator's words is out (one at a time). */
-  lastOutputAt = 0; reading = false;
+  lastOutputAt = 0; reading = false; stopped = false;
   /** The operator's words of each request, for Jev to tune the companion from (jev-tuner.ts). */
   onSaid?: (said: string) => void;
   onObservation: (event: Observation) => void;
@@ -222,15 +223,21 @@ export class Mediator {
     const read = this.read?.words === words ? this.read : undefined, since = this.wordsAt, started = Date.now();
     this.read = undefined;
     this.looking = (async () => {
-      let result: { told: string } | undefined;
+      let result: { told: string } | undefined, failed: string | undefined;
       try {
         const judgment = await (read?.judging ?? this.ahead!.judge(this.clean(request.fresh), request.earlier && this.clean(request.earlier), companion && this.clean(companion)));
         // More words came while Jev read these: they may change what was asked, and the next look reads them all.
         if (this.lastWordAt > started) this.log({ type: 'stage.ahead_skipped', said: request.fresh.slice(-160), reason: 'more words came' });
-        else result = await this.ahead!.act(judgment, since, this.clean(request.fresh));
+        // The connection dropped meanwhile: its words go to the one replacing it, which moves the page if asked.
+        else if (this.stopped) this.log({ type: 'stage.ahead_skipped', said: request.fresh.slice(-160), reason: 'voice connection closed' });
+        else {
+          const outcome = await this.ahead!.act(judgment, since, this.clean(request.fresh));
+          if (outcome && 'failed' in outcome) failed = outcome.failed; else result = outcome;
+        }
       } catch (error) { this.log({ type: 'stage.ahead_error', message: (error as Error).message }); }
       // Done on the page: the words still reach the agent with the next request, noted; if voice ended meanwhile, now.
-      if (this.history.release(id, result ? handledNote('page') : undefined) && this.ended) this.handOff(this.ended);
+      // A one-off that failed partway goes on with its failure, not to the gate to try again (a click may have run).
+      if (this.history.release(id, result ? handledNote('page') : failed) && this.ended) this.handOff(this.ended);
       if (!result) return;
       this.aheadDone = { told: result.told, at: Date.now() };
       this.log({ type: 'stage.ahead', said: request.fresh.slice(-160) });
@@ -339,8 +346,13 @@ export class Mediator {
       } catch (error) { this.history.release(id); this.fault(error as Error); }
     });
   }
-  stop(reason = 'voice ended') {
-    this.ended ??= reason;
+  /**
+   * The connection is done. Only a reason ends voice for its speech (later releases then go to the agent); a dropped
+   * or moved connection's speech is carried to the one replacing it, which decides where it goes.
+   */
+  stop(reason?: string) {
+    if (reason) this.ended ??= reason;
+    this.stopped = true;
     clearTimeout(this.aheadTimer); clearTimeout(this.readTimer);
     this.feed.stop(); this.context.stop(); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();
     this.live.off('event', this.onLive); this.observer.off('observation', this.onObservation);

@@ -297,10 +297,14 @@ test('listening ahead does a one-off action when no command fits and Jev is sure
   h.fastAction = { write: async () => ({ actions: [{ do: 'find', text: 'Gemini' }], say: 'The Gemini row.' }) } as any;
   const told = await h.sessionSwitch.aheadAct({ steps: [], only: .9, work: .1, other: .85, count: 0 }, Date.now(), 'highlight the Gemini row');
   assert.deepEqual(acted, [[{ do: 'find', text: 'Gemini' }]]);
-  assert.match(told!.told, /already did it on the page \(A one-off action for "highlight the Gemini row"\)\. On screen now: The Gemini row\. \(row: Gemini\)/);
+  assert.match((told as { told: string }).told, /already did it on the page \(A one-off action for "highlight the Gemini row"\)\. On screen now: The Gemini row\. \(row: Gemini\)/);
   assert.equal(await h.sessionSwitch.aheadAct({ steps: [], only: .9, work: .1, other: .5, count: 0 }, Date.now(), 'maybe the row'), undefined, 'not sure enough: left to GPT Live');
   assert.equal(await h.sessionSwitch.aheadAct({ steps: [], only: .9, work: .4, other: .9, count: 0 }, Date.now(), 'highlight it and fix the row'), undefined, 'work in it: left to GPT Live');
   assert.equal(acted.length, 1);
+  h.stage.act = async () => { throw new Error('Inspected target crashed'); };
+  assert.deepEqual(await h.sessionSwitch.aheadAct({ steps: [], only: .9, work: .1, other: .85, count: 0 }, Date.now(), 'highlight the Gemini row'),
+    { failed: "No page command fitted this, and the voice tool's one-off action on the page failed: Inspected target crashed. Do what the user asked, and consider giving the page a command for it." },
+    'once steps ran, a failure goes on with its error rather than to the gate to try again');
 });
 
 test("a cue waits for listening ahead's move in progress, and runs only if it moved nothing", async t => {
@@ -355,6 +359,24 @@ test('a look moves nothing if more words came while Jev read; the look asked for
   finish();
   await until(() => deliveries.length);
   assert.match(deliveries[0].content, /Next slide, then fix the parser\./);
+});
+
+test('a dropped connection\'s look moves nothing and hands nothing off: its words wait to be carried', async t => {
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {}; live.append = async () => {};
+  const acted: string[] = [], deliveries: any[] = [];
+  let finish!: () => void;
+  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate: async () => ({}),
+    ahead: { judge: () => new Promise(resolve => { finish = () => resolve({ steps: ['next_slide'], only: 1, count: 1, first: 1 }); }), act: async (_j, _s, said) => { acted.push(said!); return { told: 'Moved.' }; } } });
+  t.after(() => observer.close());
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Next slide, then fix the parser.', start_ms: 0, end_ms: 900 });
+  await until(() => !!m.looking);
+  m.stop();
+  finish();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.deepEqual(acted, [], 'nothing moves for a closed connection');
+  assert.equal(deliveries.length, 0, 'nothing handed off: carrying decides');
+  assert.equal(m.history.request(Infinity)?.fresh, 'Next slide, then fix the parser.', 'the words wait, unclaimed, to be carried');
 });
 
 test("a reconnect takes the words a look holds, and the old connection's look no longer hands them off", async () => {
