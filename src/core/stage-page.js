@@ -170,10 +170,18 @@
     for (const el of [...document.querySelectorAll('[data-fdc]')].slice(0, 30)) if (visible(el) && !offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), run: () => go(el) });
     return commands;
   };
+  const LIMIT = /^(already|no (more|next|previous|earlier|later|other|slide|section|page)|nothing (to|more|left|before|after)|there (is|are) no|can'?t go|cannot go|at the (first|last|start|end|beginning|top|bottom)|(this|the) (deck|page) (has|only has))/i;
   const page = () => {
     const c = window.fdcController;
     if (!c?.commands) return [];
-    return c.commands().slice(0, 80).map(cmd => ({ id: `page_${slug(cmd.id)}`, say: cmd.say, run: async () => { const out = await c.run(cmd.id); return typeof out === 'string' ? out : describe(stage.at); } }));
+    // A command's name is what people call its target: given, or the quoted title in what it says ('Go to slide 3: "Margins"').
+    const quoted = say => [...String(say ?? '').matchAll(/["“]([^"”]{2,60})["”]/g)].at(-1)?.[1];
+    return c.commands().slice(0, 80).map(cmd => ({ id: `page_${slug(cmd.id)}`, say: cmd.say, name: cmd.name ?? quoted(cmd.say), run: async () => {
+      let out;
+      // A limit thrown ("Already on the first slide") is an answer, as the guide asks controllers to return it; not a broken control.
+      try { out = await c.run(cmd.id); } catch (error) { if (LIMIT.test(String(error?.message ?? ''))) return String(error.message); throw error; }
+      return typeof out === 'string' ? out : describe(stage.at);
+    } }));
   };
   // For a one-off action (fdc's fallback when no command fits): what the viewer can act on, numbered,
   // and what is on screen. Action code reaches element [n] as el(n).
@@ -187,6 +195,9 @@
     const seen = [...document.querySelectorAll('p, li, td, figcaption, h1, h2, h3')].filter(el => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && visible(el); }).map(text).join(' ').slice(0, 1500);
     return `Page "${document.title}" (${location.href}), scrolled ${Math.round(scrollY)} of ${Math.max(0, document.documentElement.scrollHeight - innerHeight)} px.\nWhere: ${window.fdcController?.where?.() ?? describe(current('paragraph'))}\nHeadings:\n${headings.join('\n')}\nInteractive elements:\n${lines.join('\n')}\nOn screen now: ${seen}`;
   };
+  const RELATIVE = /(^|_)(next|previous|prev|scroll|top|bottom|clear|here)(_|$)/;
+  // The named place a page's answer is about: 'Slide 2 of 6: "Margins"' is where the command named "Margins" goes.
+  const landed = text => { const title = /["“]([^"”]{2,80})["”]/.exec(String(text ?? ''))?.[1]; return title ? stage.commands().find(c => c.name === title && !RELATIVE.test(c.id))?.id : undefined; };
   const stage = window.__fdcStage = {
     version: VERSION, history: [], trail: [], last: {}, at: null, ringOn: false, indexed: [], digest,
     /** For action code: element [n] of the last digest, showing an element (scroll and ring), waiting. */
@@ -246,13 +257,17 @@
     async run(id, { again = false } = {}) {
       const command = stage.commands().find(c => c.id === id);
       if (!command) throw new Error(`No command "${id}" on this page`);
+      // Where the viewer starts, when the page names it, is the first place back can return to.
+      if (!stage.trail.length && id !== 'back') { const start = landed(window.fdcController?.where?.()); if (start) stage.trail.push(start); }
       // Nothing to do (no earlier place to go back to, no next item): null, and fdc sends the request on.
       const steps = stage.history.length, out = (await command.run()) ?? null;
-      // A move to a named place joins the trail that back follows; a relative move (next, scroll) is only remembered
-      // as the last move, with whether it stepped from an element back can return to.
+      // A move to a named place joins the trail that back follows, and so does a relative move ("next slide") that
+      // lands on one the page names; any other relative move is only remembered as the last move, with whether it
+      // stepped from an element back can return to.
       if (out !== null && !again && id !== 'back') {
-        if (/(^|_)(next|previous|prev|scroll|top|bottom|clear|here)(_|$)/.test(id)) stage.last = { relative: true, stepped: stage.history.length > steps };
-        else { stage.last = {}; if (stage.trail.at(-1) !== id) stage.trail.push(id); }
+        const place = RELATIVE.test(id) ? landed(out) : id;
+        if (place) { stage.last = {}; if (stage.trail.at(-1) !== place) stage.trail.push(place); }
+        else stage.last = { relative: true, stepped: stage.history.length > steps };
       }
       return out;
     },
