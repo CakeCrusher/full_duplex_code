@@ -14,7 +14,7 @@ import type { StageView } from './stage.ts';
 type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
 
 const URL = 'https://api.typesafe.ai/v1/systemone';
-const SETTING = 'An operator talks by voice (transcribed, may be imperfect) to a voice companion that relays a coding agent\'s work. The companion can answer from what the agent already said, or pass the words on to the agent.';
+const SETTING = 'An operator talks by voice (transcribed, may be imperfect) to a voice companion that presents a coding agent\'s work while the agent produces it. The companion can answer from what the agent already said, or pass the words on. You are the voice tool between the companion and the agent: what the voice tool can do itself (the page beside the conversation, the companion\'s own behavior, voice sessions) is done at once without the agent; everything else must reach the agent.';
 const QUESTIONS = {
   needs_agent: {
     type: 'noul',
