@@ -103,7 +103,7 @@ test('the mediator tells GPT Live what the page shows and sends the harness the 
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
   const appends: [string, string, string | null][] = []; live.append = async (kind: string, content: string, delegationId: string | null) => { appends.push([kind, content, delegationId]); };
   const deliveries: any[] = [];
-  const screen = async (): Promise<Gated> => ({ needsAgent: .6, note: 'The voice tool already did the page part.', told: 'On screen now: Options.' });
+  const gate = async (): Promise<Gated> => ({ needsAgent: .6, note: 'The voice tool already did the page part.', told: 'On screen now: Options.' });
   const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Show me the options and fix the typo.', start_ms: 0, end_ms: 900 });
