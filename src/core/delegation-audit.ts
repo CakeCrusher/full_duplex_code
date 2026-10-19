@@ -43,9 +43,11 @@ export const ASKED = .7, ONLY = .7, UNLISTED = .7;
 // Six plain preferences ("stop waking up for every little thing", "don't pause so quickly") scored .85-.93.
 export const COMPANION_ONLY = .85;
 // A page command is run when Jev's choice of it is at least this likely. A request is kept from the
-// harness as page-only from PAGE_ONLY: on 9 trial requests (Oct 19), page-only ones scored .70-.92,
-// ones with work in them .02-.09.
-export const PAGE_STEP = .5, PAGE_ONLY = .5;
+// harness as page-only from PAGE_ONLY: on trial requests (Oct 19), page-only ones scored .55-.92,
+// ones with work in them .02-.24; misjudged page-only words still reach the agent with the next request.
+export const PAGE_STEP = .5, PAGE_ONLY = .4;
+// Words before the utterance that no request carried yet still reach the agent later; they are context here.
+const EARLIER_SETTING = ' `earlier` is what the operator said before `utterance` that has not reached the coding agent yet (the companion answered it, or `utterance` finishes it); it will reach the agent later. Use it only as context and judge `utterance`.';
 const PAGE_SETTING = ' A page is open in the browser beside the conversation (`page`). The voice tool can move it, show and highlight its parts with the listed page commands, without the coding agent.';
 // Each step names a whole command, so Jev's independent answers never have to agree on its arguments.
 const pageQuestions = (page: StageView) => {
@@ -111,8 +113,9 @@ export class DelegationAudit {
     this.apiKey = apiKey; this.file = file; this.log = log; this.fetch = fetch;
   }
   /** Jev's probability that the operator's words must reach the agent, and with running sessions, its reading of them for session changes. */
-  async judge(utterance: string, sessions?: Session[], timeoutMs = 5000, page?: StageView): Promise<Judgment> {
-    const state: Record<string, string> = { setting: SETTING + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : ''), utterance: utterance.replace(/\s+/g, ' ').trim().slice(-600) };
+  async judge(utterance: string, sessions?: Session[], timeoutMs = 5000, page?: StageView, earlier?: string): Promise<Judgment> {
+    const state: Record<string, string> = { setting: SETTING + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : '') + (earlier ? EARLIER_SETTING : ''), utterance: utterance.replace(/\s+/g, ' ').trim().slice(-600) };
+    if (earlier) state.earlier = earlier.replace(/\s+/g, ' ').trim().slice(-400);
     if (sessions) state.sessions = sessionLines(sessions) || '(none)';
     if (page) state.page = pageLine(page);
     const questions = { ...QUESTIONS, ...sessions ? sessionQuestions(sessions) : {}, ...page ? pageQuestions(page) : {} };
@@ -138,6 +141,9 @@ export class DelegationAudit {
       // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
       if (steps[0] && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
       judgment.page = { steps: chosen, only: p('page_only'), count };
+      // Each step's likeliest commands, for tuning the page questions.
+      const top = (name: string) => Object.entries(answers?.[name]?.probabilities ?? {}).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 3).map(([id, v]) => `${id} ${Number(v).toFixed(2)}`).join(', ');
+      this.log({ type: 'page.judged', utterance: state.utterance, count: answers?.page_steps?.choice, step_1: top('page_step_1'), step_2: top('page_step_2'), step_3: top('page_step_3'), only: p('page_only') });
     }
     return judgment;
   }

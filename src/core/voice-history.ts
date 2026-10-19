@@ -18,8 +18,10 @@ export interface SpokenRequest {
   seqs: number[];
   /** Why some of its speech is going again (see TranscriptFragment.note). */
   notes?: string[];
-  /** The operator's words no earlier request took, for judging what is new. */
+  /** The operator's latest utterance among words no earlier request took: what this request is for. */
   fresh: string;
+  /** Their words before it that no earlier request took: GPT Live answered them, or they began what this finishes. */
+  earlier?: string;
 }
 // Any sample louder than this is sound; the page's gate sends exact silence, which echoes back at about 1.
 const SOUND_PEAK = 64;
@@ -100,8 +102,9 @@ export class VoiceHistory {
     const spoken = utterances(all.filter(f => !unheard.includes(f)));
     if (!spoken.some(u => u.role === 'operator')) return null;
     const notes = [...new Set(all.map(f => f.note).filter(note => note !== undefined))];
-    const fresh = all.filter(f => f.role === 'operator' && !f.note && !unheard.includes(f)).map(f => f.text).join('').replace(/\s+/g, ' ').trim();
-    return { utterances: spoken, through: all.at(-1)!.seq, seqs: all.map(f => f.seq), fresh, ...notes.length ? { notes } : {}, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
+    const said = utterances(all.filter(f => !f.note && !unheard.includes(f))).filter(u => u.role === 'operator').map(u => u.text.replace(/\s+/g, ' ').trim());
+    const fresh = said.at(-1) ?? '', earlier = said.slice(0, -1).join(' ');
+    return { utterances: spoken, through: all.at(-1)!.seq, seqs: all.map(f => f.seq), fresh, ...earlier ? { earlier } : {}, ...notes.length ? { notes } : {}, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
   }
   /** The request is on its way: no other request takes its speech meanwhile. */
   claim(request: SpokenRequest, id: string) { for (const seq of request.seqs) this.fragments[seq].claim = id; }

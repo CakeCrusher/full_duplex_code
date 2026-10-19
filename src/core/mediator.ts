@@ -50,14 +50,14 @@ export class Mediator {
   /** Records each hand-off decision of GPT Live with Jev's judgment of it, when Jev is configured. Sends nothing. */
   audit?: DelegationAudit;
   /** Checks a request GPT Live passed on before it reaches the harness (session changes), when Jev is configured. */
-  screen?: (said: string, requestId: string) => Promise<Screened>;
+  screen?: (said: string, requestId: string, earlier?: string) => Promise<Screened>;
   /** The operator's words of each request, for Jev to tune the companion from (jev-tuner.ts). */
   onSaid?: (said: string) => void;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
   constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, audit, screen, onSaid, firstRecordId = 0 }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
-    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; audit?: DelegationAudit; screen?: (said: string, requestId: string) => Promise<Screened>; onSaid?: (said: string) => void;
+    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; audit?: DelegationAudit; screen?: (said: string, requestId: string, earlier?: string) => Promise<Screened>; onSaid?: (said: string) => void;
     /** Context records are numbered after this one: a fork's context already holds its source's. */
     firstRecordId?: number;
   }) {
@@ -156,7 +156,7 @@ export class Mediator {
   async screened(id: string, request: SpokenRequest, content: string, delegationId: string) {
     const said = this.clean(request.fresh);
     let screened: Screened | undefined;
-    try { screened = await this.screen!(said, id); } catch (error) { this.log({ type: 'screen.error', message: (error as Error).message }); }
+    try { screened = await this.screen!(said, id, request.earlier && this.clean(request.earlier)); } catch (error) { this.log({ type: 'screen.error', message: (error as Error).message }); }
     if (screened?.told && this.live.state === 'active') this.context.add('thinking', screened.told, delegationId);
     if (screened?.handled === undefined) {
       const noted = screened?.note ? this.clean(voiceRequest(request.utterances, [...request.notes ?? [], screened.note])) : content;

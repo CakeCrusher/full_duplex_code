@@ -88,20 +88,26 @@
       commands.push({ id: `next_${kind}`, say: `Go to the next ${label}`, run: () => go(step(kind, 1), kind === 'section' || kind === 'heading' ? 'start' : 'center') });
       commands.push({ id: `previous_${kind}`, say: `Go to the previous ${label}`, run: () => go(step(kind, -1), kind === 'section' || kind === 'heading' ? 'start' : 'center') });
     }
-    commands.push({ id: 'back', say: 'Go back to where the viewer was before the last move', run: async () => { const el = stage.history.pop(); if (!el) return null; stage.at = el; stage.ringOn = true; reveal(el, 'center'); await settle(); return describe(el); } });
+    commands.push({ id: 'back', say: 'Go back to wherever the viewer was just before the last move (only when they say go back without naming a part)', run: async () => { const el = stage.history.pop(); if (!el) return null; stage.at = el; stage.ringOn = true; reveal(el, 'center'); await settle(); return describe(el); } });
     commands.push({ id: 'top', say: 'Go to the top of the page', run: () => go(units('heading')[0] ?? document.body, 'start') });
     commands.push({ id: 'highlight_here', say: 'Highlight what is on screen now', run: async () => { const el = current('paragraph'); stage.at = el; stage.ringOn = true; place(); return describe(el); } });
     commands.push({ id: 'clear_highlight', say: 'Remove the highlight', run: async () => { stage.ringOn = false; place(); return 'The highlight is off.'; } });
     const used = new Set(commands.map(c => c.id));
     const unique = id => { let out = id, n = 2; while (used.has(out)) out = `${id}_${n++}`; used.add(out); return out; };
-    // A section's own name (its id, or a short label above the heading) helps match what people call it.
-    const named = h => {
+    // A section's own short name (its id, or a short label above the heading) comes first: it is what
+    // people call it. Headings that repeat ("Landed" in several sections) are left to next/previous.
+    const short = h => {
       const section = h.closest('section[id], article[id]'), id = h.id || (section?.querySelector(UNITS.heading) === h ? section.id : '');
-      const label = h.previousElementSibling && text(h.previousElementSibling).length < 40 ? text(h.previousElementSibling) : '';
-      const extra = [/^[a-z][\w-]{2,30}$/i.test(id) && !/^h\d|^section\d/i.test(id) ? id.replace(/[-_]/g, ' ') : '', label].filter(Boolean).join(', ');
-      return extra ? ` (${extra})` : '';
+      const label = h.previousElementSibling && text(h.previousElementSibling).length < 40 ? text(h.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') : '';
+      return [/^[a-z][\w-]{2,30}$/i.test(id) && !/^h\d|^section\d/i.test(id) ? id.replace(/[-_]/g, ' ') : '', label.toLowerCase()].filter(Boolean)[0] ?? '';
     };
-    for (const h of units('heading')) commands.push({ id: unique(`goto_${slug(text(h))}`), say: `Go to the ${level(h) <= sectionLevel() ? 'section' : 'heading'} "${text(h).slice(0, 90)}"${named(h)}`, run: () => go(h, 'start') });
+    const seen = {};
+    for (const h of units('heading')) seen[text(h).toLowerCase()] = (seen[text(h).toLowerCase()] ?? 0) + 1;
+    for (const h of units('heading')) {
+      const title = text(h).slice(0, 90), name = short(h), top = level(h) <= sectionLevel();
+      if (!name && seen[title.toLowerCase()] > 1) continue;
+      commands.push({ id: unique(`goto_${slug(name || title)}`), say: name ? `Go to the ${top ? 'section' : 'part'} "${name}" (headed "${title}")` : `Go to the ${top ? 'section' : 'heading'} "${title}"`, run: () => go(h, 'start') });
+    }
     for (const el of document.querySelectorAll('[data-fdc]')) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, run: () => go(el) });
     return commands;
   };
