@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { Observation } from './adapter.ts';
 import { Browser } from './browser.ts';
+import type { PageAction } from './fast-action.ts';
 
 const RAW = fs.readFileSync(new URL('./stage-page.js', import.meta.url), 'utf8');
 // A page keeps the script it was given until the script changes: its version is its content's hash.
@@ -82,13 +83,13 @@ export class Stage {
     if (!this.tabId) throw new Error('No page is on the stage');
     return this.browser.evaluate<string>(this.tabId, `${SCRIPT}\n;window.__fdcStage.digest()`, 5000);
   }
-  /** Runs one-off action code (fast-action.ts) in the page, with el(n), show(el) and wait(ms); resolves to what is on screen. */
-  async act(code: string): Promise<string> {
+  /** Carries out a one-off's steps (fast-action.ts) in the page; resolves to what is on screen. */
+  async act(actions: PageAction[]): Promise<string> {
     if (!this.tabId) throw new Error('No page is on the stage');
     const started = Date.now();
-    const out = await this.browser.evaluate<string>(this.tabId, `${SCRIPT}\n;(async () => { const { el, show, wait } = window.__fdcStage; const out = await (async () => {\n${code}\n})(); return typeof out === 'string' && out ? out : window.__fdcStage.now(); })()`, 15000);
+    const out = await this.browser.evaluate<string>(this.tabId, `${SCRIPT}\n;window.__fdcStage.perform(${JSON.stringify(actions)})`, 15000);
     this.viewAt = 0;
-    this.log({ type: 'stage.acted', tabId: this.tabId, code, ms: Date.now() - started });
+    this.log({ type: 'stage.acted', tabId: this.tabId, actions, ms: Date.now() - started });
     return out;
   }
   close() { this.browser.close(); }
