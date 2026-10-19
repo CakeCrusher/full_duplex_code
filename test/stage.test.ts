@@ -311,7 +311,7 @@ test("a cue waits for listening ahead's move in progress, and runs only if it mo
   assert.deepEqual(runs, [['goto_options']], 'it moved nothing: the cue runs');
 });
 
-test('a look asked for while another works waits its turn, Jev reads one at a time, and words a look holds when voice ends still reach the agent', async t => {
+test('a look moves nothing if more words came while Jev read; the look asked for meanwhile waits its turn; Jev reads one at a time; words a look holds when voice ends still reach the agent', async t => {
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {}; live.append = async () => {};
   const asked: string[] = [], acted: string[] = [], deliveries: any[] = [];
@@ -326,8 +326,9 @@ test('a look asked for while another works waits its turn, Jev reads one at a ti
   await new Promise(resolve => setTimeout(resolve, 500));
   assert.deepEqual(asked, ['Go to the.'], 'one read at a time');
   release();
-  await until(() => acted.length === 2);
-  assert.deepEqual(acted, ['Go to the.', 'Go to the. Risks, then fix the parser.'], 'the look asked for meanwhile ran after');
+  await until(() => acted.length === 1);
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.deepEqual(acted, ['Go to the. Risks, then fix the parser.'], "more words came while the first look's were read: it moved nothing, and the look asked for meanwhile read them all");
   // Voice ends while a look holds the words: they go to the agent once it's done.
   let finish!: () => void;
   const m2 = new Mediator({ live: Object.assign(new EventEmitter(), { state: 'active', id: 'live_2', close() {}, append: async () => {} }) as any, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate: async () => ({}),
