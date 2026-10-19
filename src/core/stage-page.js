@@ -174,8 +174,28 @@
     const quoted = say => [...String(say ?? '').matchAll(/["“]([^"”]{2,60})["”]/g)].at(-1)?.[1];
     return c.commands().slice(0, 80).map(cmd => ({ id: `page_${slug(cmd.id)}`, say: cmd.say, name: cmd.name ?? quoted(cmd.say), run: async () => { const out = await c.run(cmd.id); return typeof out === 'string' ? out : describe(stage.at); } }));
   };
+  // Following speech: the paragraph, item or row on screen that shares the most words with GPT Live's latest sentence.
+  const STOP = new Set('the and for with that this you are was its from they their what when which into about there here have has not but all can will one our your let lets look now just then than also each more most very like some any out who how why where were been being these those them his her she him had would could should does did done get got make made over only both such same other'.split(' '));
+  const stem = w => w.replace(/['’]s$/, '').replace(/(ings|ing|ed|es|s)$/, '');
+  const words = s => new Set((String(s).toLowerCase().match(/[a-z0-9][a-z0-9'’-]{2,}/g) ?? []).filter(w => !STOP.has(w)).map(stem));
+  const inView = el => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight; };
+  const followSpeech = sentence => {
+    const said = words(sentence);
+    if (said.size < 2) return null;
+    let best = null, bestScore = 0;
+    for (const el of document.querySelectorAll('p, li, tr, dd, blockquote, figcaption, h2, h3, h4')) {
+      if (!visible(el) || !inView(el) || el.closest('#__fdc_ring')) continue;
+      const own = words(text(el)); if (own.size < 2) continue;
+      let shared = 0; for (const w of said) if (own.has(w)) shared++;
+      const score = shared / Math.min(said.size, own.size);
+      if (shared >= 2 && score > bestScore) { best = el; bestScore = score; }
+    }
+    if (!best || bestScore < 0.3) return null;
+    if (best !== stage.at) { stage.at = best; stage.ringOn = true; best.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); place(); }
+    return { on: text(best).slice(0, 100), score: Math.round(bestScore * 100) / 100 };
+  };
   const stage = window.__fdcStage = {
-    version: VERSION, history: [], at: null, ringOn: false,
+    version: VERSION, history: [], at: null, ringOn: false, follow: followSpeech,
     commands: () => [...page(), ...base()],
     describe() {
       const c = window.fdcController;
