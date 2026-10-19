@@ -70,7 +70,7 @@ export class Mediator {
   gate?: (said: string, requestId: string, earlier?: string, companion?: string, cued?: boolean) => Promise<Gated>;
   /** Listening ahead (sessions.ts aheadJudge, aheadAct): the page moves as the operator pauses, before any delegation. */
   ahead?: Ahead;
-  aheadTimer?: NodeJS.Timeout; looking?: Promise<void>; aheadDone?: { told: string; at: number };
+  aheadTimer?: NodeJS.Timeout; looking?: Promise<void>; aheadDone?: { told: string; at: number; seqs: number[] };
   /** Words Jev began reading before the operator had clearly paused (by their fragments), the words looked at last, and when the microphone last heard them. */
   read?: { words: string; judging: Promise<PageJudgment | undefined> }; readTimer?: NodeJS.Timeout; looked?: string; micAt = 0; levelsAt = 0;
   /** When the operator's latest words began arriving, and the last of them arrived. */
@@ -239,7 +239,7 @@ export class Mediator {
       // A one-off that failed partway goes on with its failure, not to the gate to try again (a click may have run).
       if (this.history.release(id, result ? handledNote('page') : failed) && this.ended) this.handOff(this.ended);
       if (!result) return;
-      this.aheadDone = { told: result.told, at: Date.now() };
+      this.aheadDone = { told: result.told, at: Date.now(), seqs };
       this.log({ type: 'stage.ahead', said: request.fresh.slice(-160) });
       if (this.live.state === 'active') this.context.add('thinking', result.told, null);
     })();
@@ -251,7 +251,10 @@ export class Mediator {
     if (this.looking) { void this.looking.then(() => this.delegate(delegationId, offsetMs)); return; }
     const request = this.history.request(offsetMs);
     // GPT Live delegating what listening ahead already did on the page: it hears so, and nothing more goes now.
-    if ((!request || !request.fresh) && this.aheadDone && Date.now() - this.aheadDone.at < 8000) {
+    // So is one whose only new words are older than what listening ahead did ("walk me through it", which GPT Live
+    // answered itself, before "go back to the second slide"): judging those would move the page for stale words.
+    const stale = !!this.aheadDone && !!request?.freshSeqs?.length && Math.max(...request.freshSeqs) < Math.min(...this.aheadDone.seqs);
+    if ((!request || !request.fresh || stale) && this.aheadDone && Date.now() - this.aheadDone.at < 8000) {
       this.log({ type: 'bridge.delegation_ahead', delegationId });
       this.context.add('thinking', this.aheadDone.told, delegationId); this.aheadDone = undefined;
       return;

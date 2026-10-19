@@ -379,6 +379,27 @@ test('a dropped connection\'s look moves nothing and hands nothing off: its word
   assert.equal(m.history.request(Infinity)?.fresh, 'Next slide, then fix the parser.', 'the words wait, unclaimed, to be carried');
 });
 
+test("a delegation after listening ahead moved the page doesn't judge older words GPT Live answered itself", async t => {
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
+  const appends: [string, string, string | null][] = []; live.append = async (kind: string, content: string, id: string | null) => { appends.push([kind, content, id]); };
+  const deliveries: any[] = [], gated: string[] = [];
+  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null,
+    gate: async said => { gated.push(said); return { needsAgent: .5, handled: 'Moved to slide 1.', page: true }; },
+    ahead: { judge: async said => /second slide/.test(said) ? { steps: ['page_slide_2'], only: .95, work: .05, count: 1, first: .95 } : undefined, act: async judgment => judgment ? { told: 'Moved: slide 2.' } : undefined } });
+  t.after(() => { m.stop(); observer.close(); });
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Walk me through it briefly.', start_ms: 0, end_ms: 1200 });
+  live.emit('event', { type: 'session.output_transcript.delta', delta: 'The first slide introduces the expediter.', start_ms: 1500, end_ms: 4000 });
+  await new Promise(resolve => setTimeout(resolve, 500));
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Go back to the second slide.', start_ms: 9000, end_ms: 10500 });
+  await until(() => appends.some(([, text, id]) => text === 'Moved: slide 2.' && id === null));
+  m.delegate('d1', 10500);
+  await until(() => appends.some(([, text, id]) => text === 'Moved: slide 2.' && id === 'd1'));
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.deepEqual(gated, [], 'the gate never judged "walk me through it" (it would have gone to slide 1)');
+  assert.equal(deliveries.length, 0, 'nothing more goes now; the words wait for the next request');
+});
+
 test("a reconnect takes the words a look holds, and the old connection's look no longer hands them off", async () => {
   const { VoiceHistory } = await import('../src/core/voice-history.ts');
   const old = new VoiceHistory(), fresh = new VoiceHistory();
