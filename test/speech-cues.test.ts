@@ -61,6 +61,9 @@ test("the operator's latest words that the voice answered by moving the page are
   const next = h.request(Infinity)!;
   assert.equal(next.fresh, 'Highlight your recommendation.'); assert.equal(next.cued, undefined, 'words a cue answered earlier leave newer words to the gate');
   assert.deepEqual(next.notes, ['moved'], 'though the note still goes with the earlier words');
+  assert.equal(next.earlier, undefined, "nor are they context for what's asked now");
+  say('Then the risks.', 20000, 20800);
+  assert.equal(h.request(Infinity)!.earlier, 'Highlight your recommendation.', 'words no cue answered still are');
 });
 
 test('the gate moves nothing again for words the voice moved the page for; only the page asked for, nothing goes to the agent', async t => {
