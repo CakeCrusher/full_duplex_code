@@ -57,7 +57,7 @@ function handle(event: BridgeEvent) {
   // Sessions turned on or off by voice: what fdc is doing, and another companion asking this one to start voice.
   if (event.type === 'sessions' && !replaying) notice(event.text);
   // The page beside the conversation moved without the agent: by the voice's own words, or by the voice tool.
-  if (event.type === 'stage' && !replaying && event.done?.length) notice(`${event.cue ? 'The page followed the voice' : 'The voice tool moved the page'}: ${event.done.join(', then ').replace(/\s*\([^()]*\)\s*$/, '')}.`);
+  if (event.type === 'stage' && !replaying && event.done?.length) notice(`${event.cue ? 'The page followed the voice' : 'The voice tool moved the page'}: ${event.done.map((step: string) => step.replace(/\s*\([^()]*\)\s*$/, '')).join(', then ')}.`);
   if (event.type === 'voice_on' && !active && !starting && !standby) { notice(`Voice turned on from ${event.from}.`); start(resumable(currentStatus) ? 'resume' : 'fresh', false, true); }
   if (event.type === 'voice_wake') wake();
   if (event.type === 'history') {
