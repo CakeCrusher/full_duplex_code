@@ -16,6 +16,8 @@ import { cueNoDelegation, handledNote, nothingToSend, queueFailed, sessionEndReq
 // GPT Live's transcript holds back the operator's last word until it answers (it came 680 ms after the word before
 // it), so with the microphone's levels, its answer says their turn is over, and quiet alone takes longer.
 const AHEAD_PAUSE_MS = 350, AHEAD_QUIET_MS = 600, AHEAD_QUIET_LEVELS_MS = 1200;
+/** After GPT Live starts its answer, how long no new word of the operator's must follow before the page moves. */
+const AHEAD_SETTLE_MS = 300;
 /** How soon after the operator's latest words, with their microphone quiet, Jev starts reading them (nothing moves yet). */
 const AHEAD_READ_MS = 120;
 
@@ -72,6 +74,8 @@ export class Mediator {
   read?: { words: string; judging: Promise<PageJudgment | undefined> }; readTimer?: NodeJS.Timeout; looked?: string; micAt = 0; levelsAt = 0;
   /** When the operator's latest words began arriving, and the last of them arrived. */
   wordsAt = 0; lastWordAt = 0;
+  /** When GPT Live last said something, and whether a read of the operator's words is out (one at a time). */
+  lastOutputAt = 0; reading = false;
   /** The operator's words of each request, for Jev to tune the companion from (jev-tuner.ts). */
   onSaid?: (said: string) => void;
   onObservation: (event: Observation) => void;
@@ -123,11 +127,17 @@ export class Mediator {
         this.readTimer = setTimeout(() => this.readAhead(), AHEAD_READ_MS);
       }
     }
-    // GPT Live answering is the surest sign the operator's turn is over (it starts as their last word is transcribed):
-    // with their microphone quiet, look ahead at once rather than wait out the pause.
-    if (event.type === 'session.output_transcript.delta' && this.aheadTimer) {
-      const now = Date.now();
-      if (now - this.levelsAt < 2000 && now - this.micAt >= 150) this.lookNow();
+    // GPT Live starting its answer is the surest sign the operator's turn is over (it starts as their last word is
+    // transcribed), when it is the start of its turn: not a murmur while they pause, nor talk it was already giving
+    // (replaying an 8-hour session, 38 of 84 answers by any word were that). With their microphone quiet, the page
+    // moves once no word of theirs has followed for a moment.
+    if (event.type === 'session.output_transcript.delta') {
+      const now = Date.now(), starts = now - this.lastOutputAt >= 1000;
+      this.lastOutputAt = now;
+      if (starts && this.aheadTimer && now - this.levelsAt < 2000 && now - this.micAt >= 150) {
+        clearTimeout(this.aheadTimer);
+        this.aheadTimer = setTimeout(() => this.lookNow(), Math.max(0, AHEAD_SETTLE_MS - (now - this.lastWordAt)));
+      }
     }
     if (event.type === 'session.input_audio.append' && typeof event.audio === 'string') this.history.hearAudio(event);
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
@@ -182,16 +192,22 @@ export class Mediator {
   /** Starts Jev reading the operator's latest words, unless their microphone says they're still talking. */
   readAhead() {
     const now = Date.now();
-    if (this.looking || this.live.state !== 'active' || (now - this.levelsAt < 2000 && now - this.micAt < 200)) return;
+    if (this.looking || this.reading || this.live.state !== 'active' || (now - this.levelsAt < 2000 && now - this.micAt < 200)) return;
     const request = this.history.request(Infinity);
     const words = request?.freshSeqs?.join(',');
     if (!request?.fresh || !words || request.cued || request.fresh.split(' ').length > 30 || this.read?.words === words) return;
     const lastOperator = request.utterances.findLastIndex(u => u.role === 'operator'), companion = request.utterances.slice(0, lastOperator).findLast(u => u.role === 'intermediary')?.text;
-    this.read = { words, judging: this.ahead!.judge(this.clean(request.fresh), request.earlier && this.clean(request.earlier), companion && this.clean(companion)).catch(error => { this.log({ type: 'stage.ahead_error', message: (error as Error).message }); return undefined; }) };
+    this.reading = true;
+    const judging = this.ahead!.judge(this.clean(request.fresh), request.earlier && this.clean(request.earlier), companion && this.clean(companion)).catch(error => { this.log({ type: 'stage.ahead_error', message: (error as Error).message }); return undefined; });
+    this.read = { words, judging };
+    // One read at a time: once it's back, words that came meanwhile are read in turn.
+    void judging.finally(() => { this.reading = false; if (this.read?.words === words && this.history.request(Infinity)?.freshSeqs?.join(',') !== words) this.readAhead(); });
   }
   /** The operator paused: if their latest words only ask for the page, it moves now (sessions.ts aheadAct). */
   async lookAhead() {
-    if (this.looking || this.live.state !== 'active') return;
+    // A look asked for while another works waits its turn (it may be for words that came since).
+    if (this.looking) { void this.looking.then(() => this.lookAhead()); return; }
+    if (this.live.state !== 'active') return;
     const request = this.history.request(Infinity);
     // Words GPT Live already moved the page for (a cue) are the gate's to judge, without moving it again.
     // Words looked at once aren't looked at again (GPT Live's every word could ask).
@@ -203,16 +219,18 @@ export class Mediator {
     this.history.claim({ ...request, seqs }, id);
     // Jev may already be reading these very words.
     // A cue since the operator began these words answered them: the page isn't moved twice.
-    const read = this.read?.words === words ? this.read : undefined, since = this.wordsAt;
+    const read = this.read?.words === words ? this.read : undefined, since = this.wordsAt, started = Date.now();
     this.read = undefined;
     this.looking = (async () => {
       let result: { told: string } | undefined;
       try {
         const judgment = await (read?.judging ?? this.ahead!.judge(this.clean(request.fresh), request.earlier && this.clean(request.earlier), companion && this.clean(companion)));
-        result = await this.ahead!.act(judgment, since, request.fresh);
+        // More words came while Jev read these: they may change what was asked, and the next look reads them all.
+        if (this.lastWordAt > started) this.log({ type: 'stage.ahead_skipped', said: request.fresh.slice(-160), reason: 'more words came' });
+        else result = await this.ahead!.act(judgment, since, request.fresh);
       } catch (error) { this.log({ type: 'stage.ahead_error', message: (error as Error).message }); }
-      // Done on the page: the words still reach the agent with the next request, noted.
-      this.history.release(id, result ? handledNote('page') : undefined);
+      // Done on the page: the words still reach the agent with the next request, noted; if voice ended meanwhile, now.
+      if (this.history.release(id, result ? handledNote('page') : undefined) && this.ended) this.handOff(this.ended);
       if (!result) return;
       this.aheadDone = { told: result.told, at: Date.now() };
       this.log({ type: 'stage.ahead', said: request.fresh.slice(-160) });

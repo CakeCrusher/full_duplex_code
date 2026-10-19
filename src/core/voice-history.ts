@@ -148,10 +148,11 @@ export class VoiceHistory {
   turns(): Turn[] { return utterances(this.fragments.filter(f => !f.carried && !this.unheard(f))).map(({ role, text }) => ({ role, text: text.replace(/\s+/g, ' ').trim() })); }
   /** Speech a dropped connection had not passed on, placed before this one's so that its next request includes it. */
   carry(from: VoiceHistory) {
-    const pending = from.fragments.filter(f => !f.sent && !f.claim && !from.unheard(f));
+    // Words listening ahead is reading go too: the old connection's look no longer hands them off.
+    const pending = from.fragments.filter(f => !f.sent && (!f.claim || f.claim.startsWith('ahead-')) && !from.unheard(f));
     const shift = (pending.at(-1)?.endMs ?? 0) + 5000;
     for (const f of pending) {
-      this.fragments.push({ ...f, seq: this.fragments.length, startMs: f.startMs - shift, endMs: f.endMs - shift, carried: true });
+      this.fragments.push({ ...f, claim: undefined, seq: this.fragments.length, startMs: f.startMs - shift, endMs: f.endMs - shift, carried: true });
       // Taken over: the dropped connection hands it off no more.
       f.claim = 'carried';
     }

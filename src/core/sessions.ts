@@ -144,14 +144,14 @@ export class SessionSwitch {
     bridge.log({ type: 'stage.ahead_judged', said: said.slice(-160), page: p });
     return p;
   }
-  /** Runs what aheadJudge found, if confident; `since` is when it began reading the page. */
+  /** Runs what aheadJudge found, if confident; `since` is when the operator began the words it is for. */
   async aheadAct(p: PageJudgment | undefined, since: number, said = ''): Promise<{ told: string } | undefined> {
     const bridge = this.bridge;
     if (!p?.steps.length || p.only < AHEAD_ONLY || (p.work ?? 1) >= AHEAD_WORK || (p.first ?? 0) < AHEAD_STEP) return;
     // GPT Live moved the page by its own words meanwhile: moving it again would go one too far ("next slide").
     if ((bridge.mediator?.cueAt ?? 0) >= since) { bridge.log({ type: 'stage.ahead_skipped', said: said.slice(-160), reason: 'a cue moved the page meanwhile' }); return; }
     const { done, onScreen } = await bridge.stage.run(p.steps);
-    bridge.presentedAt = bridge.aheadAt = Date.now();
+    bridge.presentedAt = bridge.aheadAt = Date.now(); bridge.aheadMoved = true;
     bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen, ahead: true });
     return { told: pageAhead(bridge.agent, done, onScreen) };
   }

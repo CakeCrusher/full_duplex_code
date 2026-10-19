@@ -201,8 +201,9 @@ export class Harness {
   }
   /** GPT Live's sentence so far, and when the page last moved by its words or the gate: then it is presenting. */
   sentence = ''; presentedAt = 0;
-  /** When listening ahead last moved the page: GPT Live's cues then wait a moment, so "next slide" doesn't run twice. */
-  aheadAt = 0;
+  /** When listening ahead last moved the page, and whether a cue has answered that move yet: GPT Live's first cue
+   * after it says the same move ("next slide" would run twice); later ones are it presenting on. */
+  aheadAt = 0; aheadMoved = false;
   /** GPT Live said more: a cue in it moves the page now, and GPT Live quietly hears what is on screen. */
   heardSpeech(delta: string) {
     this.sentence = (this.sentence + delta).slice(-600);
@@ -217,7 +218,7 @@ export class Harness {
     // Listening ahead may be moving the page for the operator's words right now: the cue waits to see.
     const looking = this.mediator?.looking;
     if (looking) await looking.catch(() => {});
-    if (Date.now() - this.aheadAt < 4000) { this.log({ type: 'stage.cue_skipped', run: cue.run, reason: 'just moved ahead' }); return; }
+    if (this.aheadMoved && Date.now() - this.aheadAt < 4000) { this.aheadMoved = false; this.log({ type: 'stage.cue_skipped', run: cue.run, reason: 'just moved ahead' }); return; }
     this.presentedAt = Date.now(); this.sentence = '';
     // Answering the operator by moving the page: their words still go to the gate and, unless the move was all they
     // asked, to the agent, noted, so neither moves it again.

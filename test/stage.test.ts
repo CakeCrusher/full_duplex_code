@@ -227,7 +227,7 @@ test('listening ahead: the page moves as the operator pauses; GPT Live\'s delega
   assert.match(deliveries[0].content, /only about showing things on the page.*\n\nuser: Next slide\.$/s, 'the words still reach the agent, noted');
 });
 
-test('listening ahead never reads half a sentence: the transcript arrives a word at a time, rarely punctuated', async t => {
+test('listening ahead never acts on half a sentence: the transcript arrives a word at a time, rarely punctuated', async t => {
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {}; live.append = async () => {};
   const asked: string[] = [], acted: string[] = [];
@@ -256,32 +256,39 @@ test('listening ahead never reads half a sentence: the transcript arrives a word
 });
 const distinct = (said: string[]) => [...new Set(said)];
 
-test("listening ahead acts as soon as GPT Live starts answering, unless the operator's microphone says they're still talking", async t => {
+test("listening ahead acts once GPT Live starts its answer and no word follows, never on its murmurs or talk it was already giving", async t => {
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {}; live.append = async () => {};
   const acted: string[] = [];
   const m = new Mediator({ live, observer, deliver: () => {}, log: () => {}, publish: () => {}, clean: String, hold: null, gate: async () => ({}),
     ahead: { judge: async () => ({ steps: ['next_slide'], only: 1, count: 1 }), act: async (_judgment, _since, said) => { acted.push(said!); return undefined; } } });
   t.after(() => { m.stop(); observer.close(); });
-  const level = () => m.hear({ at: Date.now(), inputRms: .05, rawInputRms: .05, gateThreshold: .008 });
+  const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  const talking = async (ms: number) => { for (let i = 0; i < ms / 100; i++) { m.hear({ at: Date.now(), inputRms: .05, rawInputRms: .05, gateThreshold: .008 }); await wait(100); } };
   const quiet = () => m.hear({ at: Date.now(), inputRms: 0, rawInputRms: 0, gateThreshold: .008 });
-  level();
-  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Next', start_ms: 0, end_ms: 300 });
-  live.emit('event', { type: 'session.output_transcript.delta', delta: 'Mm-hm.', start_ms: 300, end_ms: 500 });
-  await new Promise(resolve => setTimeout(resolve, 200));
-  assert.deepEqual(acted, [], 'GPT Live murmuring while they talk is no end of their turn');
-  live.emit('event', { type: 'session.input_transcript.delta', delta: ' slide', start_ms: 300, end_ms: 600 });
-  quiet(); await new Promise(resolve => setTimeout(resolve, 160)); quiet();
-  const answered = Date.now();
-  live.emit('event', { type: 'session.output_transcript.delta', delta: " Let's", start_ms: 900, end_ms: 1100 });
+  const said = (delta: string, at: number) => live.emit('event', { type: 'session.input_transcript.delta', delta, start_ms: at, end_ms: at + 300 });
+  const answer = (delta: string, at: number) => live.emit('event', { type: 'session.output_transcript.delta', delta, start_ms: at, end_ms: at + 300 });
+  said('Next', 0); answer('Mm.', 300);
+  await talking(1100);
+  assert.deepEqual(acted, [], 'a murmur while they talk is no end of their turn');
+  said(' slide', 400); quiet(); await wait(160); quiet();
+  const started = Date.now(); answer(" Let's", 1000);
   await until(() => acted.length);
   assert.deepEqual(acted, ['Next slide']);
-  assert.ok(Date.now() - answered < 300, 'at once, not after the pause');
-  live.emit('event', { type: 'session.output_transcript.delta', delta: ' look', start_ms: 1100, end_ms: 1300 });
-  await new Promise(resolve => setTimeout(resolve, 700));
-  assert.deepEqual(acted, ['Next slide'], 'once');
+  assert.ok(Date.now() - started < 400, 'soon after the answer starts, once no word followed for a moment');
+  // GPT Live already talking when the operator's next words end: its next words don't count; quiet does.
+  answer(' Here we are.', 1300); said('Go back', 5000); quiet(); await wait(200); quiet();
+  answer(' On', 1600); answer(' the', 1900);
+  await wait(400);
+  assert.equal(acted.length, 1, 'talk it was already giving is not an answer');
+  await until(() => acted.length === 2);
+  assert.equal(acted[1], 'Go back', 'quiet, after a while');
+  // GPT Live starts as the last word arrives, but more words follow: nothing moves yet.
+  await wait(1100);
+  said('Previous', 10000); answer(' Sure,', 10500); await wait(150); said(' wait, next', 10400);
+  await wait(300);
+  assert.equal(acted.length, 2, 'a word after the answer started holds the move');
 });
-
 test("a cue waits for listening ahead's move in progress, and runs only if it moved nothing", async t => {
   const { h } = await harness(t);
   const runs: string[][] = [];
@@ -297,11 +304,54 @@ test("a cue waits for listening ahead's move in progress, and runs only if it mo
   const first = h.runCue(cue);
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(runs, [], 'it waits');
-  h.aheadAt = Date.now(); finish(); await first;
+  h.aheadAt = Date.now(); h.aheadMoved = true; finish(); await first;
   assert.deepEqual(runs, [], 'listening ahead moved the page: the cue is skipped');
   h.aheadAt = 0; mediator.looking = Promise.resolve();
   await h.runCue(cue);
   assert.deepEqual(runs, [['goto_options']], 'it moved nothing: the cue runs');
+});
+
+test('a look asked for while another works waits its turn, Jev reads one at a time, and words a look holds when voice ends still reach the agent', async t => {
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {}; live.append = async () => {};
+  const asked: string[] = [], acted: string[] = [], deliveries: any[] = [];
+  let release!: () => void;
+  const slow = new Promise<void>(resolve => { release = resolve; });
+  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate: async () => ({}),
+    ahead: { judge: async said => { asked.push(said); await slow; return undefined; }, act: async (_judgment, _since, said) => { acted.push(said!); return undefined; } } });
+  t.after(() => { m.stop(); observer.close(); });
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Go to the.', start_ms: 0, end_ms: 500 });
+  await until(() => !!m.looking);
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ' Risks, then fix the parser.', start_ms: 600, end_ms: 1800 });
+  await new Promise(resolve => setTimeout(resolve, 500));
+  assert.deepEqual(asked, ['Go to the.'], 'one read at a time');
+  release();
+  await until(() => acted.length === 2);
+  assert.deepEqual(acted, ['Go to the.', 'Go to the. Risks, then fix the parser.'], 'the look asked for meanwhile ran after');
+  // Voice ends while a look holds the words: they go to the agent once it's done.
+  let finish!: () => void;
+  const m2 = new Mediator({ live: Object.assign(new EventEmitter(), { state: 'active', id: 'live_2', close() {}, append: async () => {} }) as any, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate: async () => ({}),
+    ahead: { judge: () => new Promise(resolve => { finish = () => resolve(undefined); }), act: async () => undefined } });
+  t.after(() => m2.stop());
+  (m2.live as any).emit('event', { type: 'session.input_transcript.delta', delta: 'Next slide, then fix the parser.', start_ms: 0, end_ms: 900 });
+  await until(() => !!m2.looking);
+  m2.handOff('operator ended voice');
+  assert.equal(deliveries.length, 0, 'held by the look');
+  finish();
+  await until(() => deliveries.length);
+  assert.match(deliveries[0].content, /Next slide, then fix the parser\./);
+});
+
+test("a reconnect takes the words a look holds, and the old connection's look no longer hands them off", async () => {
+  const { VoiceHistory } = await import('../src/core/voice-history.ts');
+  const old = new VoiceHistory(), fresh = new VoiceHistory();
+  old.add({ type: 'session.input_transcript.delta', delta: 'Next slide, then fix the parser.', start_ms: 0, end_ms: 900 });
+  const request = old.request(Infinity)!;
+  old.claim(request, 'ahead-1');
+  fresh.carry(old);
+  assert.equal(fresh.request(Infinity)?.fresh, 'Next slide, then fix the parser.');
+  assert.equal(old.release('ahead-1'), 0, 'carried: the look releases nothing');
+  assert.equal(old.request(Infinity), null);
 });
 
 test('listening ahead moves nothing for words a cue already moved the page for, or moves it for while Jev reads them', async t => {
