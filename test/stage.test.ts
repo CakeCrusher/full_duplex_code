@@ -153,5 +153,5 @@ test('a page controller returning anything is kept to well-formed commands and c
   stage.tabId = 1;
   const view = (await stage.describe(0))!;
   assert.deepEqual(view.commands, [{ id: 'slide_3', say: 'Go to slide 3', name: '3' }, { id: 'ok', say: 'Fine' }]);
-  assert.deepEqual(view.cues, []); assert.equal(view.about, null); assert.equal(view.outline, undefined); assert.equal(view.title, '7');
+  assert.deepEqual(view.cues, []); assert.equal(view.about, null); assert.equal((view as any).outline, undefined); assert.equal(view.title, '7');
 });
