@@ -64,5 +64,19 @@ export class Stage {
     if (nothing) throw new StageNothing('nothing to do there', done, said.at(-1) ?? '', command(ids[said.length]));
     return { done, onScreen: said.at(-1) ?? '' };
   }
+  /** What the viewer can act on, numbered, and what is on screen: for a one-off action. */
+  async digest(): Promise<string> {
+    if (!this.tabId) throw new Error('No page is on the stage');
+    return this.browser.evaluate<string>(this.tabId, `${SCRIPT}\n;window.__fdcStage.digest()`, 5000);
+  }
+  /** Runs one-off action code (fast-action.ts) in the page, with el(n), show(el) and wait(ms); resolves to what is on screen. */
+  async act(code: string): Promise<string> {
+    if (!this.tabId) throw new Error('No page is on the stage');
+    const started = Date.now();
+    const out = await this.browser.evaluate<string>(this.tabId, `${SCRIPT}\n;(async () => { const { el, show, wait } = window.__fdcStage; const out = await (async () => {\n${code}\n})(); return typeof out === 'string' && out ? out : window.__fdcStage.now(); })()`, 15000);
+    this.viewAt = 0;
+    this.log({ type: 'stage.acted', tabId: this.tabId, code, ms: Date.now() - started });
+    return out;
+  }
   close() { this.browser.close(); }
 }

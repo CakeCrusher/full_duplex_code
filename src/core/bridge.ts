@@ -10,6 +10,7 @@ import { DelegationAudit } from './delegation-audit.ts';
 import { askAgent, distillPrompt, parseDistilled } from './instruction-distiller.ts';
 import { JevTuner, type TuningChange } from './jev-tuner.ts';
 import { Stage } from './stage.ts';
+import { FastAction } from './fast-action.ts';
 import { UsageLedger } from './usage-ledger.ts';
 import { Timeline } from './timeline.ts';
 import { StatusLog, statusSnapshot, type BridgeEvent } from './status.ts';
@@ -72,6 +73,8 @@ export class Harness {
   ledger: UsageLedger; timeline: Timeline; outbox: Outbox; voiceSessions: VoiceSessions; endpoints: Endpoints;
   /** The page the agent last showed the operator, which the gate can move (stage.ts). */
   stage: Stage;
+  /** One-off actions on the stage when no page command fits (fast-action.ts). */
+  fastAction?: FastAction;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
   constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides, jevTuning = false, store = true }: HarnessOptions) {
     this.agent = agent; this.root = root; this.runDir = runDir; this.cwd = cwd; this.sessionId = sessionId; this.apiKey = apiKey;
@@ -91,6 +94,7 @@ export class Harness {
     if (jevKey) this.handOffAudit = new DelegationAudit({ apiKey: jevKey, file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log });
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
     this.stage = new Stage({ log: this.log });
+    if (apiKey && apiKey !== 'unused') this.fastAction = new FastAction({ apiKey });
     this.sessionSwitch = new SessionSwitch(this);
     this.voiceSessions = new VoiceSessions(this, { store });
     if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log,
