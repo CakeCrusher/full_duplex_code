@@ -119,8 +119,8 @@ export const pageFailed = ({ profile: { name } }: Agent, error: string, done: re
   `${done.length ? `The page did part of it (${steps(done)}), then` : 'The page'} couldn't go on (${error.slice(0, 200)}). The request went to ${name}, who made the page, to fix its controls and do it.`;
 export const pageDoneNote = (done: readonly { say: string }[]) =>
   `The voice tool already did the page part of this in the browser (${steps(done)}); don't do that again, do the rest.`;
-export const pageFailedNote = (done: readonly { say: string }[], error: string) =>
-  `The voice tool tried to do this on the page in the browser (${steps(done)}) and the page's controls failed: ${error.slice(0, 400)}. Fix the page's controller (window.fdcController or its data-fdc annotations) so this works, then do what the user asked.`;
+export const pageFailedNote = (done: readonly { say: string }[], error: string, page?: { title: string; url: string }) =>
+  `The voice tool tried to do this on the page${page ? ` "${page.title.slice(0, 80)}" (${page.url})` : ''} in the browser (${steps(done)}) and the page's controls failed: ${error.slice(0, 400)}. Fix the page's controller (window.fdcController or its data-fdc annotations) so this works, reload the page, then do what the user asked.`;
 export const uncertainNote = 'Some of it may have reached you already: its delivery was uncertain. Don\'t repeat work it already started.';
 // Speech the voice assistant had not passed on when the voice session ended.
 export const sessionEndRequest = (reason: string, utterances: readonly Pick<Utterance, 'role' | 'text'>[], notes: readonly string[] = []) =>
