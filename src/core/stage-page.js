@@ -3,7 +3,8 @@
 // controller (sections, headings, paragraphs, items, figures), the page's own annotations
 // (data-fdc) and controller (window.fdcController), merged into one list of commands.
 (() => {
-  const VERSION = 1;
+  // Stamped by fdc from the script's content (stage.ts): a changed script installs itself again.
+  const VERSION = '__FDC_STAGE_VERSION__';
   if (window.__fdcStage?.version === VERSION) return;
   const UNITS = {
     heading: 'h1, h2, h3, h4',
@@ -32,6 +33,7 @@
   };
 
   // A ring around the current element, kept in place while the page scrolls.
+  document.getElementById('__fdc_ring')?.remove();
   const ring = document.createElement('div');
   ring.id = '__fdc_ring';
   Object.assign(ring.style, { position: 'fixed', pointerEvents: 'none', zIndex: 2147483646, borderRadius: '10px', boxShadow: '0 0 0 3px rgba(255,170,0,.95), 0 0 0 9px rgba(255,170,0,.25)', transition: 'all .25s ease', opacity: '0' });

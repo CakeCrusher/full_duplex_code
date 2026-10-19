@@ -2,10 +2,13 @@
 // stage script there (stage-page.js) through its own connection to Open Claude in Chrome, so
 // the gate can move the page, highlight and read it without the agent.
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import type { Observation } from './adapter.ts';
 import { Browser } from './browser.ts';
 
-const SCRIPT = fs.readFileSync(new URL('./stage-page.js', import.meta.url), 'utf8');
+const RAW = fs.readFileSync(new URL('./stage-page.js', import.meta.url), 'utf8');
+// A page keeps the script it was given until the script changes: its version is its content's hash.
+const SCRIPT = RAW.replace('__FDC_STAGE_VERSION__', createHash('sha1').update(RAW).digest('hex').slice(0, 12));
 /** Browser tools that show a tab to the operator: the tab they act on becomes the stage. */
 const SHOWS = /chrome[\w-]*__(navigate|set_tab_focus|tabs_create_mcp|execute_code)$/;
 
