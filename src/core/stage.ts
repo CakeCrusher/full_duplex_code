@@ -4,14 +4,15 @@
 import fs from 'node:fs';
 import type { Observation } from './adapter.ts';
 import { Browser } from './browser.ts';
+import { cueWords, type SpeechCue } from './speech-cues.ts';
 
 const SCRIPT = fs.readFileSync(new URL('./stage-page.js', import.meta.url), 'utf8');
 /** Browser tools that show a tab to the operator: the tab they act on becomes the stage. */
 const SHOWS = /chrome[\w-]*__(navigate|set_tab_focus|tabs_create_mcp|execute_code)$/;
 
-export interface StageCommand { id: string; say: string; /** The element id it lands on, when it has one. */ anchor?: string }
+export interface StageCommand { id: string; say: string; /** The element id it lands on, when it has one. */ anchor?: string; /** What people call its target, for speech cues. */ name?: string; /** A whole section. */ top?: boolean }
 export interface StageCue { say: string; run: string }
-export interface StageView { tabId: number; title: string; url: string; about: string | null; where: string; commands: StageCommand[]; cues: StageCue[] }
+export interface StageView { tabId: number; title: string; url: string; about: string | null; where: string; commands: StageCommand[]; cues: StageCue[]; /** What the page holds, for the voice to present from. */ outline?: string }
 export interface StageRun { done: StageCommand[]; onScreen: string }
 /** A page command threw: the page's controller is broken, or was asked something it can't do. */
 export class StageError extends Error {
@@ -24,7 +25,9 @@ export class Stage {
   log: (event: Record<string, unknown>) => void;
   tabId?: number;
   view?: StageView; viewAt = 0;
-  constructor({ log, browser = new Browser() }: { log: (event: Record<string, unknown>) => void; browser?: Browser }) { this.log = log; this.browser = browser; }
+  /** The stage moved to another tab. */
+  onChange?: () => void;
+  constructor({ log, browser = new Browser(), onChange }: { log: (event: Record<string, unknown>) => void; browser?: Browser; onChange?: () => void }) { this.log = log; this.browser = browser; this.onChange = onChange; }
   /** The agent's own browser tool calls say which tab it showed the operator. */
   observe({ raw }: Pick<Observation, 'raw'>) {
     if (raw?.hook_event_name !== 'PostToolUse' || !SHOWS.test(String(raw.tool_name ?? ''))) return;
@@ -35,6 +38,7 @@ export class Stage {
     if (!Number.isInteger(tabId) || tabId <= 0) return;
     if (tabId !== this.tabId) this.log({ type: 'stage.tab', tabId, by: raw.tool_name });
     this.tabId = tabId; this.view = undefined;
+    this.onChange?.();
   }
   /** What the stage shows and the commands it offers; undefined without a stage. */
   async describe(maxAgeMs = 2000): Promise<StageView | undefined> {
@@ -60,6 +64,19 @@ export class Stage {
     this.log({ type: error ? 'stage.failed' : 'stage.ran', tabId, ids, ran: said.length, error, ms: Date.now() - started });
     if (error) throw new StageError(error, done, said.at(-1) ?? '', command(ids[said.length]));
     return { done, onScreen: said.at(-1) ?? '' };
+  }
+  /**
+   * What GPT Live can say to move the page as it talks: "let's look at" a part's name (sections and
+   * annotated parts), and the page's own cue phrases.
+   */
+  static cues(view: StageView): SpeechCue[] {
+    const cues: SpeechCue[] = [];
+    for (const command of view.commands) if (command.name && (command.top || command.id.startsWith('show_'))) cues.push({ run: command.id, label: command.name, words: cueWords(command.name), name: true });
+    for (const cue of view.cues ?? []) {
+      const id = `page_${String(cue.run).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}`;
+      if (view.commands.some(c => c.id === id)) cues.push({ run: id, label: cue.say, words: cueWords(cue.say) });
+    }
+    return cues;
   }
   close() { this.browser.close(); }
 }

@@ -9,7 +9,8 @@ import { Mediator } from './mediator.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { startupHistory } from './startup-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
-import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, reconnectGreeting, resumeGreeting, standbyNews, standbyWake } from './prompts.ts';
+import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, reconnectGreeting, resumeGreeting, stageBrief, stageOutline, standbyNews, standbyWake } from './prompts.ts';
+import { Stage } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
 import { operatorSpeaking, type MicrophoneLevel } from './floor.ts';
@@ -35,6 +36,8 @@ const saved = ({ id, text, learned, learnedIn }: Instruction | SavedInstruction)
 interface Run {
   live: LiveSession; plan: ResumePlan; page?: Page; automatic: boolean; mediator: Mediator;
   record: ResumeRecord; recordId?: string;
+  /** The page on the stage GPT Live was last told about (its address and cue words). */
+  briefed?: string;
   /** The instructions it started with, those a fork inherited from its source, and those in force in it now (given and not countermanded). */
   startup: Instruction[]; inherited: SavedInstruction[]; inForce: Map<string, SavedInstruction>;
   /** When voice was asked to start and how, for its startup times; and whether it has spoken yet. */
@@ -399,6 +402,25 @@ export class VoiceSessions {
     for (const item of [...run.inForce.values()]) if (item.learned && !kept.has(item.id) && live.state === 'active') await this.disregard(run, item);
     for (const item of [...this.additionalInstructions]) if (live.state === 'active' && !run.inForce.has(item.id) && !(item.state === 'pending' && item.sessionId === live.id)) await this.applyInstruction(live, item);
     if (live.state === 'active' && !wake) await live.greet(plan === 'fresh' ? greeting(agent) : automatic ? reconnectGreeting(agent) : resumeGreeting(agent));
+    void this.briefStage(run);
+  }
+  /**
+   * GPT Live learns the page on the stage: the words that move it as it talks, and what it says.
+   * Once per page per session, again when the page or its parts change.
+   */
+  async briefStage(run = this.run) {
+    const live = run?.live;
+    if (!run || !live || live.state !== 'active' || this.live !== live) return;
+    const view = await this.bridge.stage.describe(0).catch(error => { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; });
+    if (!view || live.state !== 'active') return;
+    const cues = Stage.cues(view), names = cues.filter(c => c.name).map(c => c.label).slice(0, 24), phrases = cues.filter(c => !c.name).map(c => c.label).slice(0, 12);
+    this.bridge.speechCues.set(cues);
+    const signature = JSON.stringify([view.url, names, phrases]);
+    if (run.briefed === signature) return;
+    run.briefed = signature;
+    this.bridge.log({ type: 'stage.briefed', url: view.url, names, phrases });
+    await live.append('instructions', stageBrief(view.title, names, phrases)).catch(error => this.bridge.log({ type: 'stage.error', message: (error as Error).message }));
+    if (view.outline) run.mediator.context.add('thinking', stageOutline(view.title, view.outline), null);
   }
   liveEvent(run: Run, event: any) {
     const { live, page } = run;
@@ -417,6 +439,8 @@ export class VoiceSessions {
     }
     if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.bridge.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
     if (event.type === 'session.started') this.begun(run);
+    // GPT Live's words can move the page as it says them.
+    if (event.type === 'session.output_transcript.delta' && this.live === live) this.bridge.heardSpeech(String(event.delta ?? ''));
     if (event.type === 'session.delegation.created') this.activity.add('request');
     // ...and to the first words it says.
     if (event.type === 'session.output_transcript.delta' && !run.spoke) { run.spoke = true; this.bridge.log({ type: 'voice.first_words', plan: run.plan, automatic: run.automatic, firstWordsMs: Date.now() - run.requested.at }); }

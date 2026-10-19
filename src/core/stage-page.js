@@ -108,13 +108,18 @@
     for (const h of units('heading')) {
       const title = text(h).slice(0, 90), name = short(h), top = level(h) <= sectionLevel();
       if (!name && seen[title.toLowerCase()] > 1) continue;
-      commands.push({ id: unique(`goto_${slug(name || title)}`), say: name ? `Go to the ${top ? 'section' : 'part'} "${name}" (headed "${title}")` : `Go to the ${top ? 'section' : 'heading'} "${title}"`, anchor: anchorOf(h), run: () => go(h, 'start') });
+      commands.push({ id: unique(`goto_${slug(name || title)}`), say: name ? `Go to the ${top ? 'section' : 'part'} "${name}" (headed "${title}")` : `Go to the ${top ? 'section' : 'heading'} "${title}"`, anchor: anchorOf(h), name: name || (title.length <= 40 ? title : ''), top, run: () => go(h, 'start') });
     }
     // An annotation the page's own controller already offers isn't offered twice: a near-duplicate splits the choice.
     const offered = page().map(c => c.say.toLowerCase()).join('\n');
-    for (const el of document.querySelectorAll('[data-fdc]')) if (!offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), run: () => go(el) });
+    for (const el of document.querySelectorAll('[data-fdc]')) if (!offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), name: el.dataset.fdc, run: () => go(el) });
     return commands;
   };
+  // What the page holds, section by section, for the voice to present from: each section's name and its opening words.
+  const outline = () => units('heading').filter(h => level(h) <= sectionLevel()).slice(0, 24).map(h => {
+    let next = h.nextElementSibling; while (next && !text(next)) next = next.nextElementSibling;
+    return `${text(h).slice(0, 100)}: ${next ? text(next).slice(0, 180) : ''}`;
+  }).join('\n');
   const page = () => {
     const c = window.fdcController;
     if (!c?.commands) return [];
@@ -129,8 +134,9 @@
         title: document.title, url: location.href,
         about: c?.about ?? null,
         where: c?.where?.() ?? describe(current('paragraph')),
-        commands: stage.commands().map(({ id, say, anchor }) => ({ id, say, ...anchor ? { anchor } : {} })),
+        commands: stage.commands().map(({ id, say, anchor, name, top }) => ({ id, say, ...anchor ? { anchor } : {}, ...name ? { name } : {}, ...top ? { top } : {} })),
         cues: c?.cues?.() ?? [],
+        outline: c?.outline?.() ?? outline(),
       };
     },
     async run(id) {

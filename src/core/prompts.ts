@@ -117,6 +117,11 @@ export const pageAlongside = ({ profile: { name } }: Agent, done: readonly { say
   `The voice tool already did the page part (${steps(done)}); on screen now: ${onScreen.slice(0, 500)} The rest goes to ${name}.`;
 export const pageFailed = ({ profile: { name } }: Agent, error: string, done: readonly { say: string }[] = []) =>
   `${done.length ? `The page did part of it (${steps(done)}), then` : 'The page'} couldn't go on (${error.slice(0, 200)}). The request went to ${name}, who made the page, to fix its controls and do it.`;
+// Speech cues (speech-cues.ts): GPT Live moves the page with its own words.
+export const stageBrief = (title: string, names: readonly string[], phrases: readonly string[]) =>
+  `The page "${title.slice(0, 80)}" is open beside you. When you talk the operator through it, move it with your words: as you turn to a part, say "let's look at" and the part's name, and the page goes there and highlights it as you say it.${names.length ? ` Parts: ${names.join(', ')}.` : ''}${phrases.length ? ` You can also say: ${phrases.map(p => `"${p}"`).join(', ')}.` : ''} If the operator asks you to walk them through the page or to explain it, do it yourself this way, part by part, from its outline; don't delegate that.`;
+export const stageOutline = (title: string, outline: string) => `What the page "${title.slice(0, 80)}" says, part by part, for presenting it:\n${outline.slice(0, 2400)}`;
+export const cueShown = (onScreen: string) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}`;
 export const pageDoneNote = (done: readonly { say: string }[]) =>
   `The voice tool already did the page part of this in the browser (${steps(done)}); don't do that again, do the rest.`;
 export const pageFailedNote = (done: readonly { say: string }[], error: string) =>

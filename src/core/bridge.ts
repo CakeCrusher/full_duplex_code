@@ -10,6 +10,8 @@ import { DelegationAudit } from './delegation-audit.ts';
 import { askAgent, distillPrompt, parseDistilled } from './instruction-distiller.ts';
 import { JevTuner, type TuningChange } from './jev-tuner.ts';
 import { Stage } from './stage.ts';
+import { CueMatcher } from './speech-cues.ts';
+import { cueShown } from './prompts.ts';
 import { UsageLedger } from './usage-ledger.ts';
 import { Timeline } from './timeline.ts';
 import { StatusLog, statusSnapshot, type BridgeEvent } from './status.ts';
@@ -72,6 +74,8 @@ export class Harness {
   ledger: UsageLedger; timeline: Timeline; outbox: Outbox; voiceSessions: VoiceSessions; endpoints: Endpoints;
   /** The page the agent last showed the operator, which the gate can move (stage.ts). */
   stage: Stage;
+  /** GPT Live's own words that move the page (speech-cues.ts). */
+  speechCues = new CueMatcher();
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
   constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides, jevTuning = false, store = true }: HarnessOptions) {
     this.agent = agent; this.root = root; this.runDir = runDir; this.cwd = cwd; this.sessionId = sessionId; this.apiKey = apiKey;
@@ -90,7 +94,7 @@ export class Harness {
     if (jevKey && jevTuning) this.tuner = new JevTuner({ apiKey: jevKey, log: this.log });
     if (jevKey) this.handOffAudit = new DelegationAudit({ apiKey: jevKey, file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log });
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
-    this.stage = new Stage({ log: this.log });
+    this.stage = new Stage({ log: this.log, onChange: () => void this.voiceSessions?.briefStage() });
     this.sessionSwitch = new SessionSwitch(this);
     this.voiceSessions = new VoiceSessions(this, { store });
     if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log,
@@ -190,6 +194,17 @@ export class Harness {
         if (changes.length && ask === this.tuneAsks && !this.stopping) this.setTuning(next, changes);
       } catch (error) { this.log({ type: 'tuning.error', message: (error as Error).message }); }
     }, 1000);
+  }
+  /** GPT Live said more: a cue in it moves the page now, and GPT Live quietly hears what is on screen. */
+  heardSpeech(delta: string) {
+    for (const cue of this.speechCues.hear(delta)) {
+      const started = Date.now();
+      this.stage.run([cue.run]).then(({ onScreen }) => {
+        this.log({ type: 'stage.cue', run: cue.run, label: cue.label, ms: Date.now() - started });
+        this.publish({ type: 'stage', done: [cue.label], onScreen, cue: true });
+        this.mediator?.context.add('thinking', cueShown(onScreen), null);
+      }).catch(error => this.log({ type: 'stage.cue_failed', run: cue.run, label: cue.label, message: (error as Error).message }));
+    }
   }
   /** The operator removes an instruction Jev learned, by its ID. */
   removeInstruction(id: unknown) { return this.voiceSessions.removeLearned(id); }
