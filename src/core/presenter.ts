@@ -3,7 +3,7 @@
 // sentences; the gate's page requests are carried out here too: the page's commands, or a one-off action when none
 // fits (fast-action.ts). The page itself, and how fdc reaches it, is the stage (stage.ts).
 import type { Harness } from './bridge.ts';
-import { CueMatcher } from './speech-cues.ts';
+import { CueMatcher, unglue } from './speech-cues.ts';
 import { StageError, StageNothing, type StageView } from './stage.ts';
 import { FastAction, type PageAction } from './fast-action.ts';
 import { PAGE_ONLY, PAGE_OTHER, PAGE_UNHAPPY, PAGE_WORK, type PageJudgment } from './delegation-audit.ts';
@@ -42,7 +42,7 @@ export class Presenter {
     // At the end of each sentence: "let's look at" something that is no part's name means the voice meant to move the
     // page, so Jev finds the command; otherwise, while presenting, the ring follows what the sentence was about.
     if (/[.!?]["”’)]?\s*$/.test(delta)) {
-      const sentence = this.sentence.trim(), cued = this.cuedInSentence; this.sentence = ''; this.cuedInSentence = false;
+      const sentence = unglue(this.sentence.trim()), cued = this.cuedInSentence; this.sentence = ''; this.cuedInSentence = false;
       const meant = cued ? undefined : /\blet(?:'|’)?s\s+(?:look at|go to|go back to|turn to|head to|move to|jump to|look)\s+(.{3,80}?)\s*[.,;:!?]/i.exec(sentence)?.[1];
       if (meant) void this.judgedMove(meant);
       else if (Date.now() - this.presentedAt < 60000) bridge.stage.follow(sentence).then(on => { if (on) bridge.log({ type: 'stage.followed', sentence: sentence.slice(-160), ...on }); }).catch(() => {});

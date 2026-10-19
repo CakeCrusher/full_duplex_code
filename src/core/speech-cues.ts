@@ -7,7 +7,9 @@ export interface SpeechCue { run: string; label: string; words: string[]; name?:
 
 // Numbers said as words match names written with digits ("stage two" is "stage 2").
 const NUMBERS: Record<string, string> = { one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12' };
-const normalize = (text: string) => text.toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(' ').map(w => NUMBERS[w] ?? w).join(' ');
+// GPT Live's transcript sometimes runs sentences together ("the URLLet's look at"): "Let's" starts a word again.
+export const unglue = (text: string) => text.replace(/(\S)(Let['’]?s\b)/g, '$1 $2');
+const normalize = (text: string) => unglue(text).toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(' ').map(w => NUMBERS[w] ?? w).join(' ');
 /** Words a name may start with that people drop or swap ("my recommendation", "the options"). */
 const LEADING = new Set(['the', 'my', 'your', 'our', 'a', 'this', 'that']);
 export const cueWords = (text: string) => { const words = normalize(text).split(' ').filter(Boolean); while (words.length > 1 && LEADING.has(words[0])) words.shift(); return words; };
