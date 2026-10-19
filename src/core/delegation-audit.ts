@@ -51,7 +51,7 @@ export const PAGE_STEP = .45, PAGE_ONLY = .4, PAGE_WORK = .3, PAGE_OTHER = .5;
 // Words before the utterance that no request carried yet still reach the agent later; they are context here.
 // What the companion said just before: "yes, please" answers its offer ("want me to show the diagrams?").
 const COMPANION_SETTING = ' `companion_before` is what the voice companion said just before `utterance`; use it only to understand short replies such as "yes, please".';
-const EARLIER_SETTING = ' `earlier` is what the operator said before `utterance` that has not reached the coding agent yet (the companion answered it, or `utterance` finishes it); it will reach the agent later. Use it only as context and judge `utterance`.';
+const EARLIER_SETTING = ' `earlier` is what the operator said before `utterance` that has not reached the coding agent yet (the companion answered it, or `utterance` finishes it); it will reach the agent later. Judge `utterance`: use `earlier` only to fill in what `utterance` leaves unsaid ("that one", "it", "the next part"), never in place of what `utterance` names.';
 const PAGE_SETTING = ' A page is open in the browser beside the conversation (`page`). The voice tool can move it, show and highlight its parts with the listed page commands, without the coding agent. Commands whose id starts with page_ are the page\'s own (slides, tabs, views): prefer them when they fit.';
 // Each step names a whole command, so Jev's independent answers never have to agree on its arguments.
 const pageQuestions = (page: StageView) => {
