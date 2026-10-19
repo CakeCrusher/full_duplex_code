@@ -44,7 +44,13 @@ export class Stage {
     if (!tabId) return;
     if (this.view?.tabId === tabId && Date.now() - this.viewAt < maxAgeMs) return this.view;
     const started = Date.now();
-    const view = await this.browser.evaluate<Omit<StageView, 'tabId'>>(tabId, `${SCRIPT}\n;window.__fdcStage.describe()`, 3000);
+    let view: Omit<StageView, 'tabId'>;
+    try { view = await this.browser.evaluate<Omit<StageView, 'tabId'>>(tabId, `${SCRIPT}\n;window.__fdcStage.describe()`, 3000); }
+    catch (error) {
+      // The tab was closed (or left the shared group): there is no stage until the agent shows another page.
+      if (/not in the MCP group|No tab with id|tab.*(closed|not found)/i.test((error as Error).message) && this.tabId === tabId) { this.log({ type: 'stage.gone', tabId }); this.tabId = undefined; this.view = undefined; }
+      throw error;
+    }
     this.view = { ...view, tabId }; this.viewAt = Date.now();
     this.log({ type: 'stage.described', tabId, url: view.url, commands: view.commands.length, cues: view.cues.length, ms: Date.now() - started });
     return this.view;
