@@ -48,8 +48,11 @@
   const place = () => {
     const el = stage.at;
     if (!el || !el.isConnected) { ring.style.opacity = '0'; return; }
-    const r = el.getBoundingClientRect(), pad = 6;
-    Object.assign(ring.style, { left: `${r.left - pad}px`, top: `${r.top - pad}px`, width: `${r.width + 2 * pad}px`, height: `${r.height + 2 * pad}px`, opacity: stage.ringOn ? '1' : '0' });
+    // A heading is ringed with the block under it, so the eye lands on the part, not one line (capped to the view).
+    const r = el.getBoundingClientRect(), pad = 6, next = el.matches(UNITS.heading) ? el.nextElementSibling : null;
+    const n = next && !next.matches(UNITS.heading) && visible(next) ? next.getBoundingClientRect() : null;
+    const left = Math.min(r.left, n?.left ?? r.left), right = Math.max(r.right, n?.right ?? r.right), bottom = Math.min(Math.max(r.bottom, n?.bottom ?? r.bottom), r.top + innerHeight * 0.6);
+    Object.assign(ring.style, { left: `${left - pad}px`, top: `${r.top - pad}px`, width: `${right - left + 2 * pad}px`, height: `${bottom - r.top + 2 * pad}px`, opacity: stage.ringOn ? '1' : '0' });
   };
   let frame = 0;
   const follow = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(place); };
@@ -61,9 +64,13 @@
     const tick = () => { const y = stage.at?.getBoundingClientRect().top ?? 0; if (Math.abs(y - last) < 1) still++; else still = 0; last = y; place(); if (still > 4) resolve(); else requestAnimationFrame(tick); };
     requestAnimationFrame(tick); setTimeout(resolve, 1200);
   });
+  // Once a move has settled, the ring glows once, so the eye finds where it landed.
+  const glow = () => ring.animate([{ boxShadow: '0 0 0 3px rgba(255,170,0,.95), 0 0 0 22px rgba(255,170,0,.4)' }, { boxShadow: '0 0 0 3px rgba(255,170,0,.95), 0 0 0 9px rgba(255,170,0,.25)' }], { duration: 700, easing: 'ease-out' });
   // Near: glide, so the eye follows. Far: jump, then pulse the ring so the eye finds it.
   const reveal = (el, block) => {
     const r = el.getBoundingClientRect(), far = r.bottom < -innerHeight * 1.5 || r.top > innerHeight * 2.5;
+    // Room above a part brought to the top, for its ring.
+    if (block === 'start' && !el.style.scrollMarginTop) el.style.scrollMarginTop = '28px';
     el.scrollIntoView({ behavior: far ? 'instant' : 'smooth', block });
     if (far) ring.animate([{ transform: 'scale(1.04)', opacity: 0.2 }, { transform: 'scale(1)', opacity: 1 }], { duration: 450, easing: 'ease-out' });
   };
@@ -81,6 +88,7 @@
     stage.at = el; stage.ringOn = true;
     reveal(el, block);
     await settle();
+    glow();
     return describe(el);
   };
   // The element the viewer is looking at: the first unit near the top of the view.
