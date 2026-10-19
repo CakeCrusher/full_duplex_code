@@ -71,7 +71,7 @@ export class Stage {
    */
   static cues(view: StageView): SpeechCue[] {
     const cues: SpeechCue[] = [];
-    for (const command of view.commands) if (command.name && (command.top || command.id.startsWith('show_'))) cues.push({ run: command.id, label: command.name, words: cueWords(command.name), name: true });
+    for (const command of view.commands) if (command.name && (command.top || /^(show|page)_/.test(command.id))) cues.push({ run: command.id, label: command.name, words: cueWords(command.name), name: true });
     for (const cue of view.cues ?? []) {
       const id = `page_${String(cue.run).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}`;
       if (view.commands.some(c => c.id === id)) cues.push({ run: id, label: cue.say, words: cueWords(cue.say) });

@@ -41,7 +41,7 @@ window.fdcController = {
     return [
       { id: 'next_slide', say: 'Go to the next slide' },
       { id: 'previous_slide', say: 'Go to the previous slide' },
-      ...slides.map((s, i) => ({ id: `slide_${i + 1}`, say: `Go to slide ${i + 1}: "${s.title}"` })),
+      ...slides.map((s, i) => ({ id: `slide_${i + 1}`, say: `Go to slide ${i + 1}: "${s.title}"`, name: s.title })),
       { id: 'show_revenue_chart', say: 'Open the revenue chart full screen' },
     ];
   },
@@ -52,6 +52,9 @@ window.fdcController = {
   },
   // Optional: where the user is now, in words.
   where() { return `Slide ${current + 1} of 12: "${slides[current].title}"`; },
+  // Optional: what the whole page says, part by part, starting each line with the part's name, so the
+  // voice can present all of it (including slides or tabs not on screen) without asking you.
+  outline() { return slides.map(s => `${s.title} — ${s.summary}`).join('\n'); },
   // Optional: phrases that run a command as the voice says them, to keep the page in step with speech.
   cues() { return [{ say: 'next slide', run: 'next_slide' }]; },
 };
@@ -63,7 +66,10 @@ Rules that make it work well:
   instead of a command with a parameter. Ids use lowercase letters, digits and underscores;
   keep it under about 60 commands.
 - **`say` is how it is chosen.** Write what the command does in plain words, naming its target
-  the way the user would.
+  the way the user would. Give a command that goes to a named place (a slide, a tab, a view) a
+  `name`, the words people use for it: the voice can say "let's look at" and that name to go there.
+- **Hidden things are yours to show.** Annotations on slides or tabs that aren't on screen can't be
+  reached by structure alone: give them commands that show their slide or tab first.
 - **Sequences belong in one command.** If showing something takes several steps (open a tab,
   wait for it, scroll to a row, highlight it), make it one command and `await` each step in
   `run()`. The voice tool can also run up to three commands in a row when the user asks for them.

@@ -12,13 +12,14 @@ const view: StageView = { tabId: 1, title: 'Deck', url: 'http://localhost/d.html
     { id: 'goto_detail', say: 'Go to the heading "Detail"', name: 'Detail' },
     { id: 'show_my_recommendation', say: 'Show and highlight: my recommendation', name: 'my recommendation' },
     { id: 'page_next_slide', say: 'Go to the next slide' },
+    { id: 'page_slide_2', say: 'Go to slide 2: "Margins"', name: 'Margins' },
   ],
   cues: [{ say: 'Next slide', run: 'next_slide' }, { say: 'Missing', run: 'not_a_command' }] };
 
 test('cues: section and annotation names after a turning phrase, and the page\'s own phrases', () => {
   const cues = Stage.cues(view);
   assert.deepEqual(cues.map(c => `${c.run}:${c.words.join(' ')}:${c.name ?? false}`), [
-    'goto_sessions:sessions:true', 'goto_system_map:system map:true', 'goto_map:map:true', 'show_my_recommendation:recommendation:true', 'page_next_slide:next slide:false']);
+    'goto_sessions:sessions:true', 'goto_system_map:system map:true', 'goto_map:map:true', 'show_my_recommendation:recommendation:true', 'page_slide_2:margins:true', 'page_next_slide:next slide:false']);
   assert.deepEqual(cueWords("The Options!"), ['options']);
 });
 
