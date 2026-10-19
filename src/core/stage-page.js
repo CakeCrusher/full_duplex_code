@@ -193,6 +193,8 @@
   const words = s => new Set((String(s).toLowerCase().match(/[a-z0-9][a-z0-9'’-]{2,}/g) ?? []).filter(w => !STOP.has(w)).map(stem));
   const inView = el => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight; };
   const followSpeech = sentence => {
+    // A highlight the viewer asked off stays off while GPT Live talks on; their next move brings it back.
+    if (stage.quiet) return null;
     const said = words(sentence);
     if (said.size < 2) return null;
     let best = null, bestScore = 0;
@@ -208,7 +210,7 @@
     return { on: text(best).slice(0, 100), score: Math.round(bestScore * 100) / 100 };
   };
   const stage = window.__fdcStage = {
-    version: VERSION, history: [], trail: [], at: null, ringOn: false, follow: followSpeech,
+    version: VERSION, history: [], trail: [], at: null, ringOn: false, quiet: false, follow: followSpeech,
     commands: () => [...page(), ...base()],
     describe() {
       const c = window.fdcController;
@@ -224,6 +226,7 @@
     async run(id, { again = false } = {}) {
       const command = stage.commands().find(c => c.id === id);
       if (!command) throw new Error(`No command "${id}" on this page`);
+      stage.quiet = id === 'clear_highlight';
       // Nothing to do (no earlier place to go back to, no next item): null, and fdc sends the request on.
       const out = (await command.run()) ?? null;
       // A move to a named place joins the trail that back follows; relative moves (next, scroll) don't.

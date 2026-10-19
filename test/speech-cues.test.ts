@@ -46,14 +46,32 @@ test('a new response starts fresh after a pause', () => {
   assert.deepEqual(m.hear(" Let's look at sessions.", 9000).map(c => c.run), ['goto_sessions']);
 });
 
-test("the operator's latest words that the voice answered by moving the page are noted for the agent", async () => {
+test("the operator's latest words that the voice answered by moving the page are noted for the agent, and still judged", async () => {
   const { VoiceHistory } = await import('../src/core/voice-history.ts');
   const h = new VoiceHistory();
   const say = (delta: string, start_ms: number, end_ms: number) => h.add({ type: 'session.input_transcript.delta', delta, start_ms, end_ms });
   say('Fix the parser.', 0, 900);
   h.markDelivered(h.request(1000)!);
   say('Um, take me', 5000, 5600); say(' to the options.', 5700, 6400);
-  assert.equal(h.noteLatest('moved'), 2);
+  assert.equal(h.cueLatest('moved'), 2);
   const request = h.request(Infinity)!;
-  assert.deepEqual(request.notes, ['moved']); assert.equal(request.fresh, '', 'noted words are not judged again');
+  assert.deepEqual(request.notes, ['moved']); assert.equal(request.cued, true);
+  assert.equal(request.fresh, 'Um, take me to the options.', 'the gate still judges them: the move may have been all they asked');
+});
+
+test('the gate moves nothing again for words the voice moved the page for; only the page asked for, nothing goes to the agent', async t => {
+  const { harness } = await import('./live-fake.ts');
+  const { h } = await harness(t);
+  const runs: string[][] = [];
+  let page = { steps: ['goto_sessions'], only: .9, work: 0, count: 1 };
+  h.stage = { describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; }, view, observe() {}, close() {} } as any;
+  h.handOffAudit = { judge: async () => ({ needsAgent: .2, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page }) } as any;
+  const only = await h.sessionSwitch.gate('take me to the sessions', 'r1', undefined, undefined, true);
+  assert.equal(only.page, true); assert.match(only.handled!, /you already moved the page as you spoke/);
+  page = { steps: ['goto_sessions'], only: .1, work: .9, count: 1 };
+  const more = await h.sessionSwitch.gate('show me the sessions and fix the typo', 'r2', undefined, undefined, true);
+  assert.equal(more.handled, undefined); assert.equal(more.note, undefined, 'the request already carries the cue note');
+  assert.deepEqual(runs, [], 'nothing ran twice');
+  await h.sessionSwitch.gate('take me to the sessions', 'r3');
+  assert.deepEqual(runs, [['goto_sessions']], 'without a cue, the gate moves the page');
 });
