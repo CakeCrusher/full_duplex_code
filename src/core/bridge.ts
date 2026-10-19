@@ -199,11 +199,11 @@ export class Harness {
       } catch (error) { this.log({ type: 'tuning.error', message: (error as Error).message }); }
     }, 1000);
   }
-  /** GPT Live said more: a cue in it moves the page now, and GPT Live quietly hears what is on screen. */
   /** GPT Live's sentence so far, and when the page last moved by its words or the gate: then it is presenting. */
   sentence = ''; presentedAt = 0;
   /** When listening ahead last moved the page: GPT Live's cues then wait a moment, so "next slide" doesn't run twice. */
   aheadAt = 0;
+  /** GPT Live said more: a cue in it moves the page now, and GPT Live quietly hears what is on screen. */
   heardSpeech(delta: string) {
     this.sentence = (this.sentence + delta).slice(-600);
     // At the end of each sentence, while presenting, the ring follows what the sentence was about.
