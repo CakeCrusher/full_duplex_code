@@ -33,9 +33,14 @@ export class CueMatcher {
         const end = start + cue.words.length;
         if (end <= this.fired || !cue.words.every((w, i) => words[start + i] === w)) continue;
         if (cue.name) {
-          // Up to two filler words ("the", "section") between the turning phrase and the name.
-          const before = words.slice(Math.max(0, start - 4), start).filter(w => !LEADING.has(w) && w !== 'part' && w !== 'section');
-          if (!TURNS.some(turn => turn.every((w, i) => before[before.length - turn.length + i] === w))) continue;
+          // Up to two filler words ("the", "section") between the turning phrase and the name, and "let's"
+          // before it: presenting, GPT Live says "let's look at"; relaying the agent's work ("Claude will look
+          // at the options parser") it doesn't.
+          const before = words.slice(Math.max(0, start - 7), start).filter(w => !LEADING.has(w) && w !== 'part' && w !== 'section');
+          const turn = TURNS.find(t => t.every((w, i) => before[before.length - t.length + i] === w));
+          if (!turn) continue;
+          const lead = before.slice(Math.max(0, before.length - turn.length - 3), before.length - turn.length);
+          if (!lead.includes('lets') && !(lead.includes('let') && lead.includes('us'))) continue;
         }
         found.push({ cue, end });
       }

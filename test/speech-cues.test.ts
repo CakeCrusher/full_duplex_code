@@ -30,9 +30,10 @@ test('a name moves the page only after a turning phrase, once, as soon as its la
   assert.deepEqual(spoken(m, [' Our', ' sessions', ' showed', ' a lot.', ' Now', " let's", ' look', ' at', ' the', ' sess', 'ions', ' section', ',']), ['goto_sessions'],
     'mentioning sessions moves nothing; "let\'s look at the sessions" does, once the word is whole');
   assert.deepEqual(spoken(m, [' and', ' the', ' sessions', ' again.']), [], 'the same cue does not fire again for later words');
-  assert.deepEqual(spoken(m, [' Back', ' to', ' the', ' system', ' map.']), ['goto_system_map'], 'the longer name wins');
+  assert.deepEqual(spoken(m, [" Let's", ' go', ' back', ' to', ' the', ' system', ' map.']), ['goto_system_map'], 'the longer name wins');
+  assert.deepEqual(spoken(m, [' Claude', ' will', ' look', ' at', ' the', ' sessions', ' code', ' next.']), [], "relaying the agent's work moves nothing");
   assert.deepEqual(spoken(m, [' Next', ' slide', ' please.']), ['page_next_slide'], "the page's own phrase needs no turning words");
-  assert.deepEqual(spoken(m, [' Look', ' at', ' your', ' recommendation', ' here.']), ['show_my_recommendation'], 'my and your are the same name');
+  assert.deepEqual(spoken(m, [" Let's", ' look', ' at', ' your', ' recommendation', ' here.']), ['show_my_recommendation'], 'my and your are the same name');
   assert.deepEqual(spoken(m, [" Let's", ' look', ' the', ' sessions', ' part.']), ['goto_sessions'], 'loosely said');
   assert.deepEqual(spoken(m, [' Now', ' the', ' sessions', ' parser', ' is', ' fixed.']), [], 'narrating work moves nothing');
 });
