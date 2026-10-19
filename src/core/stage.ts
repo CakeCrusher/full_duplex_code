@@ -73,8 +73,8 @@ export class Stage {
     const cues = (Array.isArray(view?.cues) ? view.cues : []).filter((c: any) => c && str(c.say) && str(c.run)).map((c: any) => ({ say: str(c.say, 80), run: str(c.run, 60) }));
     this.view = { title: str(view?.title, 200), url: str(view?.url, 500), about: str(view?.about) || null, where: str(view?.where, 600), commands, cues, ...str((view as any)?.outline, 4000) ? { outline: str((view as any).outline, 4000) } : {}, tabId } as StageView; this.viewAt = Date.now();
     this.pages.delete(tabId); this.pages.set(tabId, { title: this.view.title, url: this.view.url, about: this.view.about });
-    // The other pages the agent showed: switching to one is a command too.
-    // Named by title and file ("diagram.html"), since people name pages by what they are; the page left last comes first.
+    // The other pages the agent showed are commands too, named by title, file and the page's own description, since people
+    // name pages by what they are ("the diagram"); the page left last comes first.
     const others = [...this.pages].filter(([id]) => id !== tabId).reverse();
     others.forEach(([id, page], index) => commands.push({ id: `tab_${id}`, say: `Switch to the other page "${page.title.slice(0, 80)}" (${[page.url.replace(/[?#].*$/, '').split('/').filter(Boolean).at(-1) ?? page.url, page.about?.slice(0, 80)].filter(Boolean).join('; ')}), in another tab${index ? '' : ': the page shown before this one'}` }));
     this.log({ type: 'stage.described', tabId, url: this.view.url, commands: commands.length, cues: cues.length, ms: Date.now() - started });
