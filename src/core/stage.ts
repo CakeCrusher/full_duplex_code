@@ -9,7 +9,7 @@ const SCRIPT = fs.readFileSync(new URL('./stage-page.js', import.meta.url), 'utf
 /** Browser tools that show a tab to the operator: the tab they act on becomes the stage. */
 const SHOWS = /chrome[\w-]*__(navigate|set_tab_focus|tabs_create_mcp|execute_code)$/;
 
-export interface StageCommand { id: string; say: string }
+export interface StageCommand { id: string; say: string; /** The element id it lands on, when it has one. */ anchor?: string }
 export interface StageCue { say: string; run: string }
 export interface StageView { tabId: number; title: string; url: string; about: string | null; where: string; commands: StageCommand[]; cues: StageCue[] }
 export interface StageRun { done: StageCommand[]; onScreen: string }

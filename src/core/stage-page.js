@@ -82,6 +82,8 @@
     return [...list].reverse().find(el => el !== from && before(el, from) && !el.contains(from)) ?? null;
   };
 
+  // The id a command lands on (its element's, or the nearest enclosing one): for checking where a command goes.
+  const anchorOf = el => el.id || el.closest('[id]')?.id || null;
   const base = () => {
     const commands = [];
     for (const [kind, label] of [['section', 'section'], ['heading', 'heading'], ['paragraph', 'paragraph'], ['item', 'list item or row'], ['figure', 'figure, image or table']]) {
@@ -106,11 +108,11 @@
     for (const h of units('heading')) {
       const title = text(h).slice(0, 90), name = short(h), top = level(h) <= sectionLevel();
       if (!name && seen[title.toLowerCase()] > 1) continue;
-      commands.push({ id: unique(`goto_${slug(name || title)}`), say: name ? `Go to the ${top ? 'section' : 'part'} "${name}" (headed "${title}")` : `Go to the ${top ? 'section' : 'heading'} "${title}"`, run: () => go(h, 'start') });
+      commands.push({ id: unique(`goto_${slug(name || title)}`), say: name ? `Go to the ${top ? 'section' : 'part'} "${name}" (headed "${title}")` : `Go to the ${top ? 'section' : 'heading'} "${title}"`, anchor: anchorOf(h), run: () => go(h, 'start') });
     }
     // An annotation the page's own controller already offers isn't offered twice: a near-duplicate splits the choice.
     const offered = page().map(c => c.say.toLowerCase()).join('\n');
-    for (const el of document.querySelectorAll('[data-fdc]')) if (!offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, run: () => go(el) });
+    for (const el of document.querySelectorAll('[data-fdc]')) if (!offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), run: () => go(el) });
     return commands;
   };
   const page = () => {
@@ -127,7 +129,7 @@
         title: document.title, url: location.href,
         about: c?.about ?? null,
         where: c?.where?.() ?? describe(current('paragraph')),
-        commands: stage.commands().map(({ id, say }) => ({ id, say })),
+        commands: stage.commands().map(({ id, say, anchor }) => ({ id, say, ...anchor ? { anchor } : {} })),
         cues: c?.cues?.() ?? [],
       };
     },
