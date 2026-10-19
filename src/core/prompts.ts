@@ -125,6 +125,8 @@ export const cueNoDelegation = 'Nothing to delegate: the page moves when you say
 export const cueShown = (onScreen: string) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}`;
 export const pageNothing = ({ profile: { name } }: Agent, failed: { say: string }) =>
   `The page had nothing to do for that (${failed.say.replace(/\.$/, '')}). The request went to ${name}.`;
+export const lookingNote = (page: { title: string; url: string; where: string }) =>
+  `When they said it, the user was looking at "${page.title.slice(0, 80)}" (${page.url}) in the browser, at: ${page.where.replace(/\s+/g, ' ').slice(0, 300)}.`;
 export const pageNothingNote = (failed: { say: string }) =>
   `The voice tool tried to do this on the page in the browser (${failed.say.replace(/\.$/, '')}) but there was nothing to do there; do what the user asked.`;
 export const pageDoneNote = (done: readonly { say: string }[]) =>

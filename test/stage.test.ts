@@ -94,6 +94,10 @@ test('the gate: page-only is done on the page; with more, the request goes on no
   assert.equal(along.handled, undefined);
   assert.match(along.note!, /already did the page part of this in the browser \(Go to the section "Options"\); don't do that again, do the rest/);
   assert.match(along.told!, /already did the page part .* The rest goes to Claude/);
+  const work = await gated(t, { steps: [], only: .1 }, async () => { throw new Error('not run'); });
+  const passed = await work.sessionSwitch.gate('make this title bigger', 'r5');
+  assert.equal(passed.handled, undefined);
+  assert.match(passed.note!, /^When they said it, the user was looking at "Briefing" \(http:\/\/localhost\/b\.html\) in the browser, at: section "Intro"\.$/);
   const idle = await gated(t, { steps: ['next_section'], only: .9 }, async () => { throw new StageNothing('nothing to do there', [], '', view.commands[0]); });
   const nothing = await idle.sessionSwitch.gate('go back', 'r4');
   assert.equal(nothing.handled, undefined, 'nothing to do: the request goes on');
