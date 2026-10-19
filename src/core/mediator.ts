@@ -227,7 +227,7 @@ export class Mediator {
         const judgment = await (read?.judging ?? this.ahead!.judge(this.clean(request.fresh), request.earlier && this.clean(request.earlier), companion && this.clean(companion)));
         // More words came while Jev read these: they may change what was asked, and the next look reads them all.
         if (this.lastWordAt > started) this.log({ type: 'stage.ahead_skipped', said: request.fresh.slice(-160), reason: 'more words came' });
-        else result = await this.ahead!.act(judgment, since, request.fresh);
+        else result = await this.ahead!.act(judgment, since, this.clean(request.fresh));
       } catch (error) { this.log({ type: 'stage.ahead_error', message: (error as Error).message }); }
       // Done on the page: the words still reach the agent with the next request, noted; if voice ended meanwhile, now.
       if (this.history.release(id, result ? handledNote('page') : undefined) && this.ended) this.handOff(this.ended);

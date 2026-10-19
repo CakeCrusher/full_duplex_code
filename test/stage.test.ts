@@ -289,6 +289,20 @@ test("listening ahead acts once GPT Live starts its answer and no word follows, 
   await wait(300);
   assert.equal(acted.length, 2, 'a word after the answer started holds the move');
 });
+
+test('listening ahead does a one-off action when no command fits and Jev is sure it is only for the page', async t => {
+  const { h } = await harness(t);
+  const acted: any[] = [];
+  h.stage = { describe: async () => view, digest: async () => 'digest', act: async (actions: any) => { acted.push(actions); return 'row: Gemini'; }, run: async () => { throw new Error('no command'); }, view, observe() {}, close() {} } as any;
+  h.fastAction = { write: async () => ({ actions: [{ do: 'find', text: 'Gemini' }], say: 'The Gemini row.' }) } as any;
+  const told = await h.sessionSwitch.aheadAct({ steps: [], only: .9, work: .1, other: .85, count: 0 }, Date.now(), 'highlight the Gemini row');
+  assert.deepEqual(acted, [[{ do: 'find', text: 'Gemini' }]]);
+  assert.match(told!.told, /already did it on the page \(A one-off action for "highlight the Gemini row"\)\. On screen now: The Gemini row\. \(row: Gemini\)/);
+  assert.equal(await h.sessionSwitch.aheadAct({ steps: [], only: .9, work: .1, other: .5, count: 0 }, Date.now(), 'maybe the row'), undefined, 'not sure enough: left to GPT Live');
+  assert.equal(await h.sessionSwitch.aheadAct({ steps: [], only: .9, work: .4, other: .9, count: 0 }, Date.now(), 'highlight it and fix the row'), undefined, 'work in it: left to GPT Live');
+  assert.equal(acted.length, 1);
+});
+
 test("a cue waits for listening ahead's move in progress, and runs only if it moved nothing", async t => {
   const { h } = await harness(t);
   const runs: string[][] = [];

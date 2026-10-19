@@ -29,7 +29,7 @@ export function startBlocked(bridge: Harness): string | undefined {
 }
 
 // Listening ahead acts before GPT Live delegates, so it needs more certainty than the gate: page only, no work, a sure first step.
-export const AHEAD_ONLY = .6, AHEAD_WORK = .2, AHEAD_STEP = .7;
+export const AHEAD_ONLY = .6, AHEAD_WORK = .2, AHEAD_STEP = .7, AHEAD_OTHER = .7;
 const name = (s: Session) => s.current ? 'this session' : s.folder;
 const names = (sessions: Session[]) => sessions.map(name).join(', ');
 const running = (sessions: Session[]) => sessions.map(s => `${s.folder} (${s.current ? 'this one, ' : ''}voice ${s.on ? 'on' : 'off'}${!s.on && s.blocked ? `, can't start: ${s.blocked}` : ''})`).join(', ');
@@ -147,10 +147,20 @@ export class SessionSwitch {
   /** Runs what aheadJudge found, if confident; `since` is when the operator began the words it is for. */
   async aheadAct(p: PageJudgment | undefined, since: number, said = ''): Promise<{ told: string } | undefined> {
     const bridge = this.bridge;
-    if (!p?.steps.length || p.only < AHEAD_ONLY || (p.work ?? 1) >= AHEAD_WORK || (p.first ?? 0) < AHEAD_STEP) return;
+    if (!p || p.only < AHEAD_ONLY || (p.work ?? 1) >= AHEAD_WORK) return;
+    // A page command Jev is sure of, or, when none fits, a one-off action (as the gate would do once GPT Live delegated).
+    const command = p.steps.length > 0 && (p.first ?? 0) >= AHEAD_STEP, oneOff = !p.steps.length && (p.other ?? 0) >= AHEAD_OTHER && !!bridge.fastAction;
+    if (!command && !oneOff) return;
     // GPT Live moved the page by its own words meanwhile: moving it again would go one too far ("next slide").
     if ((bridge.mediator?.cueAt ?? 0) >= since) { bridge.log({ type: 'stage.ahead_skipped', said: said.slice(-160), reason: 'a cue moved the page meanwhile' }); return; }
-    const { done, onScreen } = await bridge.stage.run(p.steps);
+    let done: { say: string }[], onScreen: string;
+    if (command) ({ done, onScreen } = await bridge.stage.run(p.steps));
+    else {
+      const started = Date.now(), { actions, say } = await bridge.fastAction!.write(said, await bridge.stage.digest());
+      const shown = await bridge.stage.act(actions);
+      bridge.log({ type: 'stage.improvised', said, actions, ms: Date.now() - started, ahead: true });
+      done = [{ say: `A one-off action for "${said.slice(0, 80)}"` }]; onScreen = say ? `${say} (${shown})` : shown;
+    }
     bridge.presentedAt = bridge.aheadAt = Date.now(); bridge.aheadMoved = true;
     bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen, ahead: true });
     return { told: pageAhead(bridge.agent, done, onScreen) };
