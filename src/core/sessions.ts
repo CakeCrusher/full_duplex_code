@@ -88,7 +88,7 @@ export class SessionSwitch {
       const message = (error as Error).message, failed = error instanceof StageError ? [error.failed] : steps.map(id => bridge.stage.view?.commands.find(c => c.id === id) ?? { id, say: id });
       const done = error instanceof StageError ? error.done : [];
       if (done.length) bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen: (error as StageError).onScreen });
-      return { needsAgent, note: pageFailedNote(failed, message), told: pageFailed(agent, message, done) };
+      return { needsAgent, note: pageFailedNote(failed, message, bridge.stage.view), told: pageFailed(agent, message, done) };
     }
   }
 
