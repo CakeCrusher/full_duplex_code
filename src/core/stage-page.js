@@ -107,7 +107,11 @@
       commands.push({ id: `next_${kind}`, say: `Go to the next ${label}`, run: () => go(step(kind, 1), kind === 'section' || kind === 'heading' ? 'start' : 'center') });
       commands.push({ id: `previous_${kind}`, say: `Go to the previous ${label}`, run: () => go(step(kind, -1), kind === 'section' || kind === 'heading' ? 'start' : 'center') });
     }
-    commands.push({ id: 'back', say: 'Go back to wherever the viewer was just before the last move (only when they say go back without naming a part)', run: async () => { const el = stage.history.pop(); if (!el) return null; stage.at = el; stage.ringOn = true; reveal(el, 'center'); await settle(); return describe(el); } });
+    // Back: to the named place shown before the last one (a slide, a section, a part), else the element before.
+    commands.push({ id: 'back', say: 'Go back to wherever the viewer was just before the last move (only when they say go back without naming a part)', run: async () => {
+      if (stage.trail.length >= 2) { stage.trail.pop(); return stage.run(stage.trail.at(-1), { again: true }); }
+      const el = stage.history.pop(); if (!el) return null; stage.at = el; stage.ringOn = true; reveal(el, 'center'); await settle(); return describe(el);
+    } });
     const scroll = async direction => { scrollBy({ top: direction * innerHeight * 0.6, behavior: 'smooth' }); await new Promise(r => setTimeout(r, 450)); stage.at = null; return describe(current('paragraph')); };
     commands.push({ id: 'scroll_down', say: 'Scroll down a bit, when they name no unit (not paragraphs, sections or items)', run: () => scroll(1) });
     commands.push({ id: 'scroll_up', say: 'Scroll up a bit, when they name no unit (not paragraphs, sections or items)', run: () => scroll(-1) });
@@ -181,7 +185,7 @@
     return `Page "${document.title}" (${location.href}), scrolled ${Math.round(scrollY)} of ${Math.max(0, document.documentElement.scrollHeight - innerHeight)} px.\nWhere: ${window.fdcController?.where?.() ?? describe(current('paragraph'))}\nHeadings:\n${headings.join('\n')}\nInteractive elements:\n${lines.join('\n')}\nOn screen now: ${seen}`;
   };
   const stage = window.__fdcStage = {
-    version: VERSION, history: [], at: null, ringOn: false, indexed: [], digest,
+    version: VERSION, history: [], trail: [], at: null, ringOn: false, indexed: [], digest,
     /** For action code: element [n] of the last digest, showing an element (scroll and ring), waiting. */
     el: n => { const el = stage.indexed[n - 1]; if (!el) throw new Error(`No element [${n}]`); return el; },
     show: async el => { if (!el) throw new Error('Nothing to show'); return go(el); },
@@ -222,11 +226,14 @@
         cues: c?.cues?.() ?? [],
       };
     },
-    async run(id) {
+    async run(id, { again = false } = {}) {
       const command = stage.commands().find(c => c.id === id);
       if (!command) throw new Error(`No command "${id}" on this page`);
       // Nothing to do (no earlier place to go back to, no next item): null, and fdc sends the request on.
-      return (await command.run()) ?? null;
+      const out = (await command.run()) ?? null;
+      // A move to a named place joins the trail that back follows; relative moves (next, scroll) don't.
+      if (out !== null && !again && !/(^|_)(next|previous|prev|back|scroll|top|bottom|clear|here)(_|$)/.test(id) && stage.trail.at(-1) !== id) stage.trail.push(id);
+      return out;
     },
   };
 })();
