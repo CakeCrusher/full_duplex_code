@@ -8,7 +8,7 @@ import { StageError, StageNothing, type StageView } from './stage.ts';
 import { FastAction, type PageAction } from './fast-action.ts';
 import { PAGE_ONLY, PAGE_OTHER, PAGE_UNHAPPY, PAGE_WORK, type PageJudgment } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
-import { controllerNote, cueHandled, cueMovedNote, cueShown, improvisedFailedNote, lookingNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote } from './prompts.ts';
+import { controllerNote, cueHandled, cueMovedNote, cueShown, improvisedFailedNote, lookingNote, oneOffDone, oneOffNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote } from './prompts.ts';
 
 export class Presenter {
   bridge: Harness;
@@ -84,7 +84,7 @@ export class Presenter {
     }
   }
 
-  /** No command fits: a fast model writes a one-off action for the page, which runs at once. A failure goes to the agent. */
+  /** No command fits: a fast model writes a one-off action for the page, which runs at once; the agent hears of it, to add a command. */
   async improvise(said: string, needsAgent: number | null, alongside = false): Promise<Gated> {
     const bridge = this.bridge, { agent } = bridge, started = Date.now();
     let steps: PageAction[] = [];
@@ -96,8 +96,9 @@ export class Presenter {
       const done = [{ id: 'one_off', say: `A one-off action for "${said.slice(0, 80)}"` }];
       bridge.log({ type: 'stage.improvised', said, actions, ms: Date.now() - started });
       bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });
-      if (alongside) return { needsAgent, note: pageDoneNote(done), told: pageAlongside(agent, done, onScreen) };
-      return { needsAgent, handled: pageHandled(agent, done, onScreen), page: true };
+      // Done at once, and the agent hears of it too: no command could do it, so the page's controller is what fell short.
+      if (alongside) return { needsAgent, note: `${pageDoneNote(done)} ${oneOffNote(said, onScreen)}`, told: pageAlongside(agent, done, onScreen) };
+      return { needsAgent, note: oneOffNote(said, onScreen), told: oneOffDone(agent, onScreen) };
     } catch (error) {
       const message = (error as Error).message;
       bridge.log({ type: 'stage.improvise_failed', said, actions: steps, message, ms: Date.now() - started });
