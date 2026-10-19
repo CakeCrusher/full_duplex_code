@@ -45,3 +45,15 @@ test('a new response starts fresh after a pause', () => {
   assert.deepEqual(m.hear(" Let's look at sessions.", 1500).map(c => c.run), ['goto_sessions'], 'said again in the same response, it moves again');
   assert.deepEqual(m.hear(" Let's look at sessions.", 9000).map(c => c.run), ['goto_sessions']);
 });
+
+test("the operator's latest words that the voice answered by moving the page are noted for the agent", async () => {
+  const { VoiceHistory } = await import('../src/core/voice-history.ts');
+  const h = new VoiceHistory();
+  const say = (delta: string, start_ms: number, end_ms: number) => h.add({ type: 'session.input_transcript.delta', delta, start_ms, end_ms });
+  say('Fix the parser.', 0, 900);
+  h.markDelivered(h.request(1000)!);
+  say('Um, take me', 5000, 5600); say(' to the options.', 5700, 6400);
+  assert.equal(h.noteLatest('moved'), 2);
+  const request = h.request(Infinity)!;
+  assert.deepEqual(request.notes, ['moved']); assert.equal(request.fresh, '', 'noted words are not judged again');
+});

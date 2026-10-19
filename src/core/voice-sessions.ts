@@ -410,6 +410,10 @@ export class VoiceSessions {
    * Once per page per session, again when the page or its parts change.
    */
   async briefStage(run = this.run) {
+    // Whatever goes wrong here (a page's odd data, a closed session) is logged, never thrown: callers don't wait.
+    try { await this.brief(run); } catch (error) { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); }
+  }
+  async brief(run = this.run) {
     const live = run?.live;
     if (!run || !live || live.state !== 'active' || this.live !== live) return;
     const view = await this.bridge.stage.describe(0).catch(error => { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; });
