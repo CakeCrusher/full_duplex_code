@@ -33,6 +33,8 @@ test('a name moves the page only after a turning phrase, once, as soon as its la
   assert.deepEqual(spoken(m, [' Back', ' to', ' the', ' system', ' map.']), ['goto_system_map'], 'the longer name wins');
   assert.deepEqual(spoken(m, [' Next', ' slide', ' please.']), ['page_next_slide'], "the page's own phrase needs no turning words");
   assert.deepEqual(spoken(m, [' Look', ' at', ' your', ' recommendation', ' here.']), ['show_my_recommendation'], 'my and your are the same name');
+  assert.deepEqual(spoken(m, [" Let's", ' look', ' the', ' sessions', ' part.']), ['goto_sessions'], 'loosely said');
+  assert.deepEqual(spoken(m, [' Now,', ' system', ' map.']), ['goto_system_map']);
 });
 
 test('a new response starts fresh after a pause', () => {
