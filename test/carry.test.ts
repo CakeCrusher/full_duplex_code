@@ -1,6 +1,9 @@
 // Speech carried from one voice connection to its replacement is never lost, even when the replacement fails to start.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
+import { Mediator } from '../src/core/mediator.ts';
 import { harness, Live, page, settle, until } from './live-fake.ts';
 
 const words = 'Rename the options parser to argv.';
@@ -62,4 +65,23 @@ test("speech carried to a fork that never starts reaches the agent when the page
   assert.ok(published.some(({ event, page }) => event.type === 'voice_closed' && event.reconnect && page === 'q'), 'the page is told to start over');
   await settle(300);
   assert.ok(delivered.some(d => d.content.includes('argv')), 'it does not: the operator words reached the agent');
+});
+
+test('a request fdc handles itself just after the connection drops gives its words back to be carried, not to the agent', async t => {
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {}; live.append = async () => {};
+  const deliveries: any[] = [];
+  let handle!: () => void;
+  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null,
+    gate: () => new Promise(resolve => { handle = () => resolve({ needsAgent: .1, handled: 'Turned on.', companion: false }); }) });
+  t.after(() => observer.close());
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Turn on the other session.', start_ms: 0, end_ms: 900 });
+  m.delegate('d1', 900);
+  await until(() => handle);
+  m.stop();
+  handle();
+  await settle(50);
+  assert.equal(deliveries.length, 0, 'not handed to the agent as if voice ended');
+  const pending = m.history.request(Infinity);
+  assert.deepEqual(pending?.utterances.map(u => u.text), ['Turn on the other session.'], 'pending, noted, for the replacement to carry');
 });
