@@ -6,13 +6,16 @@
 type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
 
 /** One step on the page. n is an element's number in the digest. */
-export type PageAction = { do: 'click'; n: number } | { do: 'show'; n: number } | { do: 'find'; text: string } | { do: 'scroll'; to: 'up' | 'down' | 'top' | 'bottom' } | { do: 'wait'; ms: number };
+export type PageAction = { do: 'click'; n: number } | { do: 'show'; n: number } | { do: 'find'; text: string; in?: FindKind } | { do: 'scroll'; to: 'up' | 'down' | 'top' | 'bottom' } | { do: 'wait'; ms: number };
+/** The kind of thing a find is for, when the operator named it ("the Gemini row"). */
+export type FindKind = 'row' | 'item' | 'cell' | 'heading' | 'paragraph';
+const KINDS = new Set(['row', 'item', 'cell', 'heading', 'paragraph']);
 export interface OneOff { actions: PageAction[]; say: string }
 
 const INSTRUCTIONS = `You steer a web page for someone who asked for something by voice. Choose the steps that do it, from these only:
 {"do":"click","n":N} clicks interactive element [N] of the digest (a tab, button, toggle, link on this site);
 {"do":"show","n":N} scrolls element [N] into view and rings it;
-{"do":"find","text":"..."} finds the smallest thing anywhere on the page, on screen or not, whose text contains these words (a row, a number, a phrase), scrolls to it and rings it: use the operator's own words for what to find ("Gemini", "Q3");
+{"do":"find","text":"...","in":"row"} finds the smallest thing anywhere on the page, on screen or not, whose text contains these words (a row, a number, a phrase), scrolls to it and rings it: use the operator's own words for what to find ("Gemini", "Q3"); "in" (optional) is the kind of thing they named: "row" (a table row), "item" (a list item), "cell", "heading" or "paragraph";
 {"do":"scroll","to":"up"|"down"|"top"|"bottom"};
 {"do":"wait","ms":M} waits up to 3000 ms in all (after a click that animates).
 Use what the digest says is on screen to answer questions about it: point at the answer with find. Find already scrolls to and rings what it finds: don't add a show after it. Use show only with a number from the digest.
@@ -31,7 +34,7 @@ export function parseOneOff(text: string): OneOff {
   for (const a of actions) {
     if (!a || !VERBS.has(a.do)) throw new Error(`Refused a page step: ${JSON.stringify(a).slice(0, 80)}`);
     if ((a.do === 'click' || a.do === 'show') && !(Number.isInteger(a.n) && a.n > 0 && a.n <= 200)) throw new Error(`Refused a page step: ${JSON.stringify(a)}`);
-    if (a.do === 'find' && !(typeof a.text === 'string' && a.text.trim() && a.text.length <= 120)) throw new Error(`Refused a page step: ${JSON.stringify(a).slice(0, 80)}`);
+    if (a.do === 'find' && !(typeof a.text === 'string' && a.text.trim() && a.text.length <= 120 && (a.in === undefined || KINDS.has(a.in)))) throw new Error(`Refused a page step: ${JSON.stringify(a).slice(0, 80)}`);
     if (a.do === 'scroll' && !['up', 'down', 'top', 'bottom'].includes(a.to)) throw new Error(`Refused a page step: ${JSON.stringify(a)}`);
     if (a.do === 'wait') { a.ms = Math.max(0, Math.min(waits, Number(a.ms) || 0)); waits -= a.ms; }
   }

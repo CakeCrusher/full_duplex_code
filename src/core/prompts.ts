@@ -111,7 +111,7 @@ export const handledNote = (what: keyof typeof HANDLED) =>
   `Some of it went to the voice tool earlier and not to you, because the voice tool judged it to be only ${HANDLED[what]}; the voice tool has done that part. Act on the rest, which may finish what it began.`;
 // The page on the stage (stage.ts): what the gate did there, for GPT Live and for the agent.
 // Without a command's guidance for Jev ("(only when they say go back without naming a part)").
-const steps = (done: readonly { say: string }[]) => done.map(d => d.say.replace(/\s*\([^)]*\)/g, '').replace(/\.$/, '')).join(', then ');
+const steps = (done: readonly { say: string }[]) => done.map(d => d.say.replace(/\s*\([^()]*\)\s*$/, '').replace(/\.$/, '')).join(', then ');
 export const pageHandled = ({ profile: { product } }: Agent, done: readonly { say: string }[], onScreen: string) =>
   `Nothing was sent to ${product}: the voice tool did it on the page (${steps(done)}). On screen now: ${onScreen.slice(0, 700)} Tell the operator in a few words what they are looking at, or just carry on if they are stepping through; don't describe the move.`;
 export const pageAhead = ({ profile: { product } }: Agent, done: readonly { say: string }[], onScreen: string) =>
