@@ -5,7 +5,9 @@
 /** A cue: the words that run a stage command. A name cue matches after a turning phrase. */
 export interface SpeechCue { run: string; label: string; words: string[]; name?: boolean }
 
-const normalize = (text: string) => text.toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+// Numbers said as words match names written with digits ("stage two" is "stage 2").
+const NUMBERS: Record<string, string> = { one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12' };
+const normalize = (text: string) => text.toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9]+/g, ' ').trim().split(' ').map(w => NUMBERS[w] ?? w).join(' ');
 /** Words a name may start with that people drop or swap ("my recommendation", "the options"). */
 const LEADING = new Set(['the', 'my', 'your', 'our', 'a', 'this', 'that']);
 export const cueWords = (text: string) => { const words = normalize(text).split(' ').filter(Boolean); while (words.length > 1 && LEADING.has(words[0])) words.shift(); return words; };
@@ -15,7 +17,7 @@ export const cueWords = (text: string) => { const words = normalize(text).split(
 const TURNS = [['look', 'at'], ['go', 'to'], ['turn', 'to'], ['move', 'to'], ['jump', 'to'], ['head', 'to'], ['on', 'to'], ['onto'], ['over', 'to'], ['back', 'to'], ['look']];
 
 // A part's number said before its name ("let's look at stage one, the browser reads the address").
-const NUMBERING = /^(stage|step|slide|box|number|\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)$/;
+const NUMBERING = /^(stage|step|slide|box|number|\d+)$/;
 
 export class CueMatcher {
   cues: SpeechCue[] = [];
