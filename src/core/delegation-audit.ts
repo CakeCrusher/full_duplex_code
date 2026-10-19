@@ -31,7 +31,7 @@ export interface Session { id: string; folder: string; agent: string; on: boolea
 /** Jev's reading of a request for session orchestration. */
 export interface SessionsJudgment { asked: number; only: number; unlisted: number; turnOn: string[]; turnOff: string[] }
 /** Jev's reading of a request for the page on the stage: the commands to run, in order. */
-export interface PageJudgment { steps: string[]; only: number; count: number; /** Jev's probability that work is asked of the agent besides the page commands. */ work?: number }
+export interface PageJudgment { steps: string[]; only: number; count: number; /** Jev's probability that work is asked of the agent besides the page commands. */ work?: number; /** That something is asked of the page that no command does. */ other?: number }
 export interface Judgment { needsAgent: number | null; sessions?: SessionsJudgment; /** Only about how the voice companion behaves, nothing for the agent. */ companionOnly?: number; page?: PageJudgment }
 
 // Probabilities above which Jev's reading is acted on. A request is kept from the harness only when
@@ -46,7 +46,7 @@ export const COMPANION_ONLY = .85;
 // harness as page-only from PAGE_ONLY, and only while PAGE_WORK says no work is asked: on trial requests
 // (Oct 19), page-only ones scored only .55-.96 and work .04-.21, ones with work in them only .02-.67 and
 // work .38-.82. Misjudged page-only words still reach the agent, with the next request.
-export const PAGE_STEP = .5, PAGE_ONLY = .4, PAGE_WORK = .3;
+export const PAGE_STEP = .5, PAGE_ONLY = .4, PAGE_WORK = .3, PAGE_OTHER = .5;
 // Words before the utterance that no request carried yet still reach the agent later; they are context here.
 // What the companion said just before: "yes, please" answers its offer ("want me to show the diagrams?").
 const COMPANION_SETTING = ' `companion_before` is what the voice companion said just before `utterance`; use it only to understand short replies such as "yes, please".';
@@ -54,7 +54,8 @@ const EARLIER_SETTING = ' `earlier` is what the operator said before `utterance`
 const PAGE_SETTING = ' A page is open in the browser beside the conversation (`page`). The voice tool can move it, show and highlight its parts with the listed page commands, without the coding agent. Commands whose id starts with page_ are the page\'s own (slides, tabs, views): prefer them when they fit.';
 // Each step names a whole command, so Jev's independent answers never have to agree on its arguments.
 const pageQuestions = (page: StageView) => {
-  const criteria = { none: 'No page command: nothing is to be shown, moved or highlighted on the page.', ...Object.fromEntries(page.commands.map(c => [c.id, c.say])) };
+  // "Or perform another action": something asked of the page that no command does, for fdc's one-off action (fast-action.ts).
+  const criteria = { none: 'No page command: nothing is to be shown, moved or highlighted on the page.', ...Object.fromEntries(page.commands.map(c => [c.id, c.say])), [OTHER]: 'Another action on the page that none of these commands does exactly: find, point at or highlight a specific thing (a row, a word, a number), click or open a control, switch a view, zoom.' };
   const step = (n: number) => ({ type: 'choice', instructions: `List the page commands the operator asks for, in order, writing a command once for each time it should run ("forward three sections" is the next-section command three times). Asking to make, add, change or fix something is work for the coding agent, never a page command; asking to explain, present or run through something that is on the page also asks to show it. Which command is number ${n} in that list? Choose none if the list is shorter.`, criteria });
   return {
     page_steps: { type: 'choice', instructions: 'How many page commands should run, counting each repetition ("forward three sections" is 3, "go to the options and highlight the recommendation" is 2)? Work for the coding agent (making, adding, changing or fixing anything), questions and talk are not page commands.', criteria: { '0': 'No page command.', '1': 'One.', '2': 'Two.', '3': 'Three.', '4': 'Four.', '5': 'Five or more.' } },
@@ -64,6 +65,8 @@ const pageQuestions = (page: StageView) => {
     page_work: { type: 'noul', instructions: 'Besides moving, showing or highlighting things on the page, does the operator ask the coding agent to make, add, change, fix, explain or look into anything?', criteria: { true: 'Some work, change, research or answer is asked of the coding agent, even alongside a page command: changing how the page looks (bigger, bolder, colours, wording) is work.', false: 'Only page commands, or finding and pointing at something already on the page, with at most filler or thanks.' } },
   };
 };
+/** The step choice for "another action on the page". */
+export const OTHER = 'other_action';
 const pageLine = (page: StageView) => `${page.title} (${page.url})${page.about ? `: ${page.about}` : ''}. The viewer is at: ${page.where}`.slice(0, 900);
 
 const SESSIONS_SETTING = ' The operator may run several companions at once, each beside its own coding session in its own folder (`sessions`); each one\'s voice can be on or off, and several can be on together. fdc, the voice tool itself, turns them on or off; the coding agent does not. Every listed session is already running, so starting, opening or turning on a listed session (named by its folder or project) means turning its voice on, and stopping or closing one means turning its voice off.';
@@ -141,15 +144,17 @@ export class DelegationAudit {
         const likely = Number(answer?.probabilities?.[id] ?? answer?.confidence ?? 1);
         return typeof id === 'string' && likely >= PAGE_STEP && page.commands.some(c => c.id === id) ? id : undefined;
       };
+      // Another action at any step: the whole request goes to a one-off action, which can do the rest too.
+      const other = Math.max(0, ...['page_step_1', 'page_step_2', 'page_step_3'].map(name => answers?.[name]?.choice === OTHER ? Number(answers[name].probabilities?.[OTHER] ?? answers[name].confidence ?? 1) : 0));
       const count = Number(answers?.page_steps?.choice) || 0, steps = [step('page_step_1'), step('page_step_2'), step('page_step_3')];
       // A step 1 without a count still runs; the count otherwise says where the list ends.
       let chosen = steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id);
       // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
       if (steps[0] && steps[1] === steps[0] && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
-      judgment.page = { steps: chosen, only: p('page_only'), work: p('page_work'), count };
+      judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: p('page_work'), other, count };
       // Each step's likeliest commands, for tuning the page questions.
       const top = (name: string) => Object.entries(answers?.[name]?.probabilities ?? {}).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 3).map(([id, v]) => `${id} ${Number(v).toFixed(2)}`).join(', ');
-      this.log({ type: 'page.judged', utterance: state.utterance, count: answers?.page_steps?.choice, step_1: top('page_step_1'), step_2: top('page_step_2'), step_3: top('page_step_3'), only: p('page_only'), work: p('page_work') });
+      this.log({ type: 'page.judged', utterance: state.utterance, count: answers?.page_steps?.choice, step_1: top('page_step_1'), step_2: top('page_step_2'), step_3: top('page_step_3'), only: p('page_only'), work: p('page_work'), other });
     }
     return judgment;
   }

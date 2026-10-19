@@ -3,7 +3,7 @@
 // controller (sections, headings, paragraphs, items, figures), the page's own annotations
 // (data-fdc) and controller (window.fdcController), merged into one list of commands.
 (() => {
-  const VERSION = 1;
+  const VERSION = 2;
   if (window.__fdcStage?.version === VERSION) return;
   const UNITS = {
     heading: 'h1, h2, h3, h4',
@@ -32,6 +32,7 @@
   };
 
   // A ring around the current element, kept in place while the page scrolls.
+  document.getElementById('__fdc_ring')?.remove();
   const ring = document.createElement('div');
   ring.id = '__fdc_ring';
   Object.assign(ring.style, { position: 'fixed', pointerEvents: 'none', zIndex: 2147483646, borderRadius: '10px', boxShadow: '0 0 0 3px rgba(255,170,0,.95), 0 0 0 9px rgba(255,170,0,.25)', transition: 'all .25s ease', opacity: '0' });
@@ -163,8 +164,25 @@
     const quoted = say => [...String(say ?? '').matchAll(/["“]([^"”]{2,60})["”]/g)].at(-1)?.[1];
     return c.commands().map(cmd => ({ id: `page_${slug(cmd.id)}`, say: cmd.say, name: cmd.name ?? quoted(cmd.say), run: async () => { const out = await c.run(cmd.id); return typeof out === 'string' ? out : describe(stage.at); } }));
   };
+  // For a one-off action (fdc's fallback when no command fits): what the viewer can act on, numbered,
+  // and what is on screen. Action code reaches element [n] as el(n).
+  const ACTABLE = 'button, a[href], input, select, textarea, summary, [role=tab], [role=button], [role=menuitem], [role=checkbox], [role=switch], [role=option], [onclick], [tabindex]:not([tabindex="-1"])';
+  const digest = () => {
+    const els = [...document.querySelectorAll(ACTABLE)].filter(el => visible(el) && !el.closest('#__fdc_ring')).slice(0, 80);
+    stage.indexed = els;
+    const state = el => [el.getAttribute('aria-selected') === 'true' && 'selected', el.getAttribute('aria-expanded') === 'true' && 'expanded', el.checked && 'checked', el.disabled && 'disabled', 'value' in el && el.value && el.tagName !== 'BUTTON' && `value "${String(el.value).slice(0, 30)}"`].filter(Boolean).join(', ');
+    const lines = els.map((el, i) => `[${i + 1}] ${el.getAttribute('role') || el.tagName.toLowerCase()}${el.type && el.tagName === 'INPUT' ? `(${el.type})` : ''} "${(text(el) || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('href') || '').slice(0, 60)}"${state(el) ? ` (${state(el)})` : ''}`);
+    const headings = units('heading').slice(0, 30).map(h => `${'#'.repeat(level(h))} ${text(h).slice(0, 80)}`);
+    const seen = [...document.querySelectorAll('p, li, td, figcaption, h1, h2, h3')].filter(el => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && visible(el); }).map(text).join(' ').slice(0, 1500);
+    return `Page "${document.title}" (${location.href}), scrolled ${Math.round(scrollY)} of ${Math.max(0, document.documentElement.scrollHeight - innerHeight)} px.\nWhere: ${window.fdcController?.where?.() ?? describe(current('paragraph'))}\nHeadings:\n${headings.join('\n')}\nInteractive elements:\n${lines.join('\n')}\nOn screen now: ${seen}`;
+  };
   const stage = window.__fdcStage = {
-    version: VERSION, history: [], at: null, ringOn: false,
+    version: VERSION, history: [], at: null, ringOn: false, indexed: [], digest,
+    /** For action code: element [n] of the last digest, showing an element (scroll and ring), waiting. */
+    el: n => { const el = stage.indexed[n - 1]; if (!el) throw new Error(`No element [${n}]`); return el; },
+    show: async el => { if (!el) throw new Error('Nothing to show'); return go(el); },
+    wait: ms => new Promise(resolve => setTimeout(resolve, Math.min(ms, 3000))),
+    now: () => describe(stage.at?.isConnected ? stage.at : current('paragraph')),
     commands: () => [...page(), ...base()],
     describe() {
       const c = window.fdcController;

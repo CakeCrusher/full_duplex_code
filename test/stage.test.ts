@@ -51,9 +51,9 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   const audit = new DelegationAudit({ apiKey: 'k', file: '/dev/null', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers }) }; } });
   const choice = (id: string, p = .95) => ({ choice: id, probabilities: { [id]: p } });
   answers = { needs_agent: { noul: .2 }, page_steps: { choice: '2' }, page_step_1: choice('goto_options'), page_step_2: choice('show_the_recommendation'), page_step_3: choice('show_the_recommendation'), page_only: { noul: .8 } };
-  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, work: 0, count: 2 });
+  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, work: 0, other: 0, count: 2 });
   assert.match(sent.state.page, /Briefing .*The viewer is at: section "Intro"/);
-  assert.deepEqual(Object.keys(sent.questions.page_step_1.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation']);
+  assert.deepEqual(Object.keys(sent.questions.page_step_1.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation', 'other_action']);
   answers = { ...answers, page_steps: { choice: '0' }, page_step_2: choice('none') };
   assert.deepEqual((await audit.judge('options', undefined, 3000, view)).page!.steps, ['goto_options'], 'a confident first step runs without a count');
   answers = { ...answers, page_steps: { choice: '3' }, page_step_1: choice('next_section', .4), page_step_2: choice('made_up'), page_step_3: choice('next_section') };
@@ -62,6 +62,8 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   assert.deepEqual((await audit.judge('next section and add a slide', undefined, 3000, view)).page!.steps, ['next_section'], 'a count that includes work is not a repetition');
   answers = { ...answers, page_steps: { choice: '5' }, page_step_1: choice('next_section'), page_step_2: choice('next_section'), page_step_3: choice('none') };
   assert.deepEqual((await audit.judge('down five sections', undefined, 3000, view)).page!.steps, Array(5).fill('next_section'), 'one command repeated runs as often as counted');
+  answers = { ...answers, page_steps: { choice: '2' }, page_step_1: choice('goto_options'), page_step_2: choice('other_action', .9), page_step_3: choice('none') };
+  assert.deepEqual((await audit.judge('go to the options and highlight the third row', undefined, 3000, view)).page!.steps, [], 'another action anywhere: the whole request is a one-off action');
   answers = { needs_agent: { noul: .9 } };
   assert.equal((await audit.judge('fix the parser', undefined, 3000)).page, undefined, 'no page, no page questions');
   assert.equal(sent.questions.page_steps, undefined);
@@ -111,4 +113,12 @@ test('the mediator tells GPT Live what the page shows and sends the harness the 
   await until(() => deliveries.length);
   assert.deepEqual(appends[0], ['thinking', 'On screen now: Options.', 'd1']);
   assert.match(deliveries[0].content, /Earlier speech went with earlier voice requests\. The voice tool already did the page part\.\n\nuser: Show me the options and fix the typo\.$/);
+});
+
+test('a one-off action that reaches outside the page is refused before it runs', async () => {
+  const { FastAction } = await import('../src/core/fast-action.ts');
+  const reply = (code: string) => new FastAction({ apiKey: 'k', fetch: async () => ({ ok: true, status: 200, json: async () => ({ output_text: code }) }) });
+  assert.equal(await reply('el(3).click();\nreturn "The table is open.";').write('open the table', 'digest'), 'el(3).click();\nreturn "The table is open.";');
+  assert.equal(await reply('```js\nel(1).click();\n```').write('x', 'digest'), 'el(1).click();', 'fences are dropped');
+  for (const code of ['await fetch("https://x")', 'location.href = "https://x"', 'localStorage.clear()', 'window.open("x")', 'document.cookie']) await assert.rejects(reply(code).write('x', 'digest'), /Refused an action that reaches outside the page/, code);
 });
