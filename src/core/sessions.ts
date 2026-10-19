@@ -11,9 +11,9 @@
 import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import { listCompanions, type CompanionEntry } from './companions.ts';
-import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, PAGE_OTHER, PAGE_UNHAPPY, PAGE_WORK, UNLISTED, type Session } from './delegation-audit.ts';
+import { ASKED, COMPANION_ONLY, ONLY, UNLISTED, type Session } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
-import { companionHandled, controllerNote, lookingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
+import { companionHandled, sessionsHandled, sessionsOutcome } from './prompts.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
 
@@ -51,16 +51,13 @@ export class SessionSwitch {
     const judgment = await bridge.handOffAudit!.judge(said, sessions, 3000, page, earlier, companion), { needsAgent } = judgment, asked = judgment.sessions!;
     bridge.log({ type: 'sessions.judged', requestId, needsAgent, ...asked, companionOnly: judgment.companionOnly, page: judgment.page });
     if (asked.asked < ASKED) {
-      if (judgment.page?.steps.length) return cued ? bridge.presenter.cued(judgment.page, needsAgent) : bridge.presenter.present(judgment.page, needsAgent);
-      // Something asked of the page that no command does: a one-off action (none for words the voice already moved the
-      // page for). With work in the request too, the request still goes to the agent, noting the page part is done.
-      if (judgment.page && (judgment.page.other ?? 0) >= PAGE_OTHER && bridge.fastAction) return cued ? bridge.presenter.cued(judgment.page, needsAgent) : bridge.presenter.improvise(said, needsAgent, !(judgment.page.only >= PAGE_ONLY && (judgment.page.work ?? 1) < PAGE_WORK));
+      // Asked of the page: the presenter does it (and says what went on to the agent, if anything).
+      const presented = page && judgment.page && await bridge.presenter.request(judgment.page, said, needsAgent, cued);
+      if (presented) return presented;
       // Only about how the companion behaves: Jev's tuning and instruction learning take it from here, not the harness.
       if ((judgment.companionOnly ?? 0) >= COMPANION_ONLY) return { needsAgent, handled: companionHandled(bridge.agent), companion: true };
-      // Unhappy with the page, and no command answers it: the page's controls are what's lacking, so the agent improves them.
-      if (page && (judgment.page?.unhappy ?? 0) >= PAGE_UNHAPPY) return { needsAgent, note: controllerNote(page) };
-      // For the agent: what the user was looking at when they said it ("make this bigger").
-      return page ? { needsAgent, note: lookingNote(page) } : { needsAgent };
+      // For the agent: what the page could not do, or what the user was looking at when they said it.
+      return page ? { needsAgent, note: bridge.presenter.noteFor(page, judgment.page) } : { needsAgent };
     }
     // A session named that isn't running: Jev still picks the nearest listed one to turn on ("switch to runta" chose
     // video-editing), so nothing is turned on or off; GPT Live is told which ones are running.

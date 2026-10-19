@@ -4,11 +4,11 @@
 // fits (fast-action.ts). The page itself, and how fdc reaches it, is the stage (stage.ts).
 import type { Harness } from './bridge.ts';
 import { CueMatcher } from './speech-cues.ts';
-import { StageError, StageNothing } from './stage.ts';
-import type { PageAction } from './fast-action.ts';
-import { PAGE_ONLY, PAGE_WORK, type PageJudgment } from './delegation-audit.ts';
+import { StageError, StageNothing, type StageView } from './stage.ts';
+import { FastAction, type PageAction } from './fast-action.ts';
+import { PAGE_ONLY, PAGE_OTHER, PAGE_UNHAPPY, PAGE_WORK, type PageJudgment } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
-import { cueHandled, cueMovedNote, cueShown, improvisedFailedNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote } from './prompts.ts';
+import { controllerNote, cueHandled, cueMovedNote, cueShown, improvisedFailedNote, lookingNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote } from './prompts.ts';
 
 export class Presenter {
   bridge: Harness;
@@ -16,7 +16,9 @@ export class Presenter {
   speechCues = new CueMatcher();
   /** GPT Live's sentence so far, and when the page last moved by its words or the gate: then it is presenting. */
   sentence = ''; presentedAt = 0;
-  constructor(bridge: Harness) { this.bridge = bridge; }
+  /** One-off actions on the stage when no page command fits. */
+  fastAction?: FastAction;
+  constructor(bridge: Harness, apiKey?: string) { this.bridge = bridge; if (apiKey && apiKey !== 'unused') this.fastAction = new FastAction({ apiKey }); }
   /** GPT Live said more: a cue in it moves the page now, and GPT Live quietly hears what is on screen. */
   heard(delta: string) {
     const bridge = this.bridge;
@@ -41,6 +43,17 @@ export class Presenter {
       }).catch(error => bridge.log({ type: 'stage.cue_failed', run: cue.run, label: cue.label, message: (error as Error).message }));
     }
   }
+  /**
+   * A request the gate found asking something of the page: its commands run (none again for words the voice already
+   * moved the page for), or a one-off action when no command does it. Undefined when the page has nothing to do.
+   * With work in the request too, it still goes to the agent, noting the page part is done.
+   */
+  async request(page: PageJudgment, said: string, needsAgent: number | null, cued?: boolean): Promise<Gated | undefined> {
+    if (page.steps.length) return cued ? this.cued(page, needsAgent) : this.present(page, needsAgent);
+    if ((page.other ?? 0) >= PAGE_OTHER && this.fastAction) return cued ? this.cued(page, needsAgent) : this.improvise(said, needsAgent, !(page.only >= PAGE_ONLY && (page.work ?? 1) < PAGE_WORK));
+  }
+  /** For the agent, with a request the page didn't do: its controls fell short (the operator is unhappy with it), or where the user was looking. */
+  noteFor(view: StageView, page?: PageJudgment) { return (page?.unhappy ?? 0) >= PAGE_UNHAPPY ? controllerNote(view) : lookingNote(view); }
   /** The voice moved the page as it answered: nothing moves again ("next slide" twice is two slides), and only the page asked for, nothing goes to the agent. */
   cued({ only, work = 0 }: PageJudgment, needsAgent: number | null): Gated {
     if (only >= PAGE_ONLY && work < PAGE_WORK) return { needsAgent, handled: cueHandled(this.bridge.agent), page: true };
@@ -76,7 +89,7 @@ export class Presenter {
     const bridge = this.bridge, { agent } = bridge, started = Date.now();
     let steps: PageAction[] = [];
     try {
-      const { actions } = await bridge.fastAction!.write(said, await bridge.stage.digest());
+      const { actions } = await this.fastAction!.write(said, await bridge.stage.digest());
       steps = actions;
       // What the stage reads on screen afterwards, not the fast model's account of what it meant to do.
       const onScreen = await bridge.stage.act(actions);
