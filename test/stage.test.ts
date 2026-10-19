@@ -138,6 +138,19 @@ test('a one-off is only the fixed page steps: anything else, code included, is r
     assert.throws(() => parseOneOff(text), /fast model|Refused a page step/, text);
 });
 
+test('a one-off waits 3 s in all, and a click that opens another page of the site is done, not failed', async () => {
+  const { parseOneOff } = await import('../src/core/fast-action.ts');
+  assert.deepEqual(parseOneOff('{"actions":[{"do":"wait","ms":2000},{"do":"click","n":1},{"do":"wait","ms":2000},{"do":"wait","ms":500}]}').actions.filter(a => a.do === 'wait').map(a => (a as any).ms), [2000, 1000, 0]);
+  const timeouts: (number | undefined)[] = [];
+  const browser = { evaluate: async (_tab: number, _code: string, timeoutMs?: number) => { timeouts.push(timeoutMs); throw new Error('{"code":-32000,"message":"Inspected target navigated or closed"}'); }, close() {} };
+  const stage = new Stage({ log: () => {}, browser: browser as any });
+  stage.tabId = 1;
+  assert.equal(await stage.act([{ do: 'click', n: 1 }, { do: 'wait', ms: 1500 }]), 'The page opened another page of this site.');
+  assert.deepEqual(timeouts, [6500], "the steps' own waits and 5 s for the rest");
+  browser.evaluate = async () => { throw new Error('No element [9]'); };
+  await assert.rejects(stage.act([{ do: 'click', n: 9 }]), /No element \[9\]/);
+});
+
 test('requests reach the agent in the order made, however long each one\'s gate takes', async t => {
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};

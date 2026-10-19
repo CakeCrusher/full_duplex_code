@@ -196,16 +196,30 @@
       for (const a of actions) {
         if (a.do === 'click') {
           const el = stage.el(a.n), link = el.closest('a[href]');
-          if (link && new URL(link.href, location.href).origin !== location.origin) throw new Error(`Won't follow a link to another site (${new URL(link.href, location.href).host})`);
-          el.click(); await new Promise(r => setTimeout(r, 120));
+          const away = url => new URL(url, location.href).origin !== location.origin;
+          if (link && away(link.href)) throw new Error(`Won't follow a link to another site (${new URL(link.href, location.href).host})`);
+          // A control that submits sends its form to its own address or the form's: never to another site.
+          // (Attributes, not formAction or action: those fall back to this page's address when unset.)
+          const submitter = el.closest('button:not([type=button]):not([type=reset]), input[type=submit], input[type=image]');
+          if (submitter?.form && away(submitter.getAttribute('formaction') || submitter.form.getAttribute('action') || location.href)) throw new Error("Won't send a form to another site");
+          // SVG controls have no click(): a click event does it.
+          if (typeof el.click === 'function') el.click(); else el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          await new Promise(r => setTimeout(r, 120));
         } else if (a.do === 'show') await go(stage.el(a.n));
         else if (a.do === 'find') {
-          // Every word, anywhere in it: "Q4 42%" is a row whose cells say Q4 and 42%.
-          const want = String(a.text).toLowerCase().split(/\s+/).filter(Boolean);
-          const hits = [...document.querySelectorAll('body *')].filter(el => { if (el.closest('#__fdc_ring') || !visible(el)) return false; const t = (el.textContent || '').toLowerCase(); return want.every(w => t.includes(w)); });
-          const smallest = hits.filter(el => !hits.some(other => other !== el && el.contains(other)));
-          if (!smallest.length) throw new Error(`Nothing on the page says "${a.text}"`);
-          await go(smallest.map(el => el.closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? el)[0]);
+          // Every word, anywhere in it: "Q4 42%" is a row whose cells say Q4 and 42%. The exact phrase first.
+          const want = String(a.text).toLowerCase().replace(/\s+/g, ' ').trim(), words = want.split(' ').filter(Boolean);
+          const flat = el => (el.textContent || '').toLowerCase().replace(/\s+/g, ' ');
+          const all = [...document.querySelectorAll('body *')].filter(el => { const t = flat(el); return words.every(w => t.includes(w)) && !el.closest('#__fdc_ring'); });
+          // Every ancestor of a match matches too: keep the ones with no matching child (one pass, not pairs).
+          const matched = new Set(all);
+          let hits = all.filter(el => ![...el.children].some(c => matched.has(c)) && visible(el));
+          const exact = hits.filter(el => flat(el).includes(want));
+          if (exact.length) hits = exact;
+          // Words scattered over a whole section don't count: nothing far longer than what was asked for.
+          hits = hits.filter(el => flat(el).length <= Math.max(400, want.length * 20));
+          if (!hits.length) throw new Error(`Nothing on the page says "${a.text}"`);
+          await go(hits[0].closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? hits[0]);
         } else if (a.do === 'scroll') {
           if (a.to === 'top' || a.to === 'bottom') scrollTo({ top: a.to === 'top' ? 0 : document.documentElement.scrollHeight, behavior: 'smooth' });
           else scrollBy({ top: (a.to === 'down' ? 1 : -1) * innerHeight * 0.6, behavior: 'smooth' });
