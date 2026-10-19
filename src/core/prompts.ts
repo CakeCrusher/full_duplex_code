@@ -123,6 +123,7 @@ export const stageBrief = (title: string, names: readonly string[], phrases: rea
 export const stageOutline = (title: string, outline: string) => `What the page "${title.slice(0, 80)}" says, part by part, for presenting it:\n${outline.slice(0, 2400)}`;
 export const cueNoDelegation = 'Nothing to delegate: the page moves when you say a part\'s name, and it already did. Carry on presenting, without "one moment".';
 export const cueMovedNote = 'The voice assistant moved the page in the browser as it answered some of this; don\'t move or open pages for that again, but do anything else it asks.';
+export const cueHandled = ({ profile: { product } }: Agent) => `Nothing was sent to ${product}: you already moved the page as you spoke, which was all the operator asked.`;
 export const cueShown = (onScreen: string) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}`;
 export const pageNothing = ({ profile: { name } }: Agent, failed: { say: string }) =>
   `The page had nothing to do for that (${failed.say.replace(/\.$/, '')}). The request went to ${name}.`;

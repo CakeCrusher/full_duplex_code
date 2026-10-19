@@ -52,14 +52,14 @@ export class Mediator {
   /** Records each hand-off decision of GPT Live with Jev's judgment of it, when Jev is configured. Sends nothing. */
   audit?: DelegationAudit;
   /** The gate: reads a request GPT Live passed on before it reaches the harness (sessions, the companion, the page), when Jev is configured. */
-  gate?: (said: string, requestId: string, earlier?: string, companion?: string) => Promise<Gated>;
+  gate?: (said: string, requestId: string, earlier?: string, companion?: string, cued?: boolean) => Promise<Gated>;
   /** The operator's words of each request, for Jev to tune the companion from (jev-tuner.ts). */
   onSaid?: (said: string) => void;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
   constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, audit, gate, onSaid, firstRecordId = 0 }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
-    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; audit?: DelegationAudit; gate?: (said: string, requestId: string, earlier?: string, companion?: string) => Promise<Gated>; onSaid?: (said: string) => void;
+    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; audit?: DelegationAudit; gate?: (said: string, requestId: string, earlier?: string, companion?: string, cued?: boolean) => Promise<Gated>; onSaid?: (said: string) => void;
     /** Context records are numbered after this one: a fork's context already holds its source's. */
     firstRecordId?: number;
   }) {
@@ -171,7 +171,7 @@ export class Mediator {
     // What GPT Live said last before the operator's latest words: the offer a "yes, please" accepts.
     const lastOperator = request.utterances.findLastIndex(u => u.role === 'operator'), companion = request.utterances.slice(0, lastOperator).findLast(u => u.role === 'intermediary')?.text;
     // The gate starts once earlier gates are done: it may move the page, after the moves asked for before.
-    const judge = () => this.gate!(said, id, request.earlier && this.clean(request.earlier), companion && this.clean(companion)).catch(error => { this.log({ type: 'gate.error', message: (error as Error).message }); return undefined; });
+    const judge = () => this.gate!(said, id, request.earlier && this.clean(request.earlier), companion && this.clean(companion), request.cued).catch(error => { this.log({ type: 'gate.error', message: (error as Error).message }); return undefined; });
     this.gating++;
     const done = this.order.then(judge).then(gated => this.afterGate(id, request, content, delegationId, said, gated))
       // Whatever went wrong, the words go with the next request rather than nowhere.
