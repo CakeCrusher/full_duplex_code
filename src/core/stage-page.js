@@ -246,7 +246,8 @@
       // A move to a named place joins the trail that back follows, and so does a relative move ("next slide") that
       // lands on one the page names; any other relative move is only remembered as the last move, with whether it
       // stepped from an element back can return to.
-      if (out !== null && !again && id !== 'back') {
+      // A limit ("Already on the first slide") moved nothing.
+      if (out !== null && !again && id !== 'back' && !LIMIT.test(String(out))) {
         const place = RELATIVE.test(id) ? landed(out) : id;
         if (place) { stage.last = {}; if (stage.trail.at(-1) !== place) stage.trail.push(place); }
         else stage.last = { relative: true, stepped: stage.history.length > steps };
