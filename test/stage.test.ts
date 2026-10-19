@@ -69,6 +69,8 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   assert.deepEqual((await audit.judge('next section and add a slide', undefined, 3000, view)).page!.steps, ['next_section'], 'a count that includes work is not a repetition');
   answers = { ...answers, page_steps: { choice: '5' }, page_step_1: choice('next_section'), page_step_2: choice('next_section'), page_step_3: choice('none') };
   assert.deepEqual((await audit.judge('down five sections', undefined, 3000, view)).page!.steps, Array(5).fill('next_section'), 'one command repeated runs as often as counted');
+  answers = { ...answers, page_steps: { choice: '0' }, page_step_1: choice('goto_options'), page_step_2: choice('none'), page_work: { noul: .8 } };
+  assert.deepEqual((await audit.judge('make the options section bigger', undefined, 3000, view)).page!.steps, [], "Jev's no page command, with work asked: nothing moves");
   answers = { needs_agent: { noul: .9 } };
   assert.equal((await audit.judge('fix the parser', undefined, 3000)).page, undefined, 'no page, no page questions');
   assert.equal(sent.questions.page_steps, undefined);
@@ -122,4 +124,34 @@ test('the mediator tells GPT Live what the page shows and sends the harness the 
   await until(() => deliveries.length);
   assert.deepEqual(appends[0], ['thinking', 'On screen now: Options.', 'd1']);
   assert.match(deliveries[0].content, /Earlier speech went with earlier voice requests\. The voice tool already did the page part\.\n\nuser: Show me the options and fix the typo\.$/);
+});
+
+test('requests reach the agent in the order made, however long each one\'s gate takes', async t => {
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
+  live.append = async () => {};
+  const deliveries: any[] = [];
+  let release!: () => void;
+  const slow = new Promise<void>(resolve => { release = resolve; });
+  const gate = async (said: string): Promise<Gated> => { if (/bigger/.test(said)) await slow; return { needsAgent: .9 }; };
+  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate });
+  t.after(() => { m.stop(); observer.close(); });
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Go to the options and make its title bigger.', start_ms: 0, end_ms: 900 });
+  m.delegate('d1', 900);
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Actually, make it smaller instead.', start_ms: 5000, end_ms: 6000 });
+  m.delegate('d2', 6000);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(deliveries.length, 0, 'the second waits for the first');
+  release();
+  await until(() => deliveries.length === 2);
+  assert.match(deliveries[0].content, /bigger/); assert.match(deliveries[1].content, /smaller/);
+});
+
+test('a page controller returning anything is kept to well-formed commands and cues', async () => {
+  const odd = { title: 7, url: 'http://localhost/x.html', about: { not: 'text' }, where: null, outline: ['no'], commands: [{ id: 'slide_3', say: 'Go to slide 3', name: 3 }, { id: 4 }, null, 'x', { id: 'ok', say: 'Fine' }], cues: { say: 'next' } };
+  const stage = new Stage({ log: () => {}, browser: { evaluate: async () => odd, close() {} } as any });
+  stage.tabId = 1;
+  const view = (await stage.describe(0))!;
+  assert.deepEqual(view.commands, [{ id: 'slide_3', say: 'Go to slide 3', name: '3' }, { id: 'ok', say: 'Fine' }]);
+  assert.deepEqual(view.cues, []); assert.equal(view.about, null); assert.equal(view.outline, undefined); assert.equal(view.title, '7');
 });

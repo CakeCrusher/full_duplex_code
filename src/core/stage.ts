@@ -58,8 +58,12 @@ export class Stage {
       if (/not in the MCP group|No tab with id|tab.*(closed|not found)/i.test((error as Error).message) && this.tabId === tabId) { this.log({ type: 'stage.gone', tabId }); this.tabId = undefined; this.view = undefined; }
       throw error;
     }
-    this.view = { ...view, tabId }; this.viewAt = Date.now();
-    this.log({ type: 'stage.described', tabId, url: view.url, commands: view.commands.length, cues: view.cues.length, ms: Date.now() - started });
+    // A page's own controller can return anything: keep only well-formed commands and cues.
+    const str = (v: unknown, n = 300) => typeof v === 'string' ? v.slice(0, n) : typeof v === 'number' ? String(v) : '';
+    const commands = (Array.isArray(view?.commands) ? view.commands : []).filter((c: any) => c && str(c.id) && str(c.say)).map((c: any) => ({ id: str(c.id, 60), say: str(c.say), ...str(c.anchor) ? { anchor: str(c.anchor) } : {}, ...str(c.name, 80) ? { name: str(c.name, 80) } : {}, ...c.top ? { top: true } : {} }));
+    const cues = (Array.isArray(view?.cues) ? view.cues : []).filter((c: any) => c && str(c.say) && str(c.run)).map((c: any) => ({ say: str(c.say, 80), run: str(c.run, 60) }));
+    this.view = { title: str(view?.title, 200), url: str(view?.url, 500), about: str(view?.about) || null, where: str(view?.where, 600), commands, cues, ...str((view as any)?.outline, 4000) ? { outline: str((view as any).outline, 4000) } : {}, tabId } as StageView; this.viewAt = Date.now();
+    this.log({ type: 'stage.described', tabId, url: this.view.url, commands: commands.length, cues: cues.length, ms: Date.now() - started });
     return this.view;
   }
   /** Runs commands in order, each finished before the next; resolves to what is on screen after. */
