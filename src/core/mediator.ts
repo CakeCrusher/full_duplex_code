@@ -225,8 +225,12 @@ export class Mediator {
       } catch (error) { this.history.release(id); this.fault(error as Error); }
     });
   }
-  stop(reason = 'voice ended') {
-    this.ended ??= reason;
+  /**
+   * The connection is done. Only a reason ends voice for its speech (later releases then go to the agent); a dropped
+   * or moved connection's speech is carried to the one replacing it, which decides where it goes.
+   */
+  stop(reason?: string) {
+    if (reason) this.ended ??= reason;
     this.feed.stop(); this.context.stop(); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();
     this.live.off('event', this.onLive); this.observer.off('observation', this.onObservation);
   }
