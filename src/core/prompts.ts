@@ -115,8 +115,8 @@ export const pageHandled = ({ profile: { product } }: Agent, done: readonly { sa
   `Nothing was sent to ${product}: the voice tool did it on the page (${steps(done)}). On screen now: ${onScreen.slice(0, 700)} Tell the operator in a few words what they are looking at, or just carry on if they are stepping through; don't describe the move.`;
 export const pageAlongside = ({ profile: { name } }: Agent, done: readonly { say: string }[], onScreen: string) =>
   `The voice tool already did the page part (${steps(done)}); on screen now: ${onScreen.slice(0, 500)} The rest goes to ${name}.`;
-export const pageFailed = ({ profile: { name } }: Agent, error: string) =>
-  `The page couldn't do that (${error.slice(0, 200)}). The request went to ${name}, who made the page, to fix its controls and do it.`;
+export const pageFailed = ({ profile: { name } }: Agent, error: string, done: readonly { say: string }[] = []) =>
+  `${done.length ? `The page did part of it (${steps(done)}), then` : 'The page'} couldn't go on (${error.slice(0, 200)}). The request went to ${name}, who made the page, to fix its controls and do it.`;
 export const pageDoneNote = (done: readonly { say: string }[]) =>
   `The voice tool already did the page part of this in the browser (${steps(done)}); don't do that again, do the rest.`;
 export const pageFailedNote = (done: readonly { say: string }[], error: string) =>

@@ -45,7 +45,7 @@ window.fdcController = {
       { id: 'show_revenue_chart', say: 'Open the revenue chart full screen' },
     ];
   },
-  // Do it, and resolve once the view has settled. Throw with a clear message if it can't be done.
+  // Do it, and resolve once the view has settled. Throw only if the controller is broken.
   async run(id) {
     // …
     return 'Slide 4 of 12: "Margins". Gross margin is 41%, up 3 points.';
@@ -69,7 +69,9 @@ Rules that make it work well:
   `run()`. The voice tool can also run up to three commands in a row when the user asks for them.
 - **Return what is on screen.** A sentence or two about what the user now sees; the voice uses it
   to talk about the page.
-- **Fail loudly.** If `run()` throws, the voice tool sends you the request with the error, so you
-  can fix the controller.
+- **Limits are answers, bugs are errors.** When a command can't apply right now (already on the last
+  slide, nothing to go back to), return a sentence saying so: the voice tells the user. Throw only
+  when the controller itself is broken (an element it expects is missing, a call fails): the voice
+  tool then sends you the request with the error, so you can fix the controller.
 - **Keep it current.** `commands()` is read again before each use, so it can follow the page's
   state (for example, only the slides that exist).

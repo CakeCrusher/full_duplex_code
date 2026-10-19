@@ -27,7 +27,7 @@ test('the stage is the tab the agent last showed with the browser tools', () => 
 
 test('the stage runs the script and its commands in the stage tab, in order', async () => {
   const calls: string[] = [];
-  const browser = { evaluate: async (tabId: number, expression: string) => { calls.push(`${tabId}:${expression.slice(-220)}`); return expression.endsWith('window.__fdcStage.describe()') ? { ...view, tabId: undefined } : ['one', 'two']; }, close() {} } as any;
+  const browser = { evaluate: async (tabId: number, expression: string) => { calls.push(`${tabId}:${expression.slice(-220)}`); return expression.endsWith('window.__fdcStage.describe()') ? { ...view, tabId: undefined } : expression.includes('"next_section"') ? { said: ['one'], error: 'Already broken' } : { said: ['one', 'two'] }; }, close() {} } as any;
   const stage = new Stage({ log: () => {}, browser });
   assert.equal(await stage.describe(), undefined, 'no stage, no page');
   stage.tabId = 7;
@@ -37,6 +37,7 @@ test('the stage runs the script and its commands in the stage tab, in order', as
   const ran = await stage.run(['goto_options', 'show_the_recommendation']);
   assert.match(calls[1], /for \(const id of \["goto_options","show_the_recommendation"\]\)/);
   assert.deepEqual(ran, { done: [view.commands[1], view.commands[2]], onScreen: 'two' });
+  await assert.rejects(stage.run(['goto_options', 'next_section']), (error: any) => error.message === 'Already broken' && error.done[0].id === 'goto_options' && error.failed.id === 'next_section' && error.onScreen === 'one', 'a step that throws stops the rest; what ran before it is reported');
 });
 
 test('Jev picks whole page commands in order; the count ends the list, unlikely or unknown picks are dropped', async () => {
@@ -44,13 +45,15 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   const audit = new DelegationAudit({ apiKey: 'k', file: '/dev/null', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers }) }; } });
   const choice = (id: string, p = .95) => ({ choice: id, probabilities: { [id]: p } });
   answers = { needs_agent: { noul: .2 }, page_steps: { choice: '2' }, page_step_1: choice('goto_options'), page_step_2: choice('show_the_recommendation'), page_step_3: choice('show_the_recommendation'), page_only: { noul: .8 } };
-  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, count: 2 });
+  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, work: 0, count: 2 });
   assert.match(sent.state.page, /Briefing .*The viewer is at: section "Intro"/);
   assert.deepEqual(Object.keys(sent.questions.page_step_1.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation']);
   answers = { ...answers, page_steps: { choice: '0' }, page_step_2: choice('none') };
   assert.deepEqual((await audit.judge('options', undefined, 3000, view)).page!.steps, ['goto_options'], 'a confident first step runs without a count');
   answers = { ...answers, page_steps: { choice: '3' }, page_step_1: choice('next_section', .4), page_step_2: choice('made_up'), page_step_3: choice('next_section') };
   assert.deepEqual((await audit.judge('next', undefined, 3000, view)).page!.steps, ['next_section']);
+  answers = { ...answers, page_steps: { choice: '2' }, page_step_1: choice('next_section'), page_step_2: choice('none'), page_step_3: choice('none') };
+  assert.deepEqual((await audit.judge('next section and add a slide', undefined, 3000, view)).page!.steps, ['next_section'], 'a count that includes work is not a repetition');
   answers = { ...answers, page_steps: { choice: '5' }, page_step_1: choice('next_section'), page_step_2: choice('next_section'), page_step_3: choice('none') };
   assert.deepEqual((await audit.judge('down five sections', undefined, 3000, view)).page!.steps, Array(5).fill('next_section'), 'one command repeated runs as often as counted');
   answers = { needs_agent: { noul: .9 } };
@@ -82,7 +85,7 @@ test('the gate: page-only is done on the page; with more, the request goes on no
   const failed = await broken.sessionSwitch.screen('highlight the recommendation', 'r3');
   assert.equal(failed.handled, undefined, 'a failure goes to the harness');
   assert.match(failed.note!, /page's controls failed: fdcController\.run: no element #rec\. Fix the page's controller/);
-  assert.match(failed.told!, /couldn't do that \(fdcController\.run: no element #rec\)/);
+  assert.match(failed.told!, /^The page couldn't go on \(fdcController\.run: no element #rec\)/);
 });
 
 test('the mediator tells GPT Live what the page shows and sends the harness the note with the request', async t => {

@@ -8,7 +8,8 @@
 import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import { listCompanions, type CompanionEntry } from './companions.ts';
-import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, UNLISTED, type PageJudgment, type Session } from './delegation-audit.ts';
+import { StageError } from './stage.ts';
+import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, PAGE_WORK, UNLISTED, type PageJudgment, type Session } from './delegation-audit.ts';
 import type { Screened } from './mediator.ts';
 import { companionHandled, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, sessionsHandled, sessionsOutcome } from './prompts.ts';
 
@@ -75,17 +76,19 @@ export class SessionSwitch {
    * With more in it: the request goes on, noting the page part is done. If the page's controls
    * fail, the request goes to the harness with the error, to fix them.
    */
-  async present({ steps, only }: PageJudgment, needsAgent: number | null): Promise<Screened> {
+  async present({ steps, only, work = 0 }: PageJudgment, needsAgent: number | null): Promise<Screened> {
     const bridge = this.bridge, { agent } = bridge;
     try {
       const { done, onScreen } = await bridge.stage.run(steps);
       bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });
-      if (only >= PAGE_ONLY) return { needsAgent, handled: pageHandled(agent, done, onScreen), page: true };
+      if (only >= PAGE_ONLY && work < PAGE_WORK) return { needsAgent, handled: pageHandled(agent, done, onScreen), page: true };
       return { needsAgent, note: pageDoneNote(done), told: pageAlongside(agent, done, onScreen) };
     } catch (error) {
-      const message = (error as Error).message, done = steps.map(id => bridge.stage.view?.commands.find(c => c.id === id) ?? { id, say: id });
-      bridge.log({ type: 'stage.failed', steps, message });
-      return { needsAgent, note: pageFailedNote(done, message), told: pageFailed(agent, message) };
+      // The agent gets the request with the error, to fix its page; GPT Live hears how far it got.
+      const message = (error as Error).message, failed = error instanceof StageError ? [error.failed] : steps.map(id => bridge.stage.view?.commands.find(c => c.id === id) ?? { id, say: id });
+      const done = error instanceof StageError ? error.done : [];
+      if (done.length) bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen: (error as StageError).onScreen });
+      return { needsAgent, note: pageFailedNote(failed, message), told: pageFailed(agent, message, done) };
     }
   }
 

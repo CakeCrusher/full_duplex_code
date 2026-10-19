@@ -13,6 +13,11 @@ export interface StageCommand { id: string; say: string }
 export interface StageCue { say: string; run: string }
 export interface StageView { tabId: number; title: string; url: string; about: string | null; where: string; commands: StageCommand[]; cues: StageCue[] }
 export interface StageRun { done: StageCommand[]; onScreen: string }
+/** A page command threw: the page's controller is broken, or was asked something it can't do. */
+export class StageError extends Error {
+  done: StageCommand[]; onScreen: string; failed: StageCommand;
+  constructor(message: string, done: StageCommand[], onScreen: string, failed: StageCommand) { super(message); this.done = done; this.onScreen = onScreen; this.failed = failed; }
+}
 
 export class Stage {
   browser: Browser;
@@ -47,10 +52,13 @@ export class Stage {
     const tabId = this.tabId, view = this.view;
     if (!tabId) throw new Error('No page is on the stage');
     const started = Date.now();
-    const said = await this.browser.evaluate<string[]>(tabId, `${SCRIPT}\n;(async () => { const said = []; for (const id of ${JSON.stringify(ids)}) said.push(await window.__fdcStage.run(id)); return said; })()`, 15000);
+    // Steps run in order; one that throws stops the rest, and what ran before it is still reported.
+    const { said, error } = await this.browser.evaluate<{ said: string[]; error?: string }>(tabId, `${SCRIPT}\n;(async () => { const said = []; for (const id of ${JSON.stringify(ids)}) { try { said.push(await window.__fdcStage.run(id)); } catch (e) { return { said, error: String(e && e.message || e) }; } } return { said }; })()`, 15000);
     this.viewAt = 0;
-    const done = ids.map(id => view?.commands.find(c => c.id === id) ?? { id, say: id });
-    this.log({ type: 'stage.ran', tabId, ids, ms: Date.now() - started });
+    const command = (id: string) => view?.commands.find(c => c.id === id) ?? { id, say: id };
+    const done = ids.slice(0, said.length).map(command);
+    this.log({ type: error ? 'stage.failed' : 'stage.ran', tabId, ids, ran: said.length, error, ms: Date.now() - started });
+    if (error) throw new StageError(error, done, said.at(-1) ?? '', command(ids[said.length]));
     return { done, onScreen: said.at(-1) ?? '' };
   }
   close() { this.browser.close(); }

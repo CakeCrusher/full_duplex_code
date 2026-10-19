@@ -108,7 +108,9 @@
       if (!name && seen[title.toLowerCase()] > 1) continue;
       commands.push({ id: unique(`goto_${slug(name || title)}`), say: name ? `Go to the ${top ? 'section' : 'part'} "${name}" (headed "${title}")` : `Go to the ${top ? 'section' : 'heading'} "${title}"`, run: () => go(h, 'start') });
     }
-    for (const el of document.querySelectorAll('[data-fdc]')) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, run: () => go(el) });
+    // An annotation the page's own controller already offers isn't offered twice: a near-duplicate splits the choice.
+    const offered = page().map(c => c.say.toLowerCase()).join('\n');
+    for (const el of document.querySelectorAll('[data-fdc]')) if (!offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, run: () => go(el) });
     return commands;
   };
   const page = () => {
