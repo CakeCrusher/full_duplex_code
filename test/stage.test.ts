@@ -192,3 +192,17 @@ test('listening ahead: the page moves as the operator pauses; GPT Live\'s delega
   await until(() => deliveries.length);
   assert.match(deliveries[0].content, /only about showing things on the page.*\n\nuser: Next slide\.$/s, 'the words still reach the agent, noted');
 });
+
+test('listening ahead never reads half a sentence: the transcript arrives a word at a time', async t => {
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {}; live.append = async () => {};
+  const asked: string[] = [];
+  const m = new Mediator({ live, observer, deliver: () => {}, log: () => {}, publish: () => {}, clean: String, hold: null, gate: async () => ({}), ahead: async said => { asked.push(said); return undefined; } });
+  t.after(() => { m.stop(); observer.close(); });
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Next', start_ms: 0, end_ms: 300 });
+  await new Promise(resolve => setTimeout(resolve, 600));
+  assert.deepEqual(asked, [], '"Next" alone is not read');
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ', can you fix the parser?', start_ms: 300, end_ms: 1600 });
+  await until(() => asked.length);
+  assert.deepEqual(asked, ['Next, can you fix the parser?']);
+});

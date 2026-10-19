@@ -97,8 +97,10 @@ export class Mediator {
     // GPT Live's transcript of the operator also shows they are talking, for pages that send no levels.
     if (event.type === 'session.input_transcript.delta' && String(event.delta ?? '').trim()) {
       this.floor.hear();
-      // A pause in the operator's words: look ahead at them.
-      if (this.ahead) { clearTimeout(this.aheadTimer); this.aheadTimer = setTimeout(() => { void this.lookAhead(); }, AHEAD_PAUSE_MS); }
+      // A pause after a finished sentence: look ahead at it. Mid-sentence ("Next" of "next slide", or of "next,
+      // can you fix…") is never read: the transcript arrives a word at a time.
+      clearTimeout(this.aheadTimer);
+      if (this.ahead && /[.!?]["”’)]?\s*$/.test(String(event.delta))) this.aheadTimer = setTimeout(() => { void this.lookAhead(); }, AHEAD_PAUSE_MS);
     }
     if (event.type === 'session.input_audio.append' && typeof event.audio === 'string') this.history.hearAudio(event);
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
