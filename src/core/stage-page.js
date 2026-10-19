@@ -89,7 +89,9 @@
     const section = h.closest('section[id], article[id]'), id = h.id || (section?.querySelector(UNITS.heading) === h ? section.id : '');
     // A short label above the heading names it, unless it is only a counter ("1 / 15").
     const above = h.previousElementSibling && text(h.previousElementSibling).length < 40 ? text(h.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') : '';
-    const label = (above.match(/[a-z]/gi) ?? []).length >= 3 ? above : '';
+    // A label several headings share ("changed" over four of them) is a category, not a name.
+    const shared = above && units('heading').filter(x => x !== h && x.previousElementSibling && text(x.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') === above).length > 0;
+    const label = (above.match(/[a-z]/gi) ?? []).length >= 3 && !shared ? above : '';
     return [/^[a-z][\w-]{2,30}$/i.test(id) && !/^h\d|^section\d/i.test(id) ? id.replace(/[-_]/g, ' ') : '', label.toLowerCase()].filter(Boolean)[0] ?? '';
   };
   // A deck's slides: sibling sections with ids, only one shown at a time.
@@ -102,7 +104,8 @@
   const shows = h => {
     const box = h.closest('section, article');
     if (!box || box.querySelector(UNITS.heading) !== h) return [];
-    const found = [...box.querySelectorAll('figcaption, svg > title, table > caption, img[alt], [data-fdc]')].map(el => (el.dataset?.fdc || el.getAttribute('alt') || text(el)).slice(0, 60)).filter(Boolean);
+    // Annotations have commands of their own: naming them here too would split Jev's choice between two.
+    const found = [...box.querySelectorAll('figcaption, svg > title, table > caption, img[alt]')].map(el => (el.getAttribute('alt') || text(el)).slice(0, 60)).filter(Boolean);
     return [...new Set(found)].slice(0, 3);
   };
   // The id a command lands on (its element's, or the nearest enclosing one): for checking where a command goes.
@@ -115,8 +118,8 @@
     }
     commands.push({ id: 'back', say: 'Go back to wherever the viewer was just before the last move (only when they say go back without naming a part)', run: async () => { const el = stage.history.pop(); if (!el) return null; stage.at = el; stage.ringOn = true; reveal(el, 'center'); await settle(); return describe(el); } });
     const scroll = async direction => { scrollBy({ top: direction * innerHeight * 0.6, behavior: 'smooth' }); await new Promise(r => setTimeout(r, 450)); stage.at = null; return describe(current('paragraph')); };
-    commands.push({ id: 'scroll_down', say: 'Scroll down a little (about half a screen)', run: () => scroll(1) });
-    commands.push({ id: 'scroll_up', say: 'Scroll up a little (about half a screen)', run: () => scroll(-1) });
+    commands.push({ id: 'scroll_down', say: 'Scroll down a bit, when they name no unit (not paragraphs, sections or items)', run: () => scroll(1) });
+    commands.push({ id: 'scroll_up', say: 'Scroll up a bit, when they name no unit (not paragraphs, sections or items)', run: () => scroll(-1) });
     commands.push({ id: 'top', say: 'Go to the top of the page', run: () => go(units('heading')[0] ?? document.body, 'start') });
     commands.push({ id: 'highlight_here', say: 'Highlight the paragraph in view, only when the operator says "highlight this" without naming what', run: async () => { const el = current('paragraph'); stage.at = el; stage.ringOn = true; place(); return describe(el); } });
     commands.push({ id: 'clear_highlight', say: 'Remove the highlight', run: async () => { stage.ringOn = false; place(); return 'The highlight is off.'; } });
@@ -142,9 +145,12 @@
       const showSlide = async el => { location.hash = el.id; await new Promise(r => setTimeout(r, 250)); if (!visible(el)) throw new Error(`Slide #${el.id} didn't show through its address`); stage.at = el; stage.ringOn = false; place(); return describe(el.querySelector(UNITS.heading) ?? el); };
       const at = () => slides.findIndex(visible);
       if (slides.length) {
-        commands.push({ id: 'next_slide', say: 'Go to the next slide', run: async () => slides[at() + 1] ? showSlide(slides[at() + 1]) : null });
-        commands.push({ id: 'previous_slide', say: 'Go to the previous slide', run: async () => at() > 0 ? showSlide(slides[at() - 1]) : null });
-        slides.forEach((el, i) => { const title = text(el.querySelector(UNITS.heading) ?? el).slice(0, 80); commands.push({ id: unique(`slide_${i + 1}`), say: `Go to slide ${i + 1}: "${title}"`, anchor: el.id, name: title, run: () => showSlide(el) }); });
+        // On a deck, "next" means the next slide: section and heading moves stay within the slide shown.
+        for (const c of commands) if (/^(next|previous)_(section|heading)$/.test(c.id)) c.say += ' (within the slide shown, not the next slide)';
+        commands.push({ id: 'next_slide', say: 'Go to the next slide ("next", "next one", "keep going")', run: async () => slides[at() + 1] ? showSlide(slides[at() + 1]) : null });
+        commands.push({ id: 'previous_slide', say: 'Go to the previous slide ("previous", "back one")', run: async () => at() > 0 ? showSlide(slides[at() - 1]) : null });
+        // A slide's gist (its first words after the title) lets people name it by what it says.
+        slides.forEach((el, i) => { const heading = el.querySelector(UNITS.heading), title = text(heading ?? el).slice(0, 80), gist = ([...el.querySelectorAll('p, li, figcaption, td')].map(x => (x.textContent || '').replace(/\s+/g, ' ').trim()).find(t => t.length > 20) ?? '').slice(0, 80); commands.push({ id: unique(`slide_${i + 1}`), say: `Go to slide ${i + 1}: "${title}"${gist ? ` (${gist}…)` : ''}`, anchor: el.id, name: title, run: () => showSlide(el) }); });
       }
     }
     // An annotation the page's own controller already offers isn't offered twice: a near-duplicate splits the choice.

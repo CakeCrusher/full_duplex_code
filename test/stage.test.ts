@@ -63,7 +63,7 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   assert.deepEqual(Object.keys(sent.questions.page_step_1.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation', 'other_action']);
   answers = { ...answers, page_steps: { choice: '0' }, page_step_2: choice('none') };
   assert.deepEqual((await audit.judge('options', undefined, 3000, view)).page!.steps, ['goto_options'], 'a confident first step runs without a count');
-  answers = { ...answers, page_steps: { choice: '3' }, page_step_1: choice('next_section', .4), page_step_2: choice('made_up'), page_step_3: choice('next_section') };
+  answers = { ...answers, page_steps: { choice: '3' }, page_step_1: choice('next_section', .35), page_step_2: choice('made_up'), page_step_3: choice('next_section') };
   assert.deepEqual((await audit.judge('next', undefined, 3000, view)).page!.steps, ['next_section']);
   answers = { ...answers, page_steps: { choice: '2' }, page_step_1: choice('next_section'), page_step_2: choice('none'), page_step_3: choice('none') };
   assert.deepEqual((await audit.judge('next section and add a slide', undefined, 3000, view)).page!.steps, ['next_section'], 'a count that includes work is not a repetition');
