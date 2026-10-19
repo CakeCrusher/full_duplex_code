@@ -74,7 +74,7 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   answers = { ...answers, page_steps: { choice: '2' }, page_step_1: choice('goto_options'), page_step_2: choice('other_action', .9), page_step_3: choice('none') };
   assert.deepEqual((await audit.judge('go to the options and highlight the third row', undefined, 3000, view)).page!.steps, [], 'another action anywhere: the whole request is a one-off action');
   answers = { ...answers, page_steps: { choice: '0' }, page_step_1: choice('goto_options'), page_step_2: choice('none'), page_work: { noul: .8 } };
-  assert.deepEqual((await audit.judge('make the options section bigger', undefined, 3000, view)).page!.steps, [], "Jev's no page command, with work asked: nothing moves");
+  assert.deepEqual((await audit.judge('make the options section bigger', undefined, 3000, view)).page!.steps, ['goto_options'], "a sure first step runs though Jev counted none: it shows the part being worked on");
   answers = { needs_agent: { noul: .9 } };
   assert.equal((await audit.judge('fix the parser', undefined, 3000)).page, undefined, 'no page, no page questions');
   assert.equal(sent.questions.page_steps, undefined);
