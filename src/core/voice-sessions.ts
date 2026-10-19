@@ -331,6 +331,8 @@ export class VoiceSessions {
           record.forkFailed = record.liveSessionId; this.save();
           log({ type: 'voice.fork_never_started', from: record.liveSessionId, message });
           if (page?.ws.readyState === WebSocket.OPEN && this.allowReconnect()) {
+            // If the page doesn't start over, the speech this connection took over goes to the agent.
+            this.carryAgain();
             publish({ type: 'voice_closed', ...(this.failed ?? { reserved: false, finalized: false, usageSeconds: 0 }), reason: 'continuing the last voice session failed; rebuilding the conversation', reconnect: true }, page);
             publish(bridge.status());
             return;
@@ -497,10 +499,19 @@ export class VoiceSessions {
     if (this.reconnects.length >= RECONNECTS) return false;
     this.reconnects.push(now); return true;
   }
+  /** How long a dropped session's unsent speech waits for a replacement to take it over. */
+  carryMs = CARRY_MS;
   carry(mediator: Mediator, reason: string, timed = true) {
     this.handOffCarried();
-    this.carried = { mediator, reason, timer: timed ? setTimeout(() => this.handOffCarried(), CARRY_MS) : undefined };
+    this.carried = { mediator, reason, timer: timed ? setTimeout(() => this.handOffCarried(), this.carryMs) : undefined };
     this.carried.timer?.unref();
+  }
+  /** A replacement that never started: the speech it took over waits as long again for the next one, then goes to the agent. */
+  carryAgain() {
+    const carried = this.carried;
+    if (!carried?.timer) return;
+    clearTimeout(carried.timer);
+    carried.timer = setTimeout(() => this.handOffCarried(), this.carryMs); carried.timer.unref();
   }
   /** Sends a dropped session's unsent speech to the agent when no replacement took it over. */
   handOffCarried() {
