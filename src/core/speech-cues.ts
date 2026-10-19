@@ -32,6 +32,9 @@ export class CueMatcher {
       for (let start = 0; start + cue.words.length <= complete; start++) {
         const end = start + cue.words.length;
         if (end <= this.fired || !cue.words.every((w, i) => words[start + i] === w)) continue;
+        // A page's own phrase ("next slide") needs "let's" within a few words before it too: GPT Live talked
+        // about decks' next slides 16 times in the operator's past sessions, never meaning to move one.
+        if (!cue.name) { const lead = words.slice(Math.max(0, start - 4), start); if (!lead.includes('lets') && !(lead.includes('let') && lead.includes('us'))) continue; }
         if (cue.name) {
           // Up to two filler words ("the", "section") between the turning phrase and the name, and "let's"
           // before it: presenting, GPT Live says "let's look at"; relaying the agent's work ("Claude will look
