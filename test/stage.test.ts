@@ -58,7 +58,9 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   const audit = new DelegationAudit({ apiKey: 'k', file: '/dev/null', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers }) }; } });
   const choice = (id: string, p = .95) => ({ choice: id, probabilities: { [id]: p } });
   answers = { needs_agent: { noul: .2 }, page_steps: { choice: '2' }, page_step_1: choice('goto_options'), page_step_2: choice('show_the_recommendation'), page_step_3: choice('show_the_recommendation'), page_only: { noul: .8 } };
-  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, work: 1, other: 0, count: 2 });
+  assert.equal((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page!.work, 1, 'work unanswered counts as asked');
+  answers = { ...answers, page_work: { noul: 0 } };
+  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, work: 0, other: 0, count: 2 });
   assert.match(sent.state.page, /Briefing .*The viewer is at: section "Intro"/);
   assert.deepEqual(Object.keys(sent.questions.page_step_1.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation', 'other_action']);
   answers = { ...answers, page_steps: { choice: '0' }, page_step_2: choice('none') };
@@ -158,7 +160,8 @@ test('requests reach the agent in the order made, however long each one\'s gate 
   const deliveries: any[] = [];
   let release!: () => void;
   const slow = new Promise<void>(resolve => { release = resolve; });
-  const gate = async (said: string): Promise<Gated> => { if (/bigger/.test(said)) await slow; return { needsAgent: .9 }; };
+  const started: string[] = [];
+  const gate = async (said: string): Promise<Gated> => { started.push(said); if (/bigger/.test(said)) await slow; return { needsAgent: .9 }; };
   const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Go to the options and make its title bigger.', start_ms: 0, end_ms: 900 });
@@ -167,9 +170,25 @@ test('requests reach the agent in the order made, however long each one\'s gate 
   m.delegate('d2', 6000);
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(deliveries.length, 0, 'the second waits for the first');
+  assert.equal(started.length, 1, "the second's gate, which may move the page, starts after the first's");
   release();
   await until(() => deliveries.length === 2);
   assert.match(deliveries[0].content, /bigger/); assert.match(deliveries[1].content, /smaller/);
+});
+
+test("a request whose gate's outcome fails isn't lost: its words go with the next request", async t => {
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
+  live.append = async () => {};
+  const faults: string[] = [];
+  const m = new Mediator({ live, observer, deliver: () => {}, log: e => { if (e.type === 'bridge.fault') faults.push(String(e.message)); }, publish: () => {}, clean: String, hold: null, gate: async () => ({ needsAgent: .9 }) });
+  t.after(() => { m.stop(); observer.close(); });
+  m.afterGate = () => { throw new Error('boom'); };
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Fix the parser.', start_ms: 0, end_ms: 900 });
+  m.delegate('d1', 900);
+  await until(() => faults.length);
+  assert.deepEqual(faults, ['boom']);
+  assert.equal(m.history.request(Infinity)?.fresh, 'Fix the parser.');
 });
 
 test('a page controller returning anything is kept to well-formed commands and cues', async () => {
