@@ -12,7 +12,14 @@
     item: 'li, tr, dt',
     figure: 'figure, img, svg, canvas, video, table',
   };
-  const visible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden'; };
+  // Shown: laid out, and neither it nor anything around it transparent or hidden (decks often keep other slides
+  // laid out at opacity 0).
+  const visible = el => {
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return false;
+    for (let a = el; a && a !== document.documentElement; a = a.parentElement) { const st = getComputedStyle(a); if (st.visibility === 'hidden' || Number(st.opacity) < 0.05) return false; }
+    return true;
+  };
   const text = el => (el.getAttribute?.('aria-label') || el.innerText || el.textContent || el.getAttribute?.('alt') || '').replace(/\s+/g, ' ').trim();
   const slug = s => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'x';
   const units = kind => [...document.querySelectorAll(UNITS[kind])].filter(el => visible(el) && !el.closest('#__fdc_ring') && (kind !== 'paragraph' || text(el).length > 20) && !(kind === 'figure' && el.closest('figure') && el.tagName !== 'FIGURE'));
