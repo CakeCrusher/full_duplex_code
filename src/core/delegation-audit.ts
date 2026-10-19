@@ -42,11 +42,12 @@ export const ASKED = .7, ONLY = .7, UNLISTED = .7;
 // .7 or more, two of them questions for the harness about the companion's own code (lost work); none .85.
 // Six plain preferences ("stop waking up for every little thing", "don't pause so quickly") scored .85-.93.
 export const COMPANION_ONLY = .85;
-// A page command is run when Jev's choice of it is at least this likely. A request is kept from the
+// A page command is run when Jev's choice of it is at least this likely. On 135 synthetic navigation requests over
+// 7 pages (Oct 19): at .5, 96 first steps right, 8 wrong; at .45, 99 right, still 8 wrong; at .4, 101 right, 13 wrong. A request is kept from the
 // harness as page-only from PAGE_ONLY, and only while PAGE_WORK says no work is asked: on trial requests
 // (Oct 19), page-only ones scored only .55-.96 and work .04-.21, ones with work in them only .02-.67 and
 // work .38-.82. Misjudged page-only words still reach the agent, with the next request.
-export const PAGE_STEP = .5, PAGE_ONLY = .4, PAGE_WORK = .3, PAGE_OTHER = .5;
+export const PAGE_STEP = .45, PAGE_ONLY = .4, PAGE_WORK = .3, PAGE_OTHER = .5;
 // Words before the utterance that no request carried yet still reach the agent later; they are context here.
 // What the companion said just before: "yes, please" answers its offer ("want me to show the diagrams?").
 const COMPANION_SETTING = ' `companion_before` is what the voice companion said just before `utterance`; use it only to understand short replies such as "yes, please".';
@@ -56,13 +57,13 @@ const PAGE_SETTING = ' A page is open in the browser beside the conversation (`p
 const pageQuestions = (page: StageView) => {
   // "Or perform another action": something asked of the page that no command does, for fdc's one-off action (fast-action.ts).
   const criteria = { none: 'No page command: nothing is to be shown, moved or highlighted on the page.', ...Object.fromEntries(page.commands.map(c => [c.id, c.say])), [OTHER]: 'Another action on the page that none of these commands does exactly: find, point at or highlight a specific thing (a row, a word, a number), click or open a control, switch a view, zoom.' };
-  const step = (n: number) => ({ type: 'choice', instructions: `List the page commands the operator asks for, in order, writing a command once for each time it should run ("forward three sections" is the next-section command three times). Asking to make, add, change or fix something is work for the coding agent, never a page command; asking to explain, present or run through something that is on the page also asks to show it. Which command is number ${n} in that list? Choose none if the list is shorter.`, criteria });
+  const step = (n: number) => ({ type: 'choice', instructions: `List the page commands the operator asks for, in order, writing a command once for each time it should run ("forward three sections" is the next-section command three times). Asking to make, add, change or fix something is work for the coding agent, never a page command; asking to explain, present or run through something that is on the page also asks to show it, and so does a part named on its own ("sessions", "issue nine") or described by what it says, even with how, why or where. Which command is number ${n} in that list? Choose none if the list is shorter.`, criteria });
   return {
     page_steps: { type: 'choice', instructions: 'How many page commands should run, counting each repetition ("forward three sections" is 3, "go to the options and highlight the recommendation" is 2)? Work for the coding agent (making, adding, changing or fixing anything), questions and talk are not page commands.', criteria: { '0': 'No page command.', '1': 'One.', '2': 'Two.', '3': 'Three.', '4': 'Four.', '5': 'Five or more.' } },
     page_step_1: step(1), page_step_2: step(2), page_step_3: step(3),
     page_only: { type: 'noul', instructions: 'Is moving, showing or highlighting things on the page all the operator asks, with nothing for the coding agent to do, change, research or answer?', criteria: { true: 'Only page commands, with at most filler or thanks.', false: 'Also asks for work, a change, research, an answer or anything else beyond the page. When in doubt, false.' } },
     // The same question from the other side: independent answers, so a request is page-only only when both agree.
-    page_work: { type: 'noul', instructions: 'Besides moving, showing or highlighting things on the page, does the operator ask the coding agent to make, add, change, fix, explain or look into anything?', criteria: { true: 'Some work, change, research or answer is asked of the coding agent, even alongside a page command: changing how the page looks (bigger, bolder, colours, wording) is work.', false: 'Only page commands, or finding and pointing at something already on the page, with at most filler or thanks.' } },
+    page_work: { type: 'noul', instructions: 'Besides moving, showing or highlighting things on the page, does the operator ask the coding agent to make, add, change, fix, explain or look into anything?', criteria: { true: 'Some work, change, research or answer is asked of the coding agent in `utterance`, even alongside a page command: changing how the page looks (bigger, bolder, colours, wording) is work.', false: 'Only page commands, or naming, describing, finding or pointing at a part of the page to go to, with at most filler or thanks. Judge `utterance` alone, not `earlier`.' } },
   };
 };
 /** The step choice for "another action on the page". */
