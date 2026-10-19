@@ -38,8 +38,12 @@ export class Stage {
   /** The stage moved to another tab. */
   onChange?: () => void;
   constructor({ log, browser = new Browser(), onChange }: { log: (event: Record<string, unknown>) => void; browser?: Browser; onChange?: () => void }) { this.log = log; this.browser = browser; this.onChange = onChange; }
-  /** The agent's own browser tool calls say which tab it showed the operator. */
-  observe({ raw }: Pick<Observation, 'raw'>) {
+  /**
+   * The agent's own browser tool calls say which tab it showed the operator. At the end of each of its turns the page is
+   * read again, since the agent may have rebuilt it however it reloaded it: the voice is briefed anew if its parts changed.
+   */
+  observe({ raw }: Pick<Observation, 'raw'>, turnEnded = false) {
+    if (turnEnded && this.tabId) { this.view = undefined; this.onChange?.(); return; }
     if (raw?.hook_event_name !== 'PostToolUse' || !SHOWS.test(String(raw.tool_name ?? ''))) return;
     const input = raw.tool_input ?? {}, response = typeof raw.tool_response === 'string' ? raw.tool_response : JSON.stringify(raw.tool_response ?? '');
     const created = /Tab ID: (\d+)/.exec(response)?.[1];

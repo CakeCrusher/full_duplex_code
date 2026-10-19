@@ -16,6 +16,8 @@ export class Presenter {
   speechCues = new CueMatcher();
   /** GPT Live's sentence so far, and when the page last moved by its words or the gate: then it is presenting. */
   sentence = ''; presentedAt = 0;
+  /** A cue fired in the current sentence; a judged move is in flight. */
+  cuedInSentence = false; judging = false;
   /** One-off actions on the stage when no page command fits. */
   fastAction?: FastAction;
   constructor(bridge: Harness, apiKey?: string) { this.bridge = bridge; if (apiKey && apiKey !== 'unused') this.fastAction = new FastAction({ apiKey }); }
@@ -23,13 +25,8 @@ export class Presenter {
   heard(delta: string) {
     const bridge = this.bridge;
     this.sentence = (this.sentence + delta).slice(-600);
-    // At the end of each sentence, while presenting, the ring follows what the sentence was about.
-    if (/[.!?]["”’)]?\s*$/.test(delta)) {
-      const sentence = this.sentence.trim(); this.sentence = '';
-      if (Date.now() - this.presentedAt < 60000) bridge.stage.follow(sentence).then(on => { if (on) bridge.log({ type: 'stage.followed', sentence: sentence.slice(-160), ...on }); }).catch(() => {});
-    }
     for (const cue of this.speechCues.hear(delta)) {
-      this.presentedAt = Date.now(); this.sentence = '';
+      this.presentedAt = Date.now(); this.sentence = ''; this.cuedInSentence = true;
       // Answering the operator by moving the page: their words still go to the gate and, unless the move was all they
       // asked, to the agent, noted, so neither moves it again.
       const history = bridge.mediator?.history;
@@ -42,6 +39,33 @@ export class Presenter {
         bridge.mediator?.context.add('thinking', cueShown(onScreen), null);
       }).catch(error => bridge.log({ type: 'stage.cue_failed', run: cue.run, label: cue.label, message: (error as Error).message }));
     }
+    // At the end of each sentence: "let's look at" something that is no part's name means the voice meant to move the
+    // page, so Jev finds the command; otherwise, while presenting, the ring follows what the sentence was about.
+    if (/[.!?]["”’)]?\s*$/.test(delta)) {
+      const sentence = this.sentence.trim(), cued = this.cuedInSentence; this.sentence = ''; this.cuedInSentence = false;
+      const meant = cued ? undefined : /\blet(?:'|’)?s\s+(?:look at|go to|go back to|turn to|head to|move to|jump to|look)\s+(.{3,80}?)\s*[.,;:!?]/i.exec(sentence)?.[1];
+      if (meant) void this.judgedMove(meant);
+      else if (Date.now() - this.presentedAt < 60000) bridge.stage.follow(sentence).then(on => { if (on) bridge.log({ type: 'stage.followed', sentence: sentence.slice(-160), ...on }); }).catch(() => {});
+    }
+  }
+  /** The voice said "let's look at" a part by another name ("the repeat visit"): the page goes there if Jev is sure which. */
+  async judgedMove(meant: string) {
+    const bridge = this.bridge;
+    if (this.judging || !bridge.handOffAudit) return;
+    this.judging = true;
+    const started = Date.now();
+    try {
+      const view = await bridge.stage.describe();
+      if (!view) return;
+      const page = (await bridge.handOffAudit.judge(`Show me ${meant}`, undefined, 3000, view)).page;
+      if (!page?.steps.length || page.only < PAGE_ONLY) { bridge.log({ type: 'stage.cue_missed', meant, steps: page?.steps ?? [] }); return; }
+      const { onScreen } = await bridge.stage.run(page.steps.slice(0, 1));
+      this.presentedAt = Date.now();
+      bridge.log({ type: 'stage.cue', run: page.steps[0], label: meant, judged: true, ms: Date.now() - started });
+      bridge.publish({ type: 'stage', done: [meant], onScreen, cue: true });
+      bridge.mediator?.context.add('thinking', cueShown(onScreen), null);
+    } catch (error) { bridge.log({ type: 'stage.cue_failed', label: meant, message: (error as Error).message }); }
+    finally { this.judging = false; }
   }
   /**
    * A request the gate found asking something of the page: its commands run (none again for words the voice already

@@ -111,7 +111,7 @@ export class Harness {
     observer.on('observation', ({ raw, ...event }) => this.publish({ type: 'agent_observation', ...event, text: withoutBinary(event.text) }));
     // The agent's work, priced for Standby (activity.ts): a subagent's events are its parent's business.
     observer.on('observation', (observation: Observation) => { if (!observation.child && observation.kind !== 'event') this.voiceSessions.activity.add(observation.kind); });
-    observer.on('observation', (observation: Observation) => { if (!observation.child) this.stage.observe(observation); });
+    observer.on('observation', (observation: Observation) => { if (!observation.child) this.stage.observe(observation, observation.name === this.agent.profile.turnEnd); });
     observer.on('status', event => { this.log({ type: 'agent.status', ...event }); this.publish({ type: 'agent_status', ...event }); });
     observer.on('fault', error => this.fault(error));
     const { name, transport } = agent.profile;
