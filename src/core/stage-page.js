@@ -3,7 +3,8 @@
 // controller (sections, headings, paragraphs, items, figures), the page's own annotations
 // (data-fdc) and controller (window.fdcController), merged into one list of commands.
 (() => {
-  const VERSION = 2;
+  // Stamped by fdc from the script's content (stage.ts): a changed script installs itself again.
+  const VERSION = '__FDC_STAGE_VERSION__';
   if (window.__fdcStage?.version === VERSION) return;
   const UNITS = {
     heading: 'h1, h2, h3, h4',
