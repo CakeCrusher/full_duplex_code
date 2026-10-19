@@ -135,7 +135,7 @@
       const el = stage.history.pop(); if (!el) return null; stage.at = el; stage.ringOn = true; reveal(el, 'center'); await settle(); return describe(el);
     } });
     // Where the viewer was is remembered, so back returns there after a scroll.
-    const scroll = async direction => { const from = current('paragraph'); if (from) stage.history.push(from); scrollBy({ top: direction * innerHeight * 0.6, behavior: 'smooth' }); await new Promise(r => setTimeout(r, 450)); stage.at = null; return describe(current('paragraph')); };
+    const scroll = async direction => { const from = current('paragraph'), y = scrollY; if (from) stage.history.push(from); scrollBy({ top: direction * innerHeight * 0.6, behavior: 'smooth' }); await new Promise(r => setTimeout(r, 450)); if (from && scrollY === y) stage.history.pop(); stage.at = null; return describe(current('paragraph')); };
     commands.push({ id: 'scroll_down', say: 'Scroll down a bit, when they name no unit (not paragraphs, sections or items)', run: () => scroll(1) });
     commands.push({ id: 'scroll_up', say: 'Scroll up a bit, when they name no unit (not paragraphs, sections or items)', run: () => scroll(-1) });
     commands.push({ id: 'top', say: 'Go to the top of the page', run: () => go(units('heading')[0] ?? document.body, 'start') });
@@ -170,7 +170,7 @@
         commands.push({ id: 'next_slide', say: 'Go to the next slide ("next", "next one", "keep going")', run: () => step(at() + 1) });
         commands.push({ id: 'previous_slide', say: 'Go to the previous slide ("previous", "back one")', run: async () => at() > 0 ? step(at() - 1) : null });
         // A slide's gist (its first words after the title) lets people name it by what it says.
-        slides.forEach((el, i) => { const heading = el.querySelector(UNITS.heading), title = text(heading ?? el).slice(0, 80), gist = ([...el.querySelectorAll('p, li, figcaption, td')].map(x => (x.textContent || '').replace(/\s+/g, ' ').trim()).find(t => t.length > 20) ?? '').slice(0, 80); commands.push({ id: unique(`slide_${i + 1}`), say: `Go to slide ${i + 1}: "${title}"${gist ? ` (${gist}…)` : ''}`, anchor: el.id, name: title, run: () => showSlide(el) }); });
+        slides.forEach((el, i) => { const heading = el.querySelector(UNITS.heading), title = text(heading ?? el).slice(0, 80), gist = ([...el.querySelectorAll('p, li, figcaption, td')].map(x => (x.textContent || '').replace(/\s+/g, ' ').trim()).find(t => t.length > 20) ?? '').slice(0, 80); commands.push({ id: unique(`slide_${i + 1}`), say: `Go to slide ${i + 1}: "${title}"${gist ? ` (${gist}…)` : ''}`, anchor: el.id, name: title, run: () => { stage.leftFrom = `slide_${at() + 1}`; return showSlide(el); } }); });
       }
     }
     // An annotation the page's own controller already offers isn't offered twice: a near-duplicate splits the choice.
@@ -188,11 +188,11 @@
     const name = short(h) || text(h).slice(0, 40);
     return `${name} — ${text(h).slice(0, 100)}: ${next ? text(next).slice(0, 180) : ''}`;
   }).join('\n');
-  // What a limit says ("Already on the first slide", "You can't go back", "No slide 7; the deck has 6"), not a fault
-  // ("No slide named Foo", "Nothing to show: #chart missing"), which goes to the agent to fix.
-  const LIMIT = /\b(already (on|at|showing|there)|no (more|next|previous|earlier|later|further)\b|nothing (more|left|before|after|earlier|later)\b|can['’]?t go (back|further|forward|on)|cannot go|(first|last|only) (slide|section|page|item|step|one)\b|at the (start|end|beginning|top|bottom)\b|(the|this) (deck|page) (only )?has)/i;
-  // A limit the page returns as its answer starts with it; an answer describing a slide may mention "the last slide".
-  const LIMIT_ANSWER = /^(you('re| are) |we('re| are) |it('s| is) |this is |that('s| is) )?(already|no (more|next|previous|earlier|later|further)\b|nothing (more|left|before|after)\b|can['’]?t go|cannot go|(the )?(first|last|only) (slide|section|page|item|step|one)\b)/i;
+  // What a limit says, at its start ("Already on the first slide", "You can't go back", "This is the last slide"), or
+  // "the deck has 6" ("No slide 7; the deck has 6"). Not a fault, which goes to the agent to fix, even one mentioning a
+  // first slide or an end ("Cannot find the first slide element", "Unexpected token at the end of input").
+  const LIMIT_ANSWER = /^(you('re| are) |we('re| are) |it('s| is) |this is |that('s| is) )?(already\b|no (more|next|previous|earlier|later|further)\b|nothing (more|left|before|after)\b|can['’]?t go\b|cannot go\b|(the )?(first|last|only) (slide|section|page|item|step|one)\b)/i;
+  const LIMIT = { test: text => LIMIT_ANSWER.test(text) || /\b(the|this) (deck|page) (only )?has \d/i.test(text) };
   const page = () => {
     const c = window.fdcController;
     if (!c?.commands) return [];
@@ -240,7 +240,10 @@
     if (best !== stage.at) { stage.at = best; stage.ringOn = true; best.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); place(); }
     return { on: text(best).slice(0, 100), score: Math.round(bestScore * 100) / 100 };
   };
-  const RELATIVE = /(^|_)(next|previous|prev|back|forward|scroll|top|bottom)(_|$)/, NOT_A_MOVE = /(^|_)(clear|here)(_|$)/;
+  // Relative moves and non-moves by their ids: the page's own commands and fdc's, never ids made from a heading's or
+  // slide's name ("Clear wins", "Back end").
+  const OWN = id => !/^(goto|slide|show)_/.test(id);
+  const RELATIVE = { test: id => OWN(id) && /(^|_)(next|previous|prev|back|forward|scroll|top|bottom)(_|$)/.test(id) }, NOT_A_MOVE = { test: id => OWN(id) && /(^|_)(clear|here)(_|$)/.test(id) };
   // The named place a page's answer is about: 'Slide 2 of 6: "Margins"' is where the command named "Margins" goes.
   const landed = text => { const title = /["“]([^"”]{2,80})["”]/.exec(String(text ?? ''))?.[1]; return title ? stage.commands().find(c => c.name === title && !RELATIVE.test(c.id))?.id : undefined; };
   const stage = window.__fdcStage = {
