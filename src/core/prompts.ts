@@ -119,6 +119,8 @@ export const pageFailed = ({ profile: { name } }: Agent, error: string, done: re
   `${done.length ? `The page did part of it (${steps(done)}), then` : 'The page'} couldn't go on (${error.slice(0, 200)}). The request went to ${name}, who made the page, to fix its controls and do it.`;
 export const pageNothing = ({ profile: { name } }: Agent, failed: { say: string }) =>
   `The page had nothing to do for that (${failed.say.replace(/\.$/, '')}). The request went to ${name}.`;
+export const lookingNote = (page: { title: string; url: string; where: string }) =>
+  `When they said it, the user was looking at "${page.title.slice(0, 80)}" (${page.url}) in the browser, at: ${page.where.replace(/\s+/g, ' ').slice(0, 300)}.`;
 export const pageNothingNote = (failed: { say: string }) =>
   `The voice tool tried to do this on the page in the browser (${failed.say.replace(/\.$/, '')}) but there was nothing to do there; do what the user asked.`;
 export const pageDoneNote = (done: readonly { say: string }[]) =>
