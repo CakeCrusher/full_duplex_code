@@ -86,8 +86,23 @@
   // people call it. Headings that repeat ("Landed" in several sections) are left to next/previous.
   const short = h => {
     const section = h.closest('section[id], article[id]'), id = h.id || (section?.querySelector(UNITS.heading) === h ? section.id : '');
-    const label = h.previousElementSibling && text(h.previousElementSibling).length < 40 ? text(h.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') : '';
+    // A short label above the heading names it, unless it is only a counter ("1 / 15").
+    const above = h.previousElementSibling && text(h.previousElementSibling).length < 40 ? text(h.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') : '';
+    const label = (above.match(/[a-z]/gi) ?? []).length >= 3 ? above : '';
     return [/^[a-z][\w-]{2,30}$/i.test(id) && !/^h\d|^section\d/i.test(id) ? id.replace(/[-_]/g, ' ') : '', label.toLowerCase()].filter(Boolean)[0] ?? '';
+  };
+  // A deck's slides: sibling sections with ids, only one shown at a time.
+  const deckSlides = () => {
+    const groups = new Map();
+    for (const el of document.querySelectorAll('section[id], article[id], [data-slide][id], .slide[id]')) { const list = groups.get(el.parentElement) ?? []; list.push(el); groups.set(el.parentElement, list); }
+    return [...groups.values()].find(list => list.length >= 3 && list.some(visible) && list.some(el => !visible(el))) ?? [];
+  };
+  // What a section shows besides its words (captions, diagram and table titles), for matching "the sequence diagrams".
+  const shows = h => {
+    const box = h.closest('section, article');
+    if (!box || box.querySelector(UNITS.heading) !== h) return [];
+    const found = [...box.querySelectorAll('figcaption, svg > title, table > caption, img[alt], [data-fdc]')].map(el => (el.dataset?.fdc || el.getAttribute('alt') || text(el)).slice(0, 60)).filter(Boolean);
+    return [...new Set(found)].slice(0, 3);
   };
   // The id a command lands on (its element's, or the nearest enclosing one): for checking where a command goes.
   const anchorOf = el => el.id || el.closest('[id]')?.id || null;
@@ -108,7 +123,20 @@
     for (const h of units('heading')) {
       const title = text(h).slice(0, 90), name = short(h), top = level(h) <= sectionLevel();
       if (!name && seen[title.toLowerCase()] > 1) continue;
-      commands.push({ id: unique(`goto_${slug(name || title)}`), say: name ? `Go to the ${top ? 'section' : 'part'} "${name}" (headed "${title}")` : `Go to the ${top ? 'section' : 'heading'} "${title}"`, anchor: anchorOf(h), name: name || (title.length <= 40 ? title : ''), top, run: () => go(h, 'start') });
+      const what = shows(h), also = what.length ? `; it shows ${what.join('; ')}` : '';
+      commands.push({ id: unique(`goto_${slug(name || title)}`), say: (name ? `Go to the ${top ? 'section' : 'part'} "${name}" (headed "${title}")` : `Go to the ${top ? 'section' : 'heading'} "${title}"`) + also, anchor: anchorOf(h), name: name || (title.length <= 40 ? title : ''), top, run: () => go(h, 'start') });
+    }
+    // A deck without a controller: sibling sections with ids, only one shown at a time. Each slide is
+    // offered by its title and shown through its address (#id), as such decks do.
+    if (!window.fdcController) {
+      const slides = deckSlides();
+      const showSlide = async el => { location.hash = el.id; await new Promise(r => setTimeout(r, 250)); if (!visible(el)) throw new Error(`Slide #${el.id} didn't show through its address`); stage.at = el; stage.ringOn = false; place(); return describe(el.querySelector(UNITS.heading) ?? el); };
+      const at = () => slides.findIndex(visible);
+      if (slides.length) {
+        commands.push({ id: 'next_slide', say: 'Go to the next slide', run: async () => slides[at() + 1] ? showSlide(slides[at() + 1]) : null });
+        commands.push({ id: 'previous_slide', say: 'Go to the previous slide', run: async () => at() > 0 ? showSlide(slides[at() - 1]) : null });
+        slides.forEach((el, i) => { const title = text(el.querySelector(UNITS.heading) ?? el).slice(0, 80); commands.push({ id: unique(`slide_${i + 1}`), say: `Go to slide ${i + 1}: "${title}"`, anchor: el.id, name: title, run: () => showSlide(el) }); });
+      }
     }
     // An annotation the page's own controller already offers isn't offered twice: a near-duplicate splits the choice.
     const offered = page().map(c => c.say.toLowerCase()).join('\n');
@@ -117,7 +145,10 @@
     return commands;
   };
   // What the page holds, section by section, for the voice to present from: each section's name and its opening words.
-  const outline = () => units('heading').filter(h => level(h) <= sectionLevel()).slice(0, 24).map(h => {
+  const outline = () => (!window.fdcController && deckSlides().length) ? deckSlides().slice(0, 30).map(el => {
+    const heading = el.querySelector(UNITS.heading), body = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    return `${text(heading ?? el).slice(0, 80)} — ${body.slice(0, 200)}`;
+  }).join('\n') : units('heading').filter(h => level(h) <= sectionLevel()).slice(0, 24).map(h => {
     let next = h.nextElementSibling; while (next && !text(next)) next = next.nextElementSibling;
     const name = short(h) || text(h).slice(0, 40);
     return `${name} — ${text(h).slice(0, 100)}: ${next ? text(next).slice(0, 180) : ''}`;
@@ -146,8 +177,8 @@
     async run(id) {
       const command = stage.commands().find(c => c.id === id);
       if (!command) throw new Error(`No command "${id}" on this page`);
-      const out = await command.run();
-      return out ?? `Nothing to do for "${id}" here; still at ${describe(current('paragraph'))}`;
+      // Nothing to do (no earlier place to go back to, no next item): null, and fdc sends the request on.
+      return (await command.run()) ?? null;
     },
   };
 })();
