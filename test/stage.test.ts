@@ -1,6 +1,7 @@
 // The stage: the page the agent showed, which the gate moves without the agent (stage.ts, sessions.ts).
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
 import { Stage, type StageView } from '../src/core/stage.ts';
@@ -11,6 +12,10 @@ import { harness, until } from './live-fake.ts';
 const view: StageView = { tabId: 7, title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"', cues: [],
   commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'goto_options', say: 'Go to the section "Options"' }, { id: 'show_the_recommendation', say: 'Show and highlight: the recommendation' }] };
 const posted = (tool_name: string, tool_input: Record<string, unknown>, tool_response: unknown = '') => ({ raw: { hook_event_name: 'PostToolUse', tool_name, tool_input, tool_response } });
+
+test('the stage script parses (it only ever runs inside a page)', () => {
+  assert.doesNotThrow(() => new Function(fs.readFileSync(new URL('../src/core/stage-page.js', import.meta.url), 'utf8')));
+});
 
 test('the stage is the tab the agent last showed with the browser tools', () => {
   const stage = new Stage({ log: () => {} });
