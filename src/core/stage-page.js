@@ -124,9 +124,12 @@
       commands.push({ id: `next_${kind}`, say: `Go to the next ${label}`, run: () => go(step(kind, 1), kind === 'section' || kind === 'heading' ? 'start' : 'center') });
       commands.push({ id: `previous_${kind}`, say: `Go to the previous ${label}`, run: () => go(step(kind, -1), kind === 'section' || kind === 'heading' ? 'start' : 'center') });
     }
-    // Back: to the named place shown before the last one (a slide, a section, a part), else the element before.
+    // Back: undoes the last move. After a step through paragraphs or items, the element before; after a page's own
+    // step ("previous slide"), the named place it left; after a move to a named place (a slide, a section), the one before.
     commands.push({ id: 'back', say: 'Go back to wherever the viewer was just before the last move (only when they say go back without naming a part)', run: async () => {
-      if (stage.trail.length >= 2) { stage.trail.pop(); return stage.run(stage.trail.at(-1), { again: true }); }
+      const { relative, stepped } = stage.last;
+      if (relative && !stepped && stage.trail.length) { stage.last = {}; return stage.run(stage.trail.at(-1), { again: true }); }
+      if (!relative && stage.trail.length >= 2) { stage.trail.pop(); return stage.run(stage.trail.at(-1), { again: true }); }
       const el = stage.history.pop(); if (!el) return null; stage.at = el; stage.ringOn = true; reveal(el, 'center'); await settle(); return describe(el);
     } });
     const scroll = async direction => { scrollBy({ top: direction * innerHeight * 0.6, behavior: 'smooth' }); await new Promise(r => setTimeout(r, 450)); stage.at = null; return describe(current('paragraph')); };
@@ -210,7 +213,7 @@
     return { on: text(best).slice(0, 100), score: Math.round(bestScore * 100) / 100 };
   };
   const stage = window.__fdcStage = {
-    version: VERSION, history: [], trail: [], at: null, ringOn: false, quiet: false, follow: followSpeech,
+    version: VERSION, history: [], trail: [], last: {}, at: null, ringOn: false, quiet: false, follow: followSpeech,
     commands: () => [...page(), ...base()],
     describe() {
       const c = window.fdcController;
@@ -228,9 +231,13 @@
       if (!command) throw new Error(`No command "${id}" on this page`);
       stage.quiet = id === 'clear_highlight';
       // Nothing to do (no earlier place to go back to, no next item): null, and fdc sends the request on.
-      const out = (await command.run()) ?? null;
-      // A move to a named place joins the trail that back follows; relative moves (next, scroll) don't.
-      if (out !== null && !again && !/(^|_)(next|previous|prev|back|scroll|top|bottom|clear|here)(_|$)/.test(id) && stage.trail.at(-1) !== id) stage.trail.push(id);
+      const steps = stage.history.length, out = (await command.run()) ?? null;
+      // A move to a named place joins the trail that back follows; a relative move (next, scroll) is only remembered
+      // as the last move, with whether it stepped from an element back can return to.
+      if (out !== null && !again && id !== 'back') {
+        if (/(^|_)(next|previous|prev|scroll|top|bottom|clear|here)(_|$)/.test(id)) stage.last = { relative: true, stepped: stage.history.length > steps };
+        else { stage.last = {}; if (stage.trail.at(-1) !== id) stage.trail.push(id); }
+      }
       return out;
     },
   };
