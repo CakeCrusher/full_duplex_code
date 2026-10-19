@@ -373,7 +373,8 @@ export class VoiceSessions {
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake };
     // A dropped or moved session's unsent speech: this session takes it if it starts; meanwhile it isn't handed off.
-    if (this.carried) { clearTimeout(this.carried.timer); mediator.history.carry(this.carried.mediator.history); }
+    // The copies are now the ones to carry or hand off: if this connection fails to start, they go on from here.
+    if (this.carried) { clearTimeout(this.carried.timer); mediator.history.carry(this.carried.mediator.history); this.carried.mediator = mediator; }
     if (plan === 'fork') mediator.context.add('thinking', catchUp(agent, bridge.cwd, observer.state) + (history.text ? historyIntro(agent) + history.text : ''), null, '', since);
     // Instead of a greeting, a waking session is told the conversation continues, then gets the agent's work it missed.
     if (wake) {
