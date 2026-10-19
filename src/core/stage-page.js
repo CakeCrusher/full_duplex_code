@@ -117,7 +117,8 @@
       if (!relative && stage.trail.length >= 2) { stage.trail.pop(); return stage.run(stage.trail.at(-1), { again: true }); }
       const el = stage.history.pop(); if (!el) return null; stage.at = el; stage.ringOn = true; reveal(el, 'center'); await settle(); return describe(el);
     } });
-    const scroll = async direction => { scrollBy({ top: direction * innerHeight * 0.6, behavior: 'smooth' }); await new Promise(r => setTimeout(r, 450)); stage.at = null; return describe(current('paragraph')); };
+    // Where the viewer was is remembered, so back returns there after a scroll.
+    const scroll = async direction => { const from = current('paragraph'); if (from) stage.history.push(from); scrollBy({ top: direction * innerHeight * 0.6, behavior: 'smooth' }); await new Promise(r => setTimeout(r, 450)); stage.at = null; return describe(current('paragraph')); };
     commands.push({ id: 'scroll_down', say: 'Scroll down a bit, when they name no unit (not paragraphs, sections or items)', run: () => scroll(1) });
     commands.push({ id: 'scroll_up', say: 'Scroll up a bit, when they name no unit (not paragraphs, sections or items)', run: () => scroll(-1) });
     commands.push({ id: 'top', say: 'Go to the top of the page', run: () => go(units('heading')[0] ?? document.body, 'start') });
@@ -160,8 +161,10 @@
       if (slides.length) {
         // On a deck, "next" means the next slide: section and heading moves stay within the slide shown.
         for (const c of commands) if (/^(next|previous)_(section|heading)$/.test(c.id)) c.say += ' (within the slide shown, not the next slide)';
-        commands.push({ id: 'next_slide', say: 'Go to the next slide ("next", "next one", "keep going")', run: async () => slides[at() + 1] ? showSlide(slides[at() + 1]) : null });
-        commands.push({ id: 'previous_slide', say: 'Go to the previous slide ("previous", "back one")', run: async () => at() > 0 ? showSlide(slides[at() - 1]) : null });
+        // A step says which slide it left and where it landed, by the slides' own commands, for back.
+        const step = async to => { if (!slides[to]) return null; stage.leftFrom = `slide_${at() + 1}`; stage.landedAt = `slide_${to + 1}`; return showSlide(slides[to]); };
+        commands.push({ id: 'next_slide', say: 'Go to the next slide ("next", "next one", "keep going")', run: () => step(at() + 1) });
+        commands.push({ id: 'previous_slide', say: 'Go to the previous slide ("previous", "back one")', run: async () => at() > 0 ? step(at() - 1) : null });
         // A slide's gist (its first words after the title) lets people name it by what it says.
         slides.forEach((el, i) => { const heading = el.querySelector(UNITS.heading), title = text(heading ?? el).slice(0, 80), gist = ([...el.querySelectorAll('p, li, figcaption, td')].map(x => (x.textContent || '').replace(/\s+/g, ' ').trim()).find(t => t.length > 20) ?? '').slice(0, 80); commands.push({ id: unique(`slide_${i + 1}`), say: `Go to slide ${i + 1}: "${title}"${gist ? ` (${gist}…)` : ''}`, anchor: el.id, name: title, run: () => showSlide(el) }); });
       }
@@ -172,20 +175,25 @@
     for (const el of [...document.querySelectorAll('[data-fdc]')].slice(0, 30)) if (visible(el) && !offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), run: () => go(el) });
     return commands;
   };
-  const LIMIT = /^(already|no (more|next|previous|earlier|later|other|slide|section|page)|nothing (to|more|left|before|after)|there (is|are) no|can'?t go|cannot go|at the (first|last|start|end|beginning|top|bottom)|(this|the) (deck|page) (has|only has))/i;
+  // What a limit says ("Already on the first slide", "You can't go back", "No slide 7; the deck has 6"), not a fault
+  // ("No slide named Foo", "Nothing to show: #chart missing"), which goes to the agent to fix.
+  const LIMIT = /\b(already (on|at|showing|there)|no (more|next|previous|earlier|later|further)\b|nothing (more|left|before|after|earlier|later)\b|can['’]?t go (back|further|forward|on)|cannot go|(first|last|only) (slide|section|page|item|step|one)\b|at the (start|end|beginning|top|bottom)\b|(the|this) (deck|page) (only )?has)/i;
+  // A limit the page returns as its answer starts with it; an answer describing a slide may mention "the last slide".
+  const LIMIT_ANSWER = /^(you('re| are) |we('re| are) |it('s| is) |this is |that('s| is) )?(already|no (more|next|previous|earlier|later|further)\b|nothing (more|left|before|after)\b|can['’]?t go|cannot go|(the )?(first|last|only) (slide|section|page|item|step|one)\b)/i;
   const page = () => {
     const c = window.fdcController;
     if (!c?.commands) return [];
     // A command's name is what people call its target: given, or the quoted title in what it says ('Go to slide 3: "Margins"').
     const quoted = say => [...String(say ?? '').matchAll(/["“]([^"”]{2,60})["”]/g)].at(-1)?.[1];
-    return c.commands().slice(0, 80).map(cmd => ({ id: `page_${slug(cmd.id)}`, say: cmd.say, name: cmd.name ?? quoted(cmd.say), run: async () => {
+    // camelCase ids read as words ("nextSlide" is next_slide), so a relative move is known as one.
+    return c.commands().slice(0, 80).map(cmd => ({ id: `page_${slug(String(cmd.id).replace(/([a-z0-9])([A-Z])/g, '$1_$2'))}`, say: cmd.say, name: cmd.name ?? quoted(cmd.say), run: async () => {
       let out;
       // A limit thrown ("Already on the first slide") is an answer, as the guide asks controllers to return it; not a broken control.
-      try { out = await c.run(cmd.id); } catch (error) { if (LIMIT.test(String(error?.message ?? ''))) return String(error.message); throw error; }
+      try { out = await c.run(cmd.id); } catch (error) { if (!LIMIT.test(String(error?.message ?? ''))) throw error; stage.limited = true; return String(error.message); }
       return typeof out === 'string' ? out : describe(stage.at);
     } }));
   };
-  const RELATIVE = /(^|_)(next|previous|prev|scroll|top|bottom|clear|here)(_|$)/;
+  const RELATIVE = /(^|_)(next|previous|prev|back|forward|scroll|top|bottom)(_|$)/, NOT_A_MOVE = /(^|_)(clear|here)(_|$)/;
   // The named place a page's answer is about: 'Slide 2 of 6: "Margins"' is where the command named "Margins" goes.
   const landed = text => { const title = /["“]([^"”]{2,80})["”]/.exec(String(text ?? ''))?.[1]; return title ? stage.commands().find(c => c.name === title && !RELATIVE.test(c.id))?.id : undefined; };
   const stage = window.__fdcStage = {
@@ -205,15 +213,19 @@
       const command = stage.commands().find(c => c.id === id);
       if (!command) throw new Error(`No command "${id}" on this page`);
       // Where the viewer starts, when the page names it, is the first place back can return to.
-      if (!stage.trail.length && id !== 'back') { const start = landed(window.fdcController?.where?.()); if (start) stage.trail.push(start); }
+      if (!stage.trail.length && id !== 'back') { let start; try { start = landed(window.fdcController?.where?.()); } catch {} if (start) stage.trail.push(start); }
       // Nothing to do (no earlier place to go back to, no next item): null, and fdc sends the request on.
+      stage.limited = false; stage.leftFrom = stage.landedAt = undefined;
       const steps = stage.history.length, out = (await command.run()) ?? null;
       // A move to a named place joins the trail that back follows, and so does a relative move ("next slide") that
       // lands on one the page names; any other relative move is only remembered as the last move, with whether it
       // stepped from an element back can return to.
       // A limit ("Already on the first slide") moved nothing.
-      if (out !== null && !again && id !== 'back' && !LIMIT.test(String(out))) {
-        const place = RELATIVE.test(id) ? landed(out) : id;
+      // Highlighting what's there or clearing it moves nothing; only the page's own answers name where a step landed
+      // (fdc's own answers quote the section they're in).
+      if (out !== null && !again && id !== 'back' && !NOT_A_MOVE.test(id) && !stage.limited && !LIMIT_ANSWER.test(String(out))) {
+        const place = RELATIVE.test(id) ? (stage.landedAt ?? (id.startsWith('page_') ? landed(out) : undefined)) : id;
+        if (place && !stage.trail.length && stage.leftFrom) stage.trail.push(stage.leftFrom);
         if (place) { stage.last = {}; if (stage.trail.at(-1) !== place) stage.trail.push(place); }
         else stage.last = { relative: true, stepped: stage.history.length > steps };
       }
