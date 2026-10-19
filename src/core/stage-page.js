@@ -118,7 +118,12 @@
     };
     const seen = {};
     for (const h of units('heading')) seen[text(h).toLowerCase()] = (seen[text(h).toLowerCase()] ?? 0) + 1;
-    for (const h of units('heading')) {
+    // A long page offers its sections first and sub-headings while there's room: every command is part of each
+    // of Jev's step questions, so the list stays around 70 (the rest is reached by next and previous).
+    const all = units('heading'), sections = all.filter(h => level(h) <= sectionLevel()).slice(0, 40);
+    let room = Math.max(0, 50 - sections.length);
+    const headings = all.filter(h => sections.includes(h) || (level(h) > sectionLevel() && room-- > 0));
+    for (const h of headings) {
       const title = text(h).slice(0, 90), name = short(h), top = level(h) <= sectionLevel();
       if (!name && seen[title.toLowerCase()] > 1) continue;
       const what = shows(h), also = what.length ? `; it shows ${what.join('; ')}` : '';
@@ -141,13 +146,13 @@
     // An annotation the page's own controller already offers isn't offered twice: a near-duplicate splits the choice.
     const offered = page().map(c => c.say.toLowerCase()).join('\n');
     // Only what is shown: an annotation on a hidden slide or tab is the page's own controller's to show.
-    for (const el of document.querySelectorAll('[data-fdc]')) if (visible(el) && !offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), run: () => go(el) });
+    for (const el of [...document.querySelectorAll('[data-fdc]')].slice(0, 30)) if (visible(el) && !offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), run: () => go(el) });
     return commands;
   };
   const page = () => {
     const c = window.fdcController;
     if (!c?.commands) return [];
-    return c.commands().map(cmd => ({ id: `page_${slug(cmd.id)}`, say: cmd.say, run: async () => { const out = await c.run(cmd.id); return typeof out === 'string' ? out : describe(stage.at); } }));
+    return c.commands().slice(0, 80).map(cmd => ({ id: `page_${slug(cmd.id)}`, say: cmd.say, run: async () => { const out = await c.run(cmd.id); return typeof out === 'string' ? out : describe(stage.at); } }));
   };
   // For a one-off action (fdc's fallback when no command fits): what the viewer can act on, numbered,
   // and what is on screen. Action code reaches element [n] as el(n).
