@@ -261,12 +261,12 @@
           // Every word, anywhere in it: "Q4 42%" is a row whose cells say Q4 and 42%. The exact phrase first.
           const want = String(a.text).toLowerCase().replace(/\s+/g, ' ').trim(), words = want.split(' ').filter(Boolean);
           const flat = el => (el.textContent || '').toLowerCase().replace(/\s+/g, ' ');
-          const all = [...document.querySelectorAll('body *')].filter(el => { const t = flat(el); return words.every(w => t.includes(w)) && !el.closest('#__fdc_ring'); });
-          // Every ancestor of a match matches too: keep the ones with no matching child (one pass, not pairs).
-          const matched = new Set(all);
-          let hits = all.filter(el => ![...el.children].some(c => matched.has(c)) && visible(el));
-          const exact = hits.filter(el => flat(el).includes(want));
-          if (exact.length) hits = exact;
+          const candidates = [...document.querySelectorAll('body *')].filter(el => !el.closest('#__fdc_ring'));
+          // Every ancestor of a match matches too: keep the ones with no matching child (one pass, not pairs). The exact
+          // phrase is looked for on its own, so a child with every word ("gpt-live-1") doesn't hide its cell ("GPT Live").
+          const smallest = says => { const all = candidates.filter(el => says(flat(el))), matched = new Set(all); return all.filter(el => ![...el.children].some(c => matched.has(c)) && visible(el)); };
+          let hits = smallest(t => t.includes(want));
+          if (!hits.length) hits = smallest(t => words.every(w => t.includes(w)));
           // Words scattered over a whole section don't count: nothing far longer than what was asked for.
           hits = hits.filter(el => flat(el).length <= Math.max(400, want.length * 20));
           if (!hits.length) throw new Error(`Nothing on the page says "${a.text}"`);
