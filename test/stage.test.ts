@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
 import { Stage, StageNothing, type StageView } from '../src/core/stage.ts';
 import { DelegationAudit } from '../src/core/delegation-audit.ts';
-import { Mediator, type Screened } from '../src/core/mediator.ts';
+import { Mediator, type Gated } from '../src/core/mediator.ts';
 import { harness, until } from './live-fake.ts';
 
 const view: StageView = { tabId: 7, title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"', cues: [],
@@ -78,21 +78,21 @@ function gated(t: any, page: { steps: string[]; only: number }, run: (ids: strin
 test('the gate: page-only is done on the page; with more, the request goes on noting the page part is done; a failure goes to the harness', async t => {
   const runs: string[][] = [];
   const only = await gated(t, { steps: ['goto_options'], only: .9 }, async ids => { runs.push(ids); return { done: [view.commands[1]], onScreen: 'heading: Options — eleven of them.' }; });
-  const handled = await only.sessionSwitch.screen('take me to the options', 'r1');
+  const handled = await only.sessionSwitch.gate('take me to the options', 'r1');
   assert.deepEqual(runs, [['goto_options']]);
   assert.equal(handled.page, true);
   assert.match(handled.handled!, /^Nothing was sent to Claude Code: the voice tool did it on the page \(Go to the section "Options"\)\. On screen now: heading: Options — eleven of them\./);
   const mixed = await gated(t, { steps: ['goto_options'], only: .1 }, async () => ({ done: [view.commands[1]], onScreen: 'heading: Options' }));
-  const along = await mixed.sessionSwitch.screen('show me the options and fix the typo', 'r2');
+  const along = await mixed.sessionSwitch.gate('show me the options and fix the typo', 'r2');
   assert.equal(along.handled, undefined);
   assert.match(along.note!, /already did the page part of this in the browser \(Go to the section "Options"\); don't do that again, do the rest/);
   assert.match(along.told!, /already did the page part .* The rest goes to Claude/);
   const idle = await gated(t, { steps: ['next_section'], only: .9 }, async () => { throw new StageNothing('nothing to do there', [], '', view.commands[0]); });
-  const nothing = await idle.sessionSwitch.screen('go back', 'r4');
+  const nothing = await idle.sessionSwitch.gate('go back', 'r4');
   assert.equal(nothing.handled, undefined, 'nothing to do: the request goes on');
   assert.match(nothing.note!, /there was nothing to do there; do what the user asked/);
     const broken = await gated(t, { steps: ['show_the_recommendation'], only: .9 }, async () => { throw new Error('fdcController.run: no element #rec'); });
-  const failed = await broken.sessionSwitch.screen('highlight the recommendation', 'r3');
+  const failed = await broken.sessionSwitch.gate('highlight the recommendation', 'r3');
   assert.equal(failed.handled, undefined, 'a failure goes to the harness');
   assert.match(failed.note!, /page's controls failed: fdcController\.run: no element #rec\. Fix the page's controller/);
   assert.match(failed.told!, /^The page couldn't go on \(fdcController\.run: no element #rec\)/);
@@ -103,8 +103,8 @@ test('the mediator tells GPT Live what the page shows and sends the harness the 
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
   const appends: [string, string, string | null][] = []; live.append = async (kind: string, content: string, delegationId: string | null) => { appends.push([kind, content, delegationId]); };
   const deliveries: any[] = [];
-  const screen = async (): Promise<Screened> => ({ needsAgent: .6, note: 'The voice tool already did the page part.', told: 'On screen now: Options.' });
-  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, screen });
+  const gate = async (): Promise<Gated> => ({ needsAgent: .6, note: 'The voice tool already did the page part.', told: 'On screen now: Options.' });
+  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Show me the options and fix the typo.', start_ms: 0, end_ms: 900 });
   m.delegate('d1', 900);

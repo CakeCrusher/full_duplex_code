@@ -10,7 +10,7 @@ import type { Harness } from './bridge.ts';
 import { listCompanions, type CompanionEntry } from './companions.ts';
 import { StageError, StageNothing } from './stage.ts';
 import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, PAGE_WORK, UNLISTED, type PageJudgment, type Session } from './delegation-audit.ts';
-import type { Screened } from './mediator.ts';
+import type { Gated } from './mediator.ts';
 import { companionHandled, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
@@ -39,8 +39,8 @@ export class SessionSwitch {
   asked?: { at: number; from: string; failed?: string };
   constructor(bridge: Harness) { this.bridge = bridge; }
 
-  /** Jev's check of a request GPT Live passed on, before it reaches the harness. */
-  async screen(said: string, requestId: string, earlier?: string, companion?: string): Promise<Screened> {
+  /** The gate: Jev's check of a request GPT Live passed on, before it reaches the harness. */
+  async gate(said: string, requestId: string, earlier?: string, companion?: string): Promise<Gated> {
     const bridge = this.bridge;
     // The page on the stage is read meanwhile; without one, Jev is asked nothing about a page.
     const [companions, page] = await Promise.all([listCompanions(bridge, true, 800), bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
@@ -76,7 +76,7 @@ export class SessionSwitch {
    * With more in it: the request goes on, noting the page part is done. If the page's controls
    * fail, the request goes to the harness with the error, to fix them.
    */
-  async present({ steps, only, work = 0 }: PageJudgment, needsAgent: number | null): Promise<Screened> {
+  async present({ steps, only, work = 0 }: PageJudgment, needsAgent: number | null): Promise<Gated> {
     const bridge = this.bridge, { agent } = bridge;
     try {
       const { done, onScreen } = await bridge.stage.run(steps);
