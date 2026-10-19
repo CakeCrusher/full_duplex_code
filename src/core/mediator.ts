@@ -9,7 +9,7 @@ import { Floor, operatorSpeaking, type MicrophoneLevel } from './floor.ts';
 import { DEFAULT_TUNING, holdOf, type Tuning } from './tuning.ts';
 import type { InstructionLearner } from './instruction-learner.ts';
 import type { DelegationAudit, HandOff } from './delegation-audit.ts';
-import { handledNote, nothingToSend, queueFailed, sessionEndRequest, uncertainNote, voiceRequest } from './prompts.ts';
+import { cueNoDelegation, handledNote, nothingToSend, queueFailed, sessionEndRequest, uncertainNote, voiceRequest } from './prompts.ts';
 
 /** What Jev's check before delivery found: its judgment, and when fdc handled the request itself, what GPT Live is told instead. */
 export interface Screened {
@@ -42,6 +42,8 @@ export class Mediator {
   history = new VoiceHistory(); seenDelegations = new Set<string>(); timers = new Set<NodeJS.Timeout>();
   /** Why voice ended, once it has: speech handed back after that goes to the agent at once. */
   ended?: string;
+  /** When GPT Live's own words last moved the page (speech cues): it is presenting. */
+  cueAt = 0;
   context: ContextQueue; feed: ObservationFeed;
   /** Whether the operator is talking: agent updates wait for them. */
   floor: Floor;
@@ -138,7 +140,8 @@ export class Mediator {
     const request = this.history.request(offsetMs);
     if (!request) {
       this.log({ type: 'bridge.delegation_suppressed', delegationId, reason: 'No new operator speech to send' });
-      this.context.add('thinking', nothingToSend(this.agent), delegationId);
+      // Presenting, GPT Live sometimes delegates to move the page its words already moved.
+      this.context.add('thinking', Date.now() - this.cueAt < 8000 ? cueNoDelegation : nothingToSend(this.agent), delegationId);
       return;
     }
     if (request.unheard) this.log({ type: 'bridge.unheard_transcript', delegationId, text: request.unheard });

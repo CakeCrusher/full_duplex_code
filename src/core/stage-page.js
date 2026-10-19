@@ -82,6 +82,13 @@
     return [...list].reverse().find(el => el !== from && before(el, from) && !el.contains(from)) ?? null;
   };
 
+  // A section's own short name (its id, or a short label above the heading) comes first: it is what
+  // people call it. Headings that repeat ("Landed" in several sections) are left to next/previous.
+  const short = h => {
+    const section = h.closest('section[id], article[id]'), id = h.id || (section?.querySelector(UNITS.heading) === h ? section.id : '');
+    const label = h.previousElementSibling && text(h.previousElementSibling).length < 40 ? text(h.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') : '';
+    return [/^[a-z][\w-]{2,30}$/i.test(id) && !/^h\d|^section\d/i.test(id) ? id.replace(/[-_]/g, ' ') : '', label.toLowerCase()].filter(Boolean)[0] ?? '';
+  };
   // The id a command lands on (its element's, or the nearest enclosing one): for checking where a command goes.
   const anchorOf = el => el.id || el.closest('[id]')?.id || null;
   const base = () => {
@@ -96,13 +103,6 @@
     commands.push({ id: 'clear_highlight', say: 'Remove the highlight', run: async () => { stage.ringOn = false; place(); return 'The highlight is off.'; } });
     const used = new Set(commands.map(c => c.id));
     const unique = id => { let out = id, n = 2; while (used.has(out)) out = `${id}_${n++}`; used.add(out); return out; };
-    // A section's own short name (its id, or a short label above the heading) comes first: it is what
-    // people call it. Headings that repeat ("Landed" in several sections) are left to next/previous.
-    const short = h => {
-      const section = h.closest('section[id], article[id]'), id = h.id || (section?.querySelector(UNITS.heading) === h ? section.id : '');
-      const label = h.previousElementSibling && text(h.previousElementSibling).length < 40 ? text(h.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') : '';
-      return [/^[a-z][\w-]{2,30}$/i.test(id) && !/^h\d|^section\d/i.test(id) ? id.replace(/[-_]/g, ' ') : '', label.toLowerCase()].filter(Boolean)[0] ?? '';
-    };
     const seen = {};
     for (const h of units('heading')) seen[text(h).toLowerCase()] = (seen[text(h).toLowerCase()] ?? 0) + 1;
     for (const h of units('heading')) {
@@ -118,7 +118,8 @@
   // What the page holds, section by section, for the voice to present from: each section's name and its opening words.
   const outline = () => units('heading').filter(h => level(h) <= sectionLevel()).slice(0, 24).map(h => {
     let next = h.nextElementSibling; while (next && !text(next)) next = next.nextElementSibling;
-    return `${text(h).slice(0, 100)}: ${next ? text(next).slice(0, 180) : ''}`;
+    const name = short(h) || text(h).slice(0, 40);
+    return `${name} — ${text(h).slice(0, 100)}: ${next ? text(next).slice(0, 180) : ''}`;
   }).join('\n');
   const page = () => {
     const c = window.fdcController;

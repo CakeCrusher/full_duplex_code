@@ -199,6 +199,7 @@ export class Harness {
   heardSpeech(delta: string) {
     for (const cue of this.speechCues.hear(delta)) {
       const started = Date.now();
+      if (this.mediator) this.mediator.cueAt = started;
       this.stage.run([cue.run]).then(({ onScreen }) => {
         this.log({ type: 'stage.cue', run: cue.run, label: cue.label, ms: Date.now() - started });
         this.publish({ type: 'stage', done: [cue.label], onScreen, cue: true });
