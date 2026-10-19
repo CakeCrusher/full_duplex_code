@@ -57,6 +57,10 @@ test("the operator's latest words that the voice answered by moving the page are
   const request = h.request(Infinity)!;
   assert.deepEqual(request.notes, ['moved']); assert.equal(request.cued, true);
   assert.equal(request.fresh, 'Um, take me to the options.', 'the gate still judges them: the move may have been all they asked');
+  say('Highlight your recommendation.', 12000, 13000);
+  const next = h.request(Infinity)!;
+  assert.equal(next.fresh, 'Highlight your recommendation.'); assert.equal(next.cued, undefined, 'words a cue answered earlier leave newer words to the gate');
+  assert.deepEqual(next.notes, ['moved'], 'though the note still goes with the earlier words');
 });
 
 test('the gate moves nothing again for words the voice moved the page for; only the page asked for, nothing goes to the agent', async t => {
