@@ -270,7 +270,10 @@
           // Words scattered over a whole section don't count: nothing far longer than what was asked for.
           hits = hits.filter(el => flat(el).length <= Math.max(400, want.length * 20));
           if (!hits.length) throw new Error(`Nothing on the page says "${a.text}"`);
-          await go(hits[0].closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? hits[0]);
+          // The kind of thing the operator named ("the Gemini row"), when one says it, over the first mention.
+          const kind = { row: 'tr, [role=row]', item: 'li, [role=listitem]', cell: 'td, th, [role=cell]', heading: 'h1, h2, h3, h4, h5, h6, [role=heading]', paragraph: 'p, dd, blockquote, figcaption' }[a.in];
+          const named = kind ? hits.map(el => el.closest(kind)).filter(Boolean) : [];
+          await go(named[0] ?? hits[0].closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? hits[0]);
         } else if (a.do === 'scroll') {
           if (a.to === 'top' || a.to === 'bottom') scrollTo({ top: a.to === 'top' ? 0 : document.documentElement.scrollHeight, behavior: 'smooth' });
           else scrollBy({ top: (a.to === 'down' ? 1 : -1) * innerHeight * 0.6, behavior: 'smooth' });

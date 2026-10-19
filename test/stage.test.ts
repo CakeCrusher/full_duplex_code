@@ -136,7 +136,8 @@ test('a one-off is only the fixed page steps: anything else, code included, is r
   assert.deepEqual(await reply('{"actions":[{"do":"click","n":3},{"do":"wait","ms":9000},{"do":"find","text":"Q3"}],"say":"The Q3 row."}').write('open the table and point at Q3', 'digest'),
     { actions: [{ do: 'click', n: 3 }, { do: 'wait', ms: 3000 }, { do: 'find', text: 'Q3' }], say: 'The Q3 row.' });
   assert.deepEqual(parseOneOff('```json\n{"actions":[{"do":"scroll","to":"down"}]}\n```'), { actions: [{ do: 'scroll', to: 'down' }], say: '' }, 'fences are dropped');
-  for (const text of ['el(3).click();', '{"actions":[{"do":"eval","code":"fetch(1)"}]}', '{"actions":[{"do":"click","n":"3; fetch(1)"}]}', '{"actions":[]}', '{"actions":[{"do":"scroll","to":"https://x"}]}'])
+  assert.deepEqual(parseOneOff('{"actions":[{"do":"find","text":"Gemini","in":"row"}]}').actions, [{ do: 'find', text: 'Gemini', in: 'row' }], 'a find can say the kind of thing named');
+  for (const text of ['el(3).click();', '{"actions":[{"do":"eval","code":"fetch(1)"}]}', '{"actions":[{"do":"click","n":"3; fetch(1)"}]}', '{"actions":[]}', '{"actions":[{"do":"scroll","to":"https://x"}]}', '{"actions":[{"do":"find","text":"Gemini","in":"script"}]}'])
     assert.throws(() => parseOneOff(text), /fast model|Refused a page step/, text);
 });
 
