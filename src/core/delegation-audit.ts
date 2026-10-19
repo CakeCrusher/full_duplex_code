@@ -149,7 +149,9 @@ export class DelegationAudit {
       const other = Math.max(0, ...['page_step_1', 'page_step_2', 'page_step_3'].map(name => answers?.[name]?.choice === OTHER ? Number(answers[name].probabilities?.[OTHER] ?? answers[name].confidence ?? 1) : 0));
       const count = Number(answers?.page_steps?.choice) || 0, steps = [step('page_step_1'), step('page_step_2'), step('page_step_3')];
       // A step 1 without a count still runs; the count otherwise says where the list ends.
-      let chosen = steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id);
+      // Jev's "no page command" with work asked: nothing runs ("make the options section bigger" isn't a move).
+      const none = answers?.page_steps?.choice === '0' && p('page_work') >= PAGE_WORK;
+      let chosen = none ? [] : steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id);
       // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
       if (steps[0] && steps[1] === steps[0] && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
       judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: p('page_work'), other, count };
