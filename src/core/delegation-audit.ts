@@ -164,10 +164,10 @@ export class DelegationAudit {
       // runs anyway. With work asked too, that shows the part being worked on ("add a summary to the sessions part"),
       // and the request still goes to the agent: skipping it missed 1 in 7 navigation requests on the synthetic set.
       let chosen = steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id);
-      // Two steps that came to the same command through different commands for its part are one step, not a repeat.
+      // Only a relative move Jev chose twice repeats ("next, next"); the same part reached twice, through the same or
+      // another command for it, is one step.
       const raw = ['page_step_1', 'page_step_2', 'page_step_3'].map(name => answers?.[name]?.choice);
-      // Only a relative move repeats ("next, next"); going to the same part twice is going there once.
-      const relative = (id: string) => /next|previous|prev|back|forward|scroll|down|up/.test(id);
+      const relative = (id: string) => /(^|_)(next|previous|prev|back|forward|scroll|down|up)(_|$)/.test(id);
       chosen = chosen.filter((id, index) => !index || id !== chosen[index - 1] || (raw[index] === raw[index - 1] && relative(id)));
       // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
       if (steps[0] && steps[1] === steps[0] && raw[1] === raw[0] && relative(steps[0]) && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
