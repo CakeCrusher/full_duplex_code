@@ -106,19 +106,60 @@ function mediator(t: TestContext, screen: (said: string) => Promise<Screened>) {
   return { m, appends, deliveries, recorded };
 }
 
+test('speech fdc handled itself is not delegated: the next request carries it, with what came before and after', async t => {
+  let asks = 0;
+  const f = mediator(t, async () => ++asks === 1 ? { needsAgent: .1, handled: 'Nothing was sent to Claude Code: …', companion: true } : { needsAgent: .9 });
+  const say = (delta: string, start_ms: number, end_ms: number) => f.m.liveEvent({ type: 'session.input_transcript.delta', delta, start_ms, end_ms });
+  // The fixture's first words stand for part A, unfinished; then a tangent fdc handles.
+  say(' Oh, and stop waking up for every little thing.', 1000, 3000);
+  f.m.delegate('d1', 3000); await until(() => f.appends.length);
+  assert.equal(f.deliveries.length, 0);
+  assert.equal(f.m.history.delegatedThrough, -1, 'nothing reached the agent');
+  say('And show what it would cost.', 9000, 11000);
+  f.m.delegate('d2', 11000); await until(() => f.deliveries.length);
+  assert.equal(asks, 2, 'Jev judges only the new words the second time');
+  assert.match(f.deliveries[0].content, /voice tool has done that part\. Act on the rest/);
+  assert.match(f.deliveries[0].content, /user: Switch to beta\. Oh, and stop waking up for every little thing\.\nuser: And show what it would cost\.$/);
+  assert.equal(f.m.history.delegatedThrough, -1, 'not delegated until the agent has it');
+  f.m.delivered(f.deliveries[0].id);
+  assert.equal(f.m.history.delegatedThrough, 2);
+  f.m.handOff('requested');
+  assert.equal(f.deliveries.length, 1, 'nothing is left to hand off');
+});
+
+test('a request whose delivery was uncertain goes again with the next one, noted; one handled after voice ended goes at once', async t => {
+  const f = mediator(t, async () => ({ needsAgent: .9 }));
+  f.m.delegate('d1', 900); await until(() => f.deliveries.length);
+  f.m.undelivered(f.deliveries[0].id);
+  f.m.liveEvent({ type: 'session.input_transcript.delta', delta: 'Then run the tests.', start_ms: 5000, end_ms: 6000 });
+  f.m.delegate('d2', 6000); await until(() => f.deliveries.length === 2);
+  assert.match(f.deliveries[1].content, /may have reached you already/);
+  assert.match(f.deliveries[1].content, /user: Switch to beta\.\nuser: Then run the tests\.$/);
+  let answer!: (screened: Screened) => void;
+  const late = mediator(t, () => new Promise(resolve => { answer = resolve; }));
+  late.m.delegate('d1', 900); await until(() => answer);
+  late.m.handOff('operator ended voice');
+  assert.equal(late.deliveries.length, 0, 'the request Jev is still reading is not handed off twice');
+  answer({ handled: 'Nothing was sent to Claude Code: …' });
+  await until(() => late.deliveries.length);
+  assert.match(late.deliveries[0].content, /^\[Voice session ended: operator ended voice\][^\n]*voice tool has done that part[^\n]*\n\nuser: Switch to beta\.$/);
+});
+
+// What delegate() does: the request's speech is taken, then Jev reads it.
+const screen = (m: Mediator, id: string, delegationId: string) => { const request = m.history.request(Infinity)!; m.history.claim(request, id); return m.screened(id, request, 'content', delegationId); };
 test('the mediator: a handled request is answered to GPT Live\'s delegation and not sent; others are sent with Jev\'s judgment; a failed check sends', async t => {
   const handled = mediator(t, async () => ({ needsAgent: .1, handled: 'Nothing was sent to Claude Code: …' }));
-  await handled.m.screened('r1', handled.m.history.request(Infinity)!, 'content', 'd1');
+  await screen(handled.m, 'r1', 'd1');
   assert.equal(handled.deliveries.length, 0);
   assert.deepEqual(handled.appends, [['thinking', 'Nothing was sent to Claude Code: …', 'd1']]);
-  assert.equal(handled.m.history.request(Infinity), null, 'its words are not sent later, when voice ends');
+  assert.match(handled.m.history.request(Infinity)!.notes!.join(' '), /voice tool has done that part/, 'its words are not delegated: they go with the next request, noted');
   const passed = mediator(t, async () => ({ needsAgent: .8 }));
-  await passed.m.screened('r2', passed.m.history.request(Infinity)!, 'content', 'd2');
+  await screen(passed.m, 'r2', 'd2');
   assert.equal(passed.deliveries.length, 1);
   await until(() => passed.recorded.length);
   assert.equal(passed.recorded[0].judged, .8, 'Jev is not asked a second time');
   const failing = mediator(t, async () => { throw new Error('Jev returned HTTP 500'); });
-  await failing.m.screened('r3', failing.m.history.request(Infinity)!, 'content', 'd3');
+  await screen(failing.m, 'r3', 'd3');
   assert.equal(failing.deliveries.length, 1, 'in doubt, it reaches the harness');
 });
 

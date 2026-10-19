@@ -14,6 +14,8 @@ interface OutboxOptions {
   fault: (error: Error) => void;
   /** A request reached the agent. */
   onSent: (entry: OutboxEntry) => void;
+  /** A request may not have reached the agent; a later confirmation still counts. */
+  onUncertain?: (entry: OutboxEntry) => void;
 }
 
 // Voice requests on their way to the agent, keyed by request ID. Each state
@@ -46,7 +48,7 @@ export class Outbox extends Map<string, OutboxEntry> {
   settle(entry: OutboxEntry, result: DeliveryResult) {
     entry.state = result.state; this.publishRequest(entry);
     if (result.state === 'sent') this.options.onSent(entry);
-    else this.options.fault(result.error);
+    else { this.options.fault(result.error); this.options.onUncertain?.(entry); }
   }
   publishRequest(entry: OutboxEntry) {
     const event = { type: 'task', id: entry.id, text: entry.content, notification: this.options.agent.wire(entry), state: entry.state, queuedAt: entry.queuedAt };

@@ -1,10 +1,26 @@
 export interface TranscriptDelta { type: string; delta: string; start_ms: number; end_ms: number }
-export interface TranscriptFragment { seq: number; role: 'operator' | 'intermediary'; text: string; startMs: number; endMs: number; receivedAt: number; carried?: boolean }
+export interface TranscriptFragment {
+  seq: number; role: 'operator' | 'intermediary'; text: string; startMs: number; endMs: number; receivedAt: number; carried?: boolean;
+  /** The request it is on its way to the agent with; it is taken by no other request meanwhile. */
+  claim?: string;
+  /** The agent received it. */
+  sent?: boolean;
+  /** Why it is still here after a request took it: fdc handled that request itself, or its delivery was uncertain. */
+  note?: string;
+}
 /** One speaker's speech until they pause for over 2 seconds. */
 export type Utterance = Pick<TranscriptFragment, 'role' | 'text' | 'endMs'>;
 /** A spoken turn as kept for resuming the conversation. */
 export type Turn = Pick<Utterance, 'role' | 'text'>;
-export interface SpokenRequest { utterances: Utterance[]; through: number; unheard?: string[] }
+export interface SpokenRequest {
+  utterances: Utterance[]; through: number; unheard?: string[];
+  /** The fragments it takes. */
+  seqs: number[];
+  /** Why some of its speech is going again (see TranscriptFragment.note). */
+  notes?: string[];
+  /** The operator's words no earlier request took, for judging what is new. */
+  fresh: string;
+}
 // Any sample louder than this is sound; the page's gate sends exact silence, which echoes back at about 1.
 const SOUND_PEAK = 64;
 
@@ -20,7 +36,9 @@ function utterances(fragments: readonly TranscriptFragment[]): Utterance[] {
   return joined.filter(u => u.text.trim());
 }
 
-// Transcripts of one voice connection, and how far they have been delegated.
+// Transcripts of one voice connection, and how far they have been delegated: delegatedThrough
+// moves only over speech the agent received, so speech fdc handled itself, or whose delivery
+// failed or was uncertain, goes with the next request (at least once, never lost).
 export class VoiceHistory {
   fragments: TranscriptFragment[] = [];
   delegatedThrough = -1;
@@ -73,23 +91,44 @@ export class VoiceHistory {
   /** Operator words GPT Live transcribed from silence (see audible). */
   unheard(fragment: TranscriptFragment) { return fragment.role === 'operator' && !fragment.carried && this.audible(fragment.startMs, fragment.endMs) === false; }
   // The conversation since the previous delegation: anything said before it went
-  // with the previous request. Transcript arrival can lag the delegation event,
-  // so the caller waits briefly before taking this snapshot, and speech starting
-  // more than 3 s after the delegation is left for the next request.
+  // with the previous request, unless the agent never got it. Transcript arrival can lag the
+  // delegation event, so the caller waits briefly before taking this snapshot, and speech
+  // starting more than 3 s after the delegation is left for the next request.
   request(offsetMs: number): SpokenRequest | null {
-    const all = this.fragments.filter(f => f.seq > this.delegatedThrough && f.startMs <= offsetMs + 3000);
+    const all = this.fragments.filter(f => f.seq > this.delegatedThrough && !f.sent && !f.claim && f.startMs <= offsetMs + 3000);
     const unheard = all.filter(f => this.unheard(f));
     const spoken = utterances(all.filter(f => !unheard.includes(f)));
     if (!spoken.some(u => u.role === 'operator')) return null;
-    return { utterances: spoken, through: all.at(-1)!.seq, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
+    const notes = [...new Set(all.map(f => f.note).filter(note => note !== undefined))];
+    const fresh = all.filter(f => f.role === 'operator' && !f.note && !unheard.includes(f)).map(f => f.text).join('').replace(/\s+/g, ' ').trim();
+    return { utterances: spoken, through: all.at(-1)!.seq, seqs: all.map(f => f.seq), fresh, ...notes.length ? { notes } : {}, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
   }
-  markDelivered(request: SpokenRequest) { this.delegatedThrough = Math.max(this.delegatedThrough, request.through); }
+  /** The request is on its way: no other request takes its speech meanwhile. */
+  claim(request: SpokenRequest, id: string) { for (const seq of request.seqs) this.fragments[seq].claim = id; }
+  /** The request didn't reach the agent: its speech goes with the next one, with why. */
+  release(id: string, note?: string) {
+    let released = 0;
+    for (const f of this.fragments) if (f.claim === id && !f.sent) { f.claim = undefined; if (note) f.note = note; released++; }
+    return released;
+  }
+  /** The agent received the request. */
+  commit(id: string) { this.markSent(this.fragments.filter(f => f.claim === id)); }
+  markDelivered(request: SpokenRequest) { this.markSent(request.seqs.map(seq => this.fragments[seq])); }
+  markSent(fragments: TranscriptFragment[]) {
+    for (const f of fragments) f.sent = true;
+    // Only over speech the agent has, with none missing before it.
+    while (this.fragments[this.delegatedThrough + 1]?.sent) this.delegatedThrough++;
+  }
   /** This connection's own conversation, for resuming it in a later one. */
   turns(): Turn[] { return utterances(this.fragments.filter(f => !f.carried && !this.unheard(f))).map(({ role, text }) => ({ role, text: text.replace(/\s+/g, ' ').trim() })); }
   /** Speech a dropped connection had not passed on, placed before this one's so that its next request includes it. */
   carry(from: VoiceHistory) {
-    const pending = from.fragments.filter(f => f.seq > from.delegatedThrough && !from.unheard(f));
+    const pending = from.fragments.filter(f => !f.sent && !f.claim && !from.unheard(f));
     const shift = (pending.at(-1)?.endMs ?? 0) + 5000;
-    for (const f of pending) this.fragments.push({ ...f, seq: this.fragments.length, startMs: f.startMs - shift, endMs: f.endMs - shift, carried: true });
+    for (const f of pending) {
+      this.fragments.push({ ...f, seq: this.fragments.length, startMs: f.startMs - shift, endMs: f.endMs - shift, carried: true });
+      // Taken over: the dropped connection hands it off no more.
+      f.claim = 'carried';
+    }
   }
 }

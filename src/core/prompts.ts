@@ -101,8 +101,13 @@ export const deliveryConfirmation = ({ profile: { product } }: Agent) => `Your r
 // the conversation since the previous request, one utterance per line.
 const SPEAKERS: Record<Utterance['role'], string> = { operator: 'user', intermediary: 'voice assistant' };
 const transcript = (utterances: readonly Pick<Utterance, 'role' | 'text'>[]) => utterances.map(u => `${SPEAKERS[u.role]}: ${u.text.replace(/\s+/g, ' ').trim()}`).join('\n');
-export const voiceRequest = (utterances: readonly Pick<Utterance, 'role' | 'text'>[]) =>
-  `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.\n\n${transcript(utterances)}`;
+export const voiceRequest = (utterances: readonly Pick<Utterance, 'role' | 'text'>[], notes: readonly string[] = []) =>
+  `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.${notesText(notes)}\n\n${transcript(utterances)}`;
+// Why speech an earlier request took is in this one: it never reached the agent.
+const notesText = (notes: readonly string[]) => notes.length ? ` ${notes.join(' ')}` : '';
+export const handledNote = (what: 'sessions' | 'companion') =>
+  `Some of it went to the voice tool earlier and not to you, because the voice tool judged it to be only ${what === 'sessions' ? 'about turning voice sessions on or off' : "about how the voice assistant itself should behave"}; the voice tool has done that part. Act on the rest, which may finish what it began.`;
+export const uncertainNote = 'Some of it may have reached you already: its delivery was uncertain. Don\'t repeat work it already started.';
 // Speech the voice assistant had not passed on when the voice session ended.
-export const sessionEndRequest = (reason: string, utterances: readonly Pick<Utterance, 'role' | 'text'>[]) =>
-  `[Voice session ended: ${reason}] Sent because the voice session ended, not because the voice assistant passed it on. This is what the user said since their previous voice request, one utterance per line; it may be unfinished or not a request at all. The user's words are in the "user:" lines; "voice assistant:" lines are context.\n\n${transcript(utterances)}`;
+export const sessionEndRequest = (reason: string, utterances: readonly Pick<Utterance, 'role' | 'text'>[], notes: readonly string[] = []) =>
+  `[Voice session ended: ${reason}] Sent because the voice session ended, not because the voice assistant passed it on. This is what the user said since their previous voice request, one utterance per line; it may be unfinished or not a request at all. The user's words are in the "user:" lines; "voice assistant:" lines are context.${notesText(notes)}\n\n${transcript(utterances)}`;

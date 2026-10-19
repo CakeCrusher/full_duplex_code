@@ -9,7 +9,7 @@ import { Floor, operatorSpeaking, type MicrophoneLevel } from './floor.ts';
 import { DEFAULT_TUNING, holdOf, type Tuning } from './tuning.ts';
 import type { InstructionLearner } from './instruction-learner.ts';
 import type { DelegationAudit, HandOff } from './delegation-audit.ts';
-import { nothingToSend, queueFailed, sessionEndRequest, voiceRequest } from './prompts.ts';
+import { handledNote, nothingToSend, queueFailed, sessionEndRequest, uncertainNote, voiceRequest } from './prompts.ts';
 
 /** What Jev's check before delivery found: its judgment, and when fdc handled the request itself, what GPT Live is told instead. */
 export interface Screened { needsAgent?: number | null; handled?: string; /** Handled because it was only about how the companion behaves. */ companion?: boolean }
@@ -30,6 +30,8 @@ export class Mediator {
   publish: (event: Record<string, unknown>) => void;
   clean: (text: string) => string;
   history = new VoiceHistory(); seenDelegations = new Set<string>(); timers = new Set<NodeJS.Timeout>();
+  /** Why voice ended, once it has: speech handed back after that goes to the agent at once. */
+  ended?: string;
   context: ContextQueue; feed: ObservationFeed;
   /** Whether the operator is talking: agent updates wait for them. */
   floor: Floor;
@@ -130,19 +132,24 @@ export class Mediator {
       return;
     }
     if (request.unheard) this.log({ type: 'bridge.unheard_transcript', delegationId, text: request.unheard });
-    const content = this.clean(voiceRequest(request.utterances)), id = randomUUID();
-    if (this.screen) return this.screened(id, request, content, delegationId);
+    const content = this.clean(voiceRequest(request.utterances, request.notes)), id = randomUUID();
+    // Its speech is taken meanwhile, so a later delegation doesn't send it again; it counts as
+    // delegated only once the agent has it (delivered).
+    this.history.claim(request, id);
+    // Words a request already took that went to fdc, or may not have arrived, were judged then.
+    if (this.screen && request.fresh) return this.screened(id, request, content, delegationId);
     this.send(id, request, content, delegationId);
   }
-  // Jev reads the request first; one that only turns sessions on or off is handled by fdc, and GPT Live
-  // is told so instead. Its words are taken meanwhile, so a later delegation doesn't send them again.
+  // Jev reads the request first; one that only turns sessions on or off, or is only about how the
+  // companion behaves, is handled by fdc, and GPT Live is told so instead. Its words stay
+  // undelegated: they go with the next request, noted, since they may begin what it finishes.
   async screened(id: string, request: SpokenRequest, content: string, delegationId: string) {
-    this.history.markDelivered(request);
-    const said = this.said(request);
+    const said = this.clean(request.fresh);
     let screened: Screened | undefined;
     try { screened = await this.screen!(said, id); } catch (error) { this.log({ type: 'screen.error', message: (error as Error).message }); }
     if (screened?.handled === undefined) return this.send(id, request, content, delegationId, screened?.needsAgent);
     this.log({ type: 'bridge.request_handled', id, delegationId, said, companion: screened.companion });
+    this.giveBack(id, handledNote(screened.companion ? 'companion' : 'sessions'));
     // A preference about the companion is still a standing instruction to learn, and Jev's to tune from.
     if (screened.companion) this.consider(id, request, said); else this.previousUtterance = said;
     if (this.live.state === 'active') this.context.add('thinking', screened.handled, delegationId);
@@ -150,26 +157,39 @@ export class Mediator {
   send(id: string, request: SpokenRequest, content: string, delegationId: string, judged?: number | null) {
     try {
       this.deliver({ id, content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now() });
-      this.history.markDelivered(request);
       this.check(id, request, 'passed', delegationId, judged);
     } catch (error) {
+      this.history.release(id);
       this.fault(error as Error);
       this.context.add('thinking', queueFailed(this.agent), delegationId);
     }
   }
+  /** The agent received request `id`: its speech is delegated. */
+  delivered(id: string) { this.history.commit(id); }
+  /** Request `id`'s delivery was uncertain: its speech goes again with the next request. */
+  undelivered(id: string) {
+    // A hand-off whose delivery is uncertain is not sent again by itself: the outbox shows it.
+    if (this.history.release(id, uncertainNote) && this.ended) this.log({ type: 'bridge.undelivered_after_voice', id });
+  }
+  // Speech a request took that didn't reach the agent; after voice ended, it goes to the agent now.
+  giveBack(id: string, note: string) {
+    if (this.history.release(id, note) && this.ended) this.handOff(this.ended);
+  }
   // When the voice session ends, speech not yet passed on goes to the agent anyway, marked as such.
   handOff(reason: string) {
+    this.ended = reason;
     const request = this.history.request(Infinity);
     if (!request) return;
     const id = randomUUID();
+    this.history.claim(request, id);
     try {
-      this.deliver({ id, content: this.clean(sessionEndRequest(reason, request.utterances)), delegationId: null, voiceSessionId: this.live.id, queuedAt: Date.now() });
-      this.history.markDelivered(request);
+      this.deliver({ id, content: this.clean(sessionEndRequest(reason, request.utterances, request.notes)), delegationId: null, voiceSessionId: this.live.id, queuedAt: Date.now() });
       this.log({ type: 'bridge.session_end_handoff', id, reason, utterances: request.utterances.length });
       this.check(id, request, 'answered');
-    } catch (error) { this.fault(error as Error); }
+    } catch (error) { this.history.release(id); this.fault(error as Error); }
   }
-  stop() {
+  stop(reason = 'voice ended') {
+    this.ended ??= reason;
     this.feed.stop(); this.context.stop(); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();
     this.live.off('event', this.onLive); this.observer.off('observation', this.onObservation);
   }

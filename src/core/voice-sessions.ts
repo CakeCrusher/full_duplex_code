@@ -86,6 +86,8 @@ export class VoiceSessions {
   reconnects: number[] = []; lastDrop?: { reason: string; at: number; reconnecting: boolean };
   /** Speech a dropped, moved or paused session had not passed on, kept for the session that replaces it. */
   carried?: { mediator: Mediator; reason: string; timer?: NodeJS.Timeout };
+  /** Which connection sent each request still awaiting delivery, to tell it the outcome. */
+  senders = new Map<string, Mediator>();
   /** Voice on Standby, and what is happening in the conversation, priced (activity.ts). */
   standby?: Standby; activity = new Activity(); standbyTimer: NodeJS.Timeout;
   constructor(bridge: Harness, { store = true, resumeDir = path.join(bridge.root, '.runs', 'voice-resume') }: { store?: boolean; resumeDir?: string } = {}) {
@@ -363,7 +365,7 @@ export class VoiceSessions {
     this.live = live; this.page = page;
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
-    const mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => bridge.deliver(task), log, publish: event => publish(event), clean,
+    const mediator: Mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
       learner: bridge.learner, audit: bridge.handOffAudit, screen: bridge.handOffAudit ? (said, id) => bridge.sessionSwitch.screen(said, id) : undefined, onSaid: said => bridge.tuneFromInstructions(said),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake };
@@ -506,7 +508,11 @@ export class VoiceSessions {
     clearTimeout(timer); this.carried = undefined;
     mediator.handOff(reason);
   }
+  /** A request reached the agent: its speech counts as delegated. */
+  /** A request may not have reached the agent: its speech goes with that session's next request. */
+  uncertainDelivery(task: OutboxEntry) { this.senders.get(task.id)?.undelivered(task.id); }
   confirmDelivery(task: OutboxEntry) {
+    this.senders.get(task.id)?.delivered(task.id); this.senders.delete(task.id);
     const live = this.live;
     if (task.confirmationSent || !task.voiceSessionId || live?.state !== 'active' || task.voiceSessionId !== live.id) return;
     task.confirmationSent = true;
