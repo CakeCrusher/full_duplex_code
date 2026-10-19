@@ -7,6 +7,8 @@ export interface TranscriptFragment {
   sent?: boolean;
   /** Why it is still here after a request took it: fdc handled that request itself, or its delivery was uncertain. */
   note?: string;
+  /** The voice moved the page as it answered these words: this goes with them, and the gate still judges them. */
+  cued?: string;
 }
 /** One speaker's speech until they pause for over 2 seconds. */
 export type Utterance = Pick<TranscriptFragment, 'role' | 'text' | 'endMs'>;
@@ -20,6 +22,8 @@ export interface SpokenRequest {
   notes?: string[];
   /** The operator's latest utterance among words no earlier request took: what this request is for. */
   fresh: string;
+  /** The voice already moved the page for some of its words (TranscriptFragment.cued). */
+  cued?: boolean;
   /** Their words before it that no earlier request took: GPT Live answered them, or they began what this finishes. */
   earlier?: string;
 }
@@ -101,17 +105,17 @@ export class VoiceHistory {
     const unheard = all.filter(f => this.unheard(f));
     const spoken = utterances(all.filter(f => !unheard.includes(f)));
     if (!spoken.some(u => u.role === 'operator')) return null;
-    const notes = [...new Set(all.map(f => f.note).filter(note => note !== undefined))];
+    const notes = [...new Set(all.flatMap(f => [f.note, f.cued]).filter(note => note !== undefined))], cued = all.some(f => f.cued && !f.note);
     const said = utterances(all.filter(f => !f.note && !unheard.includes(f))).filter(u => u.role === 'operator').map(u => u.text.replace(/\s+/g, ' ').trim());
     const fresh = said.at(-1) ?? '', earlier = said.slice(0, -1).join(' ');
-    return { utterances: spoken, through: all.at(-1)!.seq, seqs: all.map(f => f.seq), fresh, ...earlier ? { earlier } : {}, ...notes.length ? { notes } : {}, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
+    return { utterances: spoken, through: all.at(-1)!.seq, seqs: all.map(f => f.seq), fresh, ...earlier ? { earlier } : {}, ...cued ? { cued } : {}, ...notes.length ? { notes } : {}, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
   }
-  /** Notes the operator's latest words that no request took yet (the voice moved the page for them). */
-  noteLatest(note: string) {
+  /** Marks the operator's latest words that no request took yet: the voice moved the page for them. */
+  cueLatest(note: string) {
     const pending = this.fragments.filter(f => f.role === 'operator' && !f.sent && !f.claim && !f.note);
     let noted = 0;
     // The latest utterance: back to a pause of over 2 s.
-    for (let i = pending.length - 1; i >= 0 && (i === pending.length - 1 || pending[i + 1].startMs - pending[i].endMs <= 2000); i--) { pending[i].note = note; noted++; }
+    for (let i = pending.length - 1; i >= 0 && (i === pending.length - 1 || pending[i + 1].startMs - pending[i].endMs <= 2000); i--) { pending[i].cued = note; noted++; }
     return noted;
   }
   /** The request is on its way: no other request takes its speech meanwhile. */
