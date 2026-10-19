@@ -31,7 +31,7 @@ export interface Session { id: string; folder: string; agent: string; on: boolea
 /** Jev's reading of a request for session orchestration. */
 export interface SessionsJudgment { asked: number; only: number; unlisted: number; turnOn: string[]; turnOff: string[] }
 /** Jev's reading of a request for the page on the stage: the commands to run, in order. */
-export interface PageJudgment { steps: string[]; only: number; count: number; /** Jev's probability that work is asked of the agent besides the page commands. */ work?: number; /** That something is asked of the page that no command does. */ other?: number }
+export interface PageJudgment { steps: string[]; only: number; count: number; /** That the operator is unhappy with what the page did or can't do. */ unhappy?: number; /** Jev's probability that work is asked of the agent besides the page commands. */ work?: number; /** That something is asked of the page that no command does. */ other?: number }
 export interface Judgment { needsAgent: number | null; sessions?: SessionsJudgment; /** Only about how the voice companion behaves, nothing for the agent. */ companionOnly?: number; page?: PageJudgment }
 
 // Probabilities above which Jev's reading is acted on. A request is kept from the harness only when
@@ -48,6 +48,8 @@ export const COMPANION_ONLY = .85;
 // (Oct 19), page-only ones scored only .55-.96 and work .04-.21, ones with work in them only .02-.67 and
 // work .38-.82. Misjudged page-only words still reach the agent, with the next request.
 export const PAGE_STEP = .45, PAGE_ONLY = .4, PAGE_WORK = .3, PAGE_OTHER = .5;
+// A complaint about the page that no command answers goes to the agent to improve the page's controller.
+export const PAGE_UNHAPPY = .6;
 // Words before the utterance that no request carried yet still reach the agent later; they are context here.
 // What the companion said just before: "yes, please" answers its offer ("want me to show the diagrams?").
 const COMPANION_SETTING = ' `companion_before` is what the voice companion said just before `utterance`; use it only to understand short replies such as "yes, please".';
@@ -62,6 +64,7 @@ const pageQuestions = (page: StageView) => {
     page_steps: { type: 'choice', instructions: 'How many page commands should run, counting each repetition ("forward three sections" is 3, "go to the options and highlight the recommendation" is 2)? Work for the coding agent (making, adding, changing or fixing anything), questions and talk are not page commands.', criteria: { '0': 'No page command.', '1': 'One.', '2': 'Two.', '3': 'Three.', '4': 'Four.', '5': 'Five or more.' } },
     page_step_1: step(1), page_step_2: step(2), page_step_3: step(3),
     page_only: { type: 'noul', instructions: 'Is moving, showing or highlighting things on the page all the operator asks, with nothing for the coding agent to do, change, research or answer?', criteria: { true: 'Only page commands, with at most filler or thanks.', false: 'Also asks for work, a change, research, an answer or anything else beyond the page. When in doubt, false.' } },
+    page_unhappy: { type: 'noul', instructions: 'Is the operator unhappy with what the page just did or can\'t do: it didn\'t move, went to the wrong place or page, highlighted the wrong thing, or can\'t show what they mean?', criteria: { true: 'A complaint or correction about the page\'s moves or what it shows ("the page isn\'t moving", "that\'s not where I asked", "you didn\'t highlight it", "no, the other page").', false: 'Anything else: a plain request to go somewhere or show something, a question, work for the coding agent, or a complaint about how the voice companion talks.' } },
     // The same question from the other side: independent answers, so a request is page-only only when both agree.
     page_work: { type: 'noul', instructions: 'Besides moving, showing or highlighting things on the page, does the operator ask the coding agent to make, add, change, fix, explain or look into anything?', criteria: { true: 'Some work, change, research or answer is asked of the coding agent in `utterance`, even alongside a page command: changing how the page looks (bigger, bolder, colours, wording) is work.', false: 'Only page commands, or naming, describing, finding or pointing at a part of the page to go to, with at most filler or thanks. Judge `utterance` alone, not `earlier`.' } },
   };
@@ -85,8 +88,8 @@ const sessionQuestions = (sessions: Session[]) => ({
     type: 'noul',
     instructions: 'Does the operator, in `utterance`, ask to turn the voice of one or more companion sessions on or off: start one, stop one, switch to another, switch away from this one, or talk to several at once?',
     criteria: {
-      true: 'Asks to start, open, turn on, stop or turn off a listed session, to switch to or between sessions, to bring another session in, or for this session to stop listening, with or without the word voice. The session may be named by its folder, project or agent.',
-      false: 'Anything else: work on a project, even one named like a session; questions about how sessions work; designing the voice tool; switching something inside the code, such as a branch, a file or a setting.',
+      true: 'Asks to start, open, turn on, stop or turn off a listed session, to switch to or between sessions, to bring another session in, or for this session to stop listening, end or shut itself off, with or without the word voice. The session may be named by its folder, project or agent.',
+      false: 'Anything else: work on a project, even one named like a session; questions about how sessions work; designing the voice tool; switching something inside the code, such as a branch, a file or a setting; "stop" or "wait" on its own, which asks the companion to stop talking or stop what it is doing, not to turn voice off.',
     },
   },
   only_sessions: {
@@ -107,7 +110,7 @@ const sessionQuestions = (sessions: Session[]) => ({
     instructions: `What does the operator ask for session_${index + 1} (${session.folder}${session.current ? ', the session they are speaking to now' : ''})? Its voice is ${session.on ? 'on' : 'off'}.`,
     // The session spoken to is told apart from the others: "turn off video-editing", said to two at once, turned both off.
     criteria: session.current
-      ? { turn_off: 'The operator asks the session they are speaking to (here, you, this one, or all of them) to stop listening, or to switch away from it to another session.', leave: 'The operator does not ask this session itself to stop. Asking to turn off a different session, named by its folder or project, leaves this one on.' }
+      ? { turn_off: 'The operator asks the session they are speaking to (here, you, this one, or all of them) to stop listening, end or shut itself off, or to switch away from it to another session.', leave: 'The operator does not ask this session itself to stop listening: "stop" on its own asks it to stop talking or stop what it is doing. Asking to turn off a different session, named by its folder or project, leaves this one on.' }
       : session.on
       ? { turn_off: `The operator names or clearly means ${session.folder} (or all of them) and asks for its voice to stop.`, leave: `The operator does not ask ${session.folder}'s voice to stop.` }
       : { turn_on: `The operator names or clearly means ${session.folder} and asks to start its voice, switch to it, or bring it into the conversation.`, leave: `The operator does not ask to start ${session.folder}'s voice.` },
@@ -156,7 +159,7 @@ export class DelegationAudit {
       // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
       if (steps[0] && steps[1] === steps[0] && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
       // Work unanswered counts as asked, so the words still reach the agent: keeping them from it is the costly mistake.
-      judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: p('page_work', 1), other, count };
+      judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: p('page_work', 1), other, count, unhappy: p('page_unhappy') };
       // Each step's likeliest commands, for tuning the page questions.
       const top = (name: string) => Object.entries(answers?.[name]?.probabilities ?? {}).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 3).map(([id, v]) => `${id} ${Number(v).toFixed(2)}`).join(', ');
       this.log({ type: 'page.judged', utterance: state.utterance, count: answers?.page_steps?.choice, step_1: top('page_step_1'), step_2: top('page_step_2'), step_3: top('page_step_3'), only: p('page_only'), work: answers?.page_work?.noul ?? null, other });

@@ -428,11 +428,12 @@ export class VoiceSessions {
     const cues = Stage.cues(view), names = cues.filter(c => c.name).map(c => c.label).slice(0, 24), phrases = cues.filter(c => !c.name).map(c => c.label).slice(0, 12);
     this.bridge.speechCues.set(cues);
     // A reload (often with a new query to bust the cache) is the same page unless its parts changed.
-    const signature = JSON.stringify([view.url.replace(/[?#].*$/, ''), names, phrases]);
+    const others = [...this.bridge.stage.pages].filter(([tabId]) => tabId !== view.tabId).map(([, page]) => page.title);
+    const signature = JSON.stringify([view.url.replace(/[?#].*$/, ''), names, phrases, others]);
     if (run.briefed === signature) return;
     run.briefed = signature;
     this.bridge.log({ type: 'stage.briefed', url: view.url, names, phrases });
-    await live.append('instructions', stageBrief(view.title, names, phrases)).catch(error => this.bridge.log({ type: 'stage.error', message: (error as Error).message }));
+    await live.append('instructions', stageBrief(view.title, names, phrases, others)).catch(error => this.bridge.log({ type: 'stage.error', message: (error as Error).message }));
     if (view.outline) run.mediator.context.add('thinking', stageOutline(view.title, view.outline), null);
   }
   liveEvent(run: Run, event: any) {

@@ -73,11 +73,13 @@ Rules that make it work well:
 - **Sequences belong in one command.** If showing something takes several steps (open a tab,
   wait for it, scroll to a row, highlight it), make it one command and `await` each step in
   `run()`. The voice tool can also run up to three commands in a row when the user asks for them.
-- **Return what is on screen.** A sentence or two about what the user now sees; the voice uses it
-  to talk about the page.
+- **Return what is on screen.** A sentence or two about what the user now sees, not what comes next or how much
+  else there is ("all 9 stages run" sent the voice through all nine): the voice talks about what you return.
 - **Limits are answers, bugs are errors.** When a command can't apply right now (already on the last
   slide, nothing to go back to), return a sentence saying so: the voice tells the user. Throw only
   when the controller itself is broken (an element it expects is missing, a call fails): the voice
   tool then sends you the request with the error, so you can fix the controller.
+- **Grow it.** When the voice tool tells you the user wanted something the controls couldn't do, add a command (or
+  a name, a cue, an annotation) for it, so the voice can do it next time.
 - **Keep it current.** `commands()` is read again before each use, so it can follow the page's
   state (for example, only the slides that exist).

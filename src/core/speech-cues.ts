@@ -14,6 +14,9 @@ export const cueWords = (text: string) => { const words = normalize(text).split(
 // ("now the options parser is fixed") would move the page.
 const TURNS = [['look', 'at'], ['go', 'to'], ['turn', 'to'], ['move', 'to'], ['jump', 'to'], ['head', 'to'], ['on', 'to'], ['onto'], ['over', 'to'], ['back', 'to'], ['look']];
 
+// A part's number said before its name ("let's look at stage one, the browser reads the address").
+const NUMBERING = /^(stage|step|slide|box|number|\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)$/;
+
 export class CueMatcher {
   cues: SpeechCue[] = [];
   /** GPT Live's words in the current response, and how far cues have already fired in them. */
@@ -39,7 +42,7 @@ export class CueMatcher {
           // Up to two filler words ("the", "section") between the turning phrase and the name, and "let's"
           // before it: presenting, GPT Live says "let's look at"; relaying the agent's work ("Claude will look
           // at the options parser") it doesn't.
-          const before = words.slice(Math.max(0, start - 7), start).filter(w => !LEADING.has(w) && w !== 'part' && w !== 'section');
+          const before = words.slice(Math.max(0, start - 9), start).filter(w => !LEADING.has(w) && w !== 'part' && w !== 'section' && !NUMBERING.test(w));
           const turn = TURNS.find(t => t.every((w, i) => before[before.length - t.length + i] === w));
           if (!turn) continue;
           const lead = before.slice(Math.max(0, before.length - turn.length - 3), before.length - turn.length);

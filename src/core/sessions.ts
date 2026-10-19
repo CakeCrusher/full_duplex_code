@@ -10,9 +10,9 @@ import type { Harness } from './bridge.ts';
 import { listCompanions, type CompanionEntry } from './companions.ts';
 import { StageError, StageNothing } from './stage.ts';
 import type { PageAction } from './fast-action.ts';
-import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, PAGE_OTHER, PAGE_WORK, UNLISTED, type PageJudgment, type Session } from './delegation-audit.ts';
+import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, PAGE_OTHER, PAGE_UNHAPPY, PAGE_WORK, UNLISTED, type PageJudgment, type Session } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
-import { companionHandled, cueHandled, improvisedFailedNote, lookingNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
+import { companionHandled, controllerNote, cueHandled, improvisedFailedNote, lookingNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
 
@@ -56,6 +56,8 @@ export class SessionSwitch {
       if (judgment.page && (judgment.page.other ?? 0) >= PAGE_OTHER && bridge.fastAction) return cued ? this.cued(judgment.page, needsAgent) : this.improvise(said, needsAgent, !(judgment.page.only >= PAGE_ONLY && (judgment.page.work ?? 1) < PAGE_WORK));
       // Only about how the companion behaves: Jev's tuning and instruction learning take it from here, not the harness.
       if ((judgment.companionOnly ?? 0) >= COMPANION_ONLY) return { needsAgent, handled: companionHandled(bridge.agent), companion: true };
+      // Unhappy with the page, and no command answers it: the page's controls are what's lacking, so the agent improves them.
+      if (page && (judgment.page?.unhappy ?? 0) >= PAGE_UNHAPPY) return { needsAgent, note: controllerNote(page) };
       // For the agent: what the user was looking at when they said it ("make this bigger").
       return page ? { needsAgent, note: lookingNote(page) } : { needsAgent };
     }
@@ -112,9 +114,10 @@ export class SessionSwitch {
     const bridge = this.bridge, { agent } = bridge, started = Date.now();
     let steps: PageAction[] = [];
     try {
-      const { actions, say } = await bridge.fastAction!.write(said, await bridge.stage.digest());
+      const { actions } = await bridge.fastAction!.write(said, await bridge.stage.digest());
       steps = actions;
-      const shown = await bridge.stage.act(actions), onScreen = say ? `${say} (${shown})` : shown;
+      // What the stage reads on screen afterwards, not the fast model's account of what it meant to do.
+      const onScreen = await bridge.stage.act(actions);
       const done = [{ id: 'one_off', say: `A one-off action for "${said.slice(0, 80)}"` }];
       bridge.log({ type: 'stage.improvised', said, actions, ms: Date.now() - started });
       bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });

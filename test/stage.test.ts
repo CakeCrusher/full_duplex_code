@@ -47,7 +47,7 @@ test('the stage runs the script and its commands in the stage tab, in order', as
   await stage.describe();
   assert.equal(calls.length, 1, 'a fresh description is reused');
   const ran = await stage.run(['goto_options', 'show_the_recommendation']);
-  assert.match(calls[1], /for \(const id of \["goto_options","show_the_recommendation"\]\)/);
+  assert.match(calls[1], /for \(const \[i, id\] of \["goto_options","show_the_recommendation"\]\.entries\(\)\) \{ if \(i\) await new Promise/, 'in order, with a pause between steps');
   assert.deepEqual(ran, { done: [view.commands[1], view.commands[2]], onScreen: 'two' });
   await assert.rejects(stage.run(['goto_options', 'next_section']), (error: any) => error.message === 'Already broken' && error.done[0].id === 'goto_options' && error.failed.id === 'next_section' && error.onScreen === 'one', 'a step that throws stops the rest; what ran before it is reported');
   await assert.rejects(stage.run(['back']), (error: any) => error instanceof StageNothing && error.failed.id === 'back', 'nothing to do is not done');
@@ -60,7 +60,7 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   answers = { needs_agent: { noul: .2 }, page_steps: { choice: '2' }, page_step_1: choice('goto_options'), page_step_2: choice('show_the_recommendation'), page_step_3: choice('show_the_recommendation'), page_only: { noul: .8 } };
   assert.equal((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page!.work, 1, 'work unanswered counts as asked');
   answers = { ...answers, page_work: { noul: 0 } };
-  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, work: 0, other: 0, count: 2 });
+  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, work: 0, other: 0, count: 2, unhappy: 0 });
   assert.match(sent.state.page, /Briefing .*The viewer is at: section "Intro"/);
   assert.deepEqual(Object.keys(sent.questions.page_step_1.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation', 'other_action']);
   answers = { ...answers, page_steps: { choice: '0' }, page_step_2: choice('none') };

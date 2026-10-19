@@ -11,6 +11,8 @@ import type { PageAction } from './fast-action.ts';
 const RAW = fs.readFileSync(new URL('./stage-page.js', import.meta.url), 'utf8');
 // A page keeps the script it was given until the script changes: its version is its content's hash.
 const SCRIPT = RAW.replace('__FDC_STAGE_VERSION__', createHash('sha1').update(RAW).digest('hex').slice(0, 12));
+/** A pause between the steps of a sequence, so each one is seen ("the DNS lookup, then the response"). */
+const STEP_DWELL_MS = 1000;
 /** Browser tools that show a tab to the operator: the tab they act on becomes the stage. */
 const SHOWS = /chrome[\w-]*__(navigate|set_tab_focus|tabs_create_mcp|execute_code)$/;
 
@@ -31,6 +33,8 @@ export class Stage {
   log: (event: Record<string, unknown>) => void;
   tabId?: number;
   view?: StageView; viewAt = 0;
+  /** The pages the agent showed this session, by tab: the voice can switch back to them ("go back to the diagram"). */
+  pages = new Map<number, { title: string; url: string }>();
   /** The stage moved to another tab. */
   onChange?: () => void;
   constructor({ log, browser = new Browser(), onChange }: { log: (event: Record<string, unknown>) => void; browser?: Browser; onChange?: () => void }) { this.log = log; this.browser = browser; this.onChange = onChange; }
@@ -56,7 +60,7 @@ export class Stage {
     try { view = await this.browser.evaluate<Omit<StageView, 'tabId'>>(tabId, `${SCRIPT}\n;window.__fdcStage.describe()`, 3000); }
     catch (error) {
       // The tab was closed (or left the shared group): there is no stage until the agent shows another page.
-      if (/not in the MCP group|No tab with id|tab.*(closed|not found)/i.test((error as Error).message) && this.tabId === tabId) { this.log({ type: 'stage.gone', tabId }); this.tabId = undefined; this.view = undefined; }
+      if (/not in the MCP group|No tab with id|tab.*(closed|not found)/i.test((error as Error).message) && this.tabId === tabId) { this.log({ type: 'stage.gone', tabId }); this.tabId = undefined; this.view = undefined; this.pages.delete(tabId); }
       throw error;
     }
     // A page's own controller can return anything: keep only well-formed commands and cues.
@@ -64,16 +68,23 @@ export class Stage {
     const commands = (Array.isArray(view?.commands) ? view.commands : []).filter((c: any) => c && str(c.id) && str(c.say)).map((c: any) => ({ id: str(c.id, 60), say: str(c.say), ...str(c.anchor) ? { anchor: str(c.anchor) } : {}, ...str(c.name, 80) ? { name: str(c.name, 80) } : {}, ...c.top ? { top: true } : {} }));
     const cues = (Array.isArray(view?.cues) ? view.cues : []).filter((c: any) => c && str(c.say) && str(c.run)).map((c: any) => ({ say: str(c.say, 80), run: str(c.run, 60) }));
     this.view = { title: str(view?.title, 200), url: str(view?.url, 500), about: str(view?.about) || null, where: str(view?.where, 600), commands, cues, ...str((view as any)?.outline, 4000) ? { outline: str((view as any).outline, 4000) } : {}, tabId } as StageView; this.viewAt = Date.now();
+    this.pages.delete(tabId); this.pages.set(tabId, { title: this.view.title, url: this.view.url });
+    // The other pages the agent showed: switching to one is a command too.
+    // Named by title and file ("diagram.html"), since people name pages by what they are; the page left last comes first.
+    const others = [...this.pages].filter(([id]) => id !== tabId).reverse();
+    others.forEach(([id, page], index) => commands.push({ id: `tab_${id}`, say: `Switch to the other page "${page.title.slice(0, 80)}" (${page.url.replace(/[?#].*$/, '').split('/').filter(Boolean).at(-1) ?? page.url}), in another tab${index ? '' : ': the page shown before this one'}` }));
     this.log({ type: 'stage.described', tabId, url: this.view.url, commands: commands.length, cues: cues.length, ms: Date.now() - started });
     return this.view;
   }
   /** Runs commands in order, each finished before the next; resolves to what is on screen after. */
   async run(ids: string[]): Promise<StageRun> {
+    const switchAt = ids.findIndex(id => /^tab_\d+$/.test(id));
+    if (switchAt >= 0) return this.switchPage(ids, switchAt);
     const tabId = this.tabId, view = this.view;
     if (!tabId) throw new Error('No page is on the stage');
     const started = Date.now();
     // Steps run in order; one that throws stops the rest, and what ran before it is still reported.
-    const { said, error, nothing } = await this.browser.evaluate<{ said: string[]; error?: string; nothing?: boolean }>(tabId, `${SCRIPT}\n;(async () => { const said = []; for (const id of ${JSON.stringify(ids)}) { let out; try { out = await window.__fdcStage.run(id); } catch (e) { return { said, error: String(e && e.message || e) }; } if (out == null) return { said, nothing: true }; said.push(out); } return { said }; })()`, 15000);
+    const { said, error, nothing } = await this.browser.evaluate<{ said: string[]; error?: string; nothing?: boolean }>(tabId, `${SCRIPT}\n;(async () => { const said = []; for (const [i, id] of ${JSON.stringify(ids)}.entries()) { if (i) await new Promise(r => setTimeout(r, ${STEP_DWELL_MS})); let out; try { out = await window.__fdcStage.run(id); } catch (e) { return { said, error: String(e && e.message || e) }; } if (out == null) return { said, nothing: true }; said.push(out); } return { said }; })()`, 15000);
     this.viewAt = 0;
     const command = (id: string) => view?.commands.find(c => c.id === id) ?? { id, say: id };
     const done = ids.slice(0, said.length).map(command);
@@ -81,6 +92,18 @@ export class Stage {
     if (error) throw new StageError(error, done, said.at(-1) ?? '', command(ids[said.length]));
     if (nothing) throw new StageNothing('nothing to do there', done, said.at(-1) ?? '', command(ids[said.length]));
     return { done, onScreen: said.at(-1) ?? '' };
+  }
+  /** Brings another page the agent showed to the front, as the stage; steps before and after it run on their own page. */
+  async switchPage(ids: string[], at: number): Promise<StageRun> {
+    const before = at ? await this.run(ids.slice(0, at)) : { done: [], onScreen: '' };
+    const tabId = Number(ids[at].slice(4)), page = this.pages.get(tabId), step = { id: ids[at], say: `Switch to the page "${page?.title ?? 'in another tab'}"` };
+    try { await this.browser.call('set_tab_focus', { tabId }); }
+    catch (error) { this.pages.delete(tabId); throw new StageError(`That page's tab is gone (${(error as Error).message.slice(0, 120)})`, before.done, before.onScreen, step); }
+    this.log({ type: 'stage.tab', tabId, by: 'voice' });
+    this.tabId = tabId; this.view = undefined; this.onChange?.();
+    const rest = at + 1 < ids.length ? await this.run(ids.slice(at + 1)) : undefined;
+    const view = rest ? undefined : await this.describe(0).catch(() => undefined);
+    return { done: [...before.done, step, ...rest?.done ?? []], onScreen: rest?.onScreen ?? `The page "${view?.title ?? page?.title}" is in front${view?.where ? `, at: ${view.where}` : ''}.` };
   }
   /**
    * What GPT Live can say to move the page as it talks: "let's look at" a part's name (sections and
