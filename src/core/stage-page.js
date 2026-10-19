@@ -237,8 +237,11 @@
           if (!hits.length) throw new Error(`Nothing on the page says "${a.text}"`);
           // The kind of thing the operator named ("the Gemini row"), when one says it, over the first mention.
           const kind = { row: 'tr, [role=row]', item: 'li, [role=listitem]', cell: 'td, th, [role=cell]', heading: 'h1, h2, h3, h4, h5, h6, [role=heading]', paragraph: 'p, dd, blockquote, figcaption' }[a.in];
-          const named = kind ? hits.map(el => el.closest(kind)).filter(Boolean) : [];
-          await go(named[0] ?? hits[0].closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? hits[0]);
+          // Near where the viewer is first: "now the GPT Live row", after the Gemini row, is in the same table.
+          const box = stage.at?.isConnected ? stage.at.closest('table, ul, ol, section, article') : null;
+          const near = list => box ? [...list.filter(el => box.contains(el)), ...list.filter(el => !box.contains(el))] : list;
+          const named = kind ? near(hits.map(el => el.closest(kind)).filter(Boolean)) : [], first = near(hits)[0];
+          await go(named[0] ?? first.closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? first);
         } else if (a.do === 'scroll') {
           if (a.to === 'top' || a.to === 'bottom') scrollTo({ top: a.to === 'top' ? 0 : document.documentElement.scrollHeight, behavior: 'smooth' });
           else scrollBy({ top: (a.to === 'down' ? 1 : -1) * innerHeight * 0.6, behavior: 'smooth' });
