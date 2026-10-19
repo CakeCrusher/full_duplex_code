@@ -112,12 +112,8 @@
     }
     // An annotation the page's own controller already offers isn't offered twice: a near-duplicate splits the choice.
     const offered = page().map(c => c.say.toLowerCase()).join('\n');
-<<<<<<< HEAD
-    for (const el of document.querySelectorAll('[data-fdc]')) if (!offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), name: el.dataset.fdc, run: () => go(el) });
-=======
     // Only what is shown: an annotation on a hidden slide or tab is the page's own controller's to show.
-    for (const el of document.querySelectorAll('[data-fdc]')) if (visible(el) && !offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), run: () => go(el) });
->>>>>>> presenter/controller
+    for (const el of document.querySelectorAll('[data-fdc]')) if (visible(el) && !offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), name: el.dataset.fdc, run: () => go(el) });
     return commands;
   };
   // What the page holds, section by section, for the voice to present from: each section's name and its opening words.
