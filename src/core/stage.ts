@@ -104,7 +104,15 @@ export class Stage {
   async act(actions: PageAction[]): Promise<string> {
     if (!this.tabId) throw new Error('No page is on the stage');
     const started = Date.now();
-    const out = await this.browser.evaluate<string>(this.tabId, `${SCRIPT}\n;window.__fdcStage.perform(${JSON.stringify(actions)})`, 15000);
+    let out: string;
+    // The steps' own waits (3 s at most, fast-action.ts) and 5 s for the rest.
+    const waits = actions.reduce((sum, a) => sum + (a.do === 'wait' ? a.ms : 0), 0);
+    try { out = await this.browser.evaluate<string>(this.tabId, `${SCRIPT}\n;window.__fdcStage.perform(${JSON.stringify(actions)})`, 5000 + waits); }
+    catch (error) {
+      // A click that opened another page of this site ends the old page's script: done, not failed.
+      if (!/context was destroyed|navigated|Cannot find context|Execution context/i.test((error as Error).message)) throw error;
+      out = 'The page opened another page of this site.';
+    }
     this.viewAt = 0;
     this.log({ type: 'stage.acted', tabId: this.tabId, actions, ms: Date.now() - started });
     return out;
