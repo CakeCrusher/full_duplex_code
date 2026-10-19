@@ -237,11 +237,11 @@
           const candidates = [...document.querySelectorAll('body *')].filter(el => !el.closest('#__fdc_ring'));
           // Every ancestor of a match matches too: keep the ones with no matching child (one pass, not pairs). The exact
           // phrase is looked for on its own, so a child with every word ("gpt-live-1") doesn't hide its cell ("GPT Live").
-          const smallest = says => { const all = candidates.filter(el => says(flat(el))), matched = new Set(all); return all.filter(el => ![...el.children].some(c => matched.has(c)) && visible(el)); };
+          // Words scattered over a whole section don't count: nothing far longer than what was asked for.
+          const short = el => flat(el).length <= Math.max(400, want.length * 20);
+          const smallest = says => { const all = candidates.filter(el => says(flat(el))), matched = new Set(all); return all.filter(el => ![...el.children].some(c => matched.has(c)) && visible(el) && short(el)); };
           let hits = smallest(t => t.includes(want));
           if (!hits.length) hits = smallest(t => words.every(w => t.includes(w)));
-          // Words scattered over a whole section don't count: nothing far longer than what was asked for.
-          hits = hits.filter(el => flat(el).length <= Math.max(400, want.length * 20));
           if (!hits.length) throw new Error(`Nothing on the page says "${a.text}"`);
           // The kind of thing the operator named ("the Gemini row"), when one says it, over the first mention.
           const kind = { row: 'tr, [role=row]', item: 'li, [role=listitem]', cell: 'td, th, [role=cell]', heading: 'h1, h2, h3, h4, h5, h6, [role=heading]', paragraph: 'p, dd, blockquote, figcaption' }[a.in];
