@@ -8,14 +8,14 @@ type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: 
 /** One step on the page. n is an element's number in the digest. */
 export type PageAction = { do: 'click'; n: number } | { do: 'show'; n: number } | { do: 'find'; text: string; in?: FindKind } | { do: 'scroll'; to: 'up' | 'down' | 'top' | 'bottom' } | { do: 'wait'; ms: number };
 /** The kind of thing a find is for, when the operator named it ("the Gemini row"). */
-export type FindKind = 'row' | 'item' | 'cell' | 'heading' | 'paragraph';
-const KINDS = new Set(['row', 'item', 'cell', 'heading', 'paragraph']);
+export type FindKind = 'row' | 'item' | 'cell' | 'heading' | 'paragraph' | 'under';
+const KINDS = new Set(['row', 'item', 'cell', 'heading', 'paragraph', 'under']);
 export interface OneOff { actions: PageAction[] }
 
 const INSTRUCTIONS = `You steer a web page for someone who asked for something by voice. Choose the steps that do it, from these only:
 {"do":"click","n":N} clicks interactive element [N] of the digest (a tab, button, toggle, link on this site);
 {"do":"show","n":N} scrolls element [N] into view and rings it;
-{"do":"find","text":"...","in":"row"} finds the smallest thing anywhere on the page, on screen or not, whose text contains these words (a row, a number, a phrase), scrolls to it and rings it: use the operator's own words for what to find ("Gemini", "Q3"), except when they describe a thing by where it is (the explanation under a heading, the value in a row): then find words from that thing itself, as the digest shows it, not the heading or label beside it; "in" (optional) is the kind of thing they named: "row" (a table row), "item" (a list item), "cell", "heading" or "paragraph";
+{"do":"find","text":"...","in":"row"} finds the smallest thing anywhere on the page, on screen or not, whose text contains these words (a row, a number, a phrase), scrolls to it and rings it: use the operator's own words for what to find ("Gemini", "Q3"); "in" (optional) is the kind of thing they named: "row" (a table row), "item" (a list item), "cell", "heading" or "paragraph", or "under" for the text right under a heading or label they name ("the explanation under the DNS lookup" is {"do":"find","text":"DNS lookup","in":"under"});
 {"do":"scroll","to":"up"|"down"|"top"|"bottom"};
 {"do":"wait","ms":M} waits up to 3000 ms in all (after a click that animates).
 To answer a question about what is on screen, point at the answer with find. Find already scrolls to and rings what it finds: don't add a show after it. Use show only with a number from the digest.

@@ -294,8 +294,21 @@
           // Near where the viewer is first: "now the GPT Live row", after the Gemini row, is in the same table.
           const box = stage.at?.isConnected ? stage.at.closest('table, ul, ol, section, article') : null;
           const near = list => box ? [...list.filter(el => box.contains(el)), ...list.filter(el => !box.contains(el))] : list;
-          const named = kind ? near(hits.map(el => el.closest(kind)).filter(Boolean)) : [], first = near(hits)[0];
-          await go(named[0] ?? first.closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? first);
+          // The text right under a heading or label ("the explanation under the DNS lookup"): the label itself is the
+          // short match, and what it labels is the next block with text after it, or after its container. Words found
+          // only inside text ("certificate") are that text itself.
+          const labels = a.in === 'under' ? hits.filter(el => el.closest(UNITS.heading) || flat(el).length <= want.length + 40) : [];
+          if (labels.length) {
+            const label = near(labels)[0];
+            let block = null;
+            for (let node = label.closest(UNITS.heading) ?? label; node && node !== document.body && !block; node = node.parentElement) {
+              for (let next = node.nextElementSibling; next && !block; next = next.nextElementSibling) if (visible(next) && flat(next).trim().length > 15) block = next;
+            }
+            await go(block ?? label);
+          } else {
+            const named = kind ? near(hits.map(el => el.closest(kind)).filter(Boolean)) : [], first = near(hits)[0];
+            await go(named[0] ?? first.closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? first);
+          }
         } else if (a.do === 'scroll') {
           if (a.to === 'top' || a.to === 'bottom') scrollTo({ top: a.to === 'top' ? 0 : document.documentElement.scrollHeight, behavior: 'smooth' });
           else scrollBy({ top: (a.to === 'down' ? 1 : -1) * innerHeight * 0.6, behavior: 'smooth' });
