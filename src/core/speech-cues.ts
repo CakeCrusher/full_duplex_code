@@ -45,10 +45,14 @@ export class CueMatcher {
           // before it: presenting, GPT Live says "let's look at"; relaying the agent's work ("Claude will look
           // at the options parser") it doesn't.
           const before = words.slice(Math.max(0, start - 9), start).filter(w => !LEADING.has(w) && w !== 'part' && w !== 'section' && !NUMBERING.test(w));
-          const turn = TURNS.find(t => t.every((w, i) => before[before.length - t.length + i] === w));
-          if (!turn) continue;
-          const lead = before.slice(Math.max(0, before.length - turn.length - 3), before.length - turn.length);
-          if (!lead.includes('lets') && !(lead.includes('let') && lead.includes('us'))) continue;
+          // Saying where the operator now is ("you're now at the request") moves the page there too, so it is true.
+          const placed = ['at', 'on'].includes(before.at(-1)!) && before.at(-2) === 'now' && ['youre', 'were'].includes(before.at(-3)!);
+          if (!placed) {
+            const turn = TURNS.find(t => t.every((w, i) => before[before.length - t.length + i] === w));
+            if (!turn) continue;
+            const lead = before.slice(Math.max(0, before.length - turn.length - 3), before.length - turn.length);
+            if (!lead.includes('lets') && !(lead.includes('let') && lead.includes('us'))) continue;
+          }
         }
         found.push({ cue, end });
       }
