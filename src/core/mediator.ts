@@ -13,7 +13,7 @@ import { cueNoDelegation, handledNote, nothingToSend, queueFailed, sessionEndReq
 
 /** What the gate (Jev's check before delivery) found: its judgment, and when fdc handled the request itself, what GPT Live is told instead. */
 /** How long the operator pauses before listening ahead reads their words. */
-const AHEAD_PAUSE_MS = 350;
+const AHEAD_PAUSE_MS = 350, AHEAD_QUIET_MS = 600;
 
 export interface Gated {
   needsAgent?: number | null; handled?: string;
@@ -97,10 +97,11 @@ export class Mediator {
     // GPT Live's transcript of the operator also shows they are talking, for pages that send no levels.
     if (event.type === 'session.input_transcript.delta' && String(event.delta ?? '').trim()) {
       this.floor.hear();
-      // A pause after a finished sentence: look ahead at it. Mid-sentence ("Next" of "next slide", or of "next,
-      // can you fix…") is never read: the transcript arrives a word at a time.
+      // A pause after the operator's words: look ahead at them. The transcript arrives a word at a time and rarely
+      // ends a sentence (9 of 3,345 utterances in the operator's sessions), so it takes a finished sentence, or
+      // quiet, microphone included: "Next" of "next slide", or of "next, can you fix…", is not read while they speak.
       clearTimeout(this.aheadTimer);
-      if (this.ahead && /[.!?]["”’)]?\s*$/.test(String(event.delta))) this.aheadTimer = setTimeout(() => { void this.lookAhead(); }, AHEAD_PAUSE_MS);
+      if (this.ahead) this.aheadTimer = /[.!?]["”’)]?\s*$/.test(String(event.delta)) ? setTimeout(() => { void this.lookAhead(); }, AHEAD_PAUSE_MS) : setTimeout(() => this.whenQuiet(), AHEAD_QUIET_MS);
     }
     if (event.type === 'session.input_audio.append' && typeof event.audio === 'string') this.history.hearAudio(event);
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
@@ -145,6 +146,12 @@ export class Mediator {
   /** The microphone level of the page this voice session listens to. */
   hear(level: MicrophoneLevel) { if (operatorSpeaking(level)) this.floor.hear(); }
   schedule(fn: () => void, ms: number) { const timer = setTimeout(() => { this.timers.delete(timer); fn(); }, ms); this.timers.add(timer); }
+  /** The operator's words stopped: once they've been quiet a while, microphone included, look ahead at them. */
+  whenQuiet() {
+    const wait = AHEAD_QUIET_MS - (Date.now() - this.floor.heardAt);
+    if (wait > 0) { this.aheadTimer = setTimeout(() => this.whenQuiet(), wait); return; }
+    void this.lookAhead();
+  }
   /** The operator paused: if their latest words only ask for the page, it moves now (sessions.ts ahead). */
   async lookAhead() {
     if (this.looking || this.live.state !== 'active') return;

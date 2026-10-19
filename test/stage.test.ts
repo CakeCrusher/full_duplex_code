@@ -225,18 +225,25 @@ test('listening ahead: the page moves as the operator pauses; GPT Live\'s delega
   assert.match(deliveries[0].content, /only about showing things on the page.*\n\nuser: Next slide\.$/s, 'the words still reach the agent, noted');
 });
 
-test('listening ahead never reads half a sentence: the transcript arrives a word at a time', async t => {
+test('listening ahead never reads half a sentence: the transcript arrives a word at a time, rarely punctuated', async t => {
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {}; live.append = async () => {};
   const asked: string[] = [];
   const m = new Mediator({ live, observer, deliver: () => {}, log: () => {}, publish: () => {}, clean: String, hold: null, gate: async () => ({}), ahead: async said => { asked.push(said); return undefined; } });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Next', start_ms: 0, end_ms: 300 });
-  await new Promise(resolve => setTimeout(resolve, 600));
-  assert.deepEqual(asked, [], '"Next" alone is not read');
-  live.emit('event', { type: 'session.input_transcript.delta', delta: ', can you fix the parser?', start_ms: 300, end_ms: 1600 });
+  // Still talking: the microphone hears them while the transcript waits for more words.
+  for (let i = 0; i < 9; i++) { m.hear({ at: Date.now(), inputRms: .05, rawInputRms: .05, gateThreshold: .008 }); await new Promise(resolve => setTimeout(resolve, 100)); }
+  assert.deepEqual(asked, [], '"Next" alone is not read while they speak');
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ', can you fix the parser', start_ms: 300, end_ms: 1600 });
+  const quiet = Date.now();
   await until(() => asked.length);
-  assert.deepEqual(asked, ['Next, can you fix the parser?']);
+  assert.deepEqual(asked, ['Next, can you fix the parser']);
+  assert.ok(Date.now() - quiet >= 550, 'read once they were quiet a while');
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ' Next slide.', start_ms: 5000, end_ms: 5600 });
+  const ended = Date.now();
+  await until(() => asked.length === 2);
+  assert.ok(Date.now() - ended < 550, 'a finished sentence is read sooner');
 });
 
 test('listening ahead moves nothing for words a cue already moved the page for, or moves it for while Jev reads them', async t => {
