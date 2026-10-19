@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
-import { Stage, type StageView } from '../src/core/stage.ts';
+import { Stage, StageNothing, type StageView } from '../src/core/stage.ts';
 import { DelegationAudit } from '../src/core/delegation-audit.ts';
 import { Mediator, type Screened } from '../src/core/mediator.ts';
 import { harness, until } from './live-fake.ts';
@@ -32,7 +32,7 @@ test('the stage is the tab the agent last showed with the browser tools', () => 
 
 test('the stage runs the script and its commands in the stage tab, in order', async () => {
   const calls: string[] = [];
-  const browser = { evaluate: async (tabId: number, expression: string) => { calls.push(`${tabId}:${expression.slice(-220)}`); return expression.endsWith('window.__fdcStage.describe()') ? { ...view, tabId: undefined } : expression.includes('"next_section"') ? { said: ['one'], error: 'Already broken' } : { said: ['one', 'two'] }; }, close() {} } as any;
+  const browser = { evaluate: async (tabId: number, expression: string) => { calls.push(`${tabId}:${expression.slice(-360)}`); return expression.endsWith('window.__fdcStage.describe()') ? { ...view, tabId: undefined } : expression.includes('"next_section"') ? { said: ['one'], error: 'Already broken' } : expression.includes('"back"') ? { said: [], nothing: true } : { said: ['one', 'two'] }; }, close() {} } as any;
   const stage = new Stage({ log: () => {}, browser });
   assert.equal(await stage.describe(), undefined, 'no stage, no page');
   stage.tabId = 7;
@@ -43,6 +43,7 @@ test('the stage runs the script and its commands in the stage tab, in order', as
   assert.match(calls[1], /for \(const id of \["goto_options","show_the_recommendation"\]\)/);
   assert.deepEqual(ran, { done: [view.commands[1], view.commands[2]], onScreen: 'two' });
   await assert.rejects(stage.run(['goto_options', 'next_section']), (error: any) => error.message === 'Already broken' && error.done[0].id === 'goto_options' && error.failed.id === 'next_section' && error.onScreen === 'one', 'a step that throws stops the rest; what ran before it is reported');
+  await assert.rejects(stage.run(['back']), (error: any) => error instanceof StageNothing && error.failed.id === 'back', 'nothing to do is not done');
 });
 
 test('Jev picks whole page commands in order; the count ends the list, unlikely or unknown picks are dropped', async () => {
@@ -86,7 +87,11 @@ test('the gate: page-only is done on the page; with more, the request goes on no
   assert.equal(along.handled, undefined);
   assert.match(along.note!, /already did the page part of this in the browser \(Go to the section "Options"\); don't do that again, do the rest/);
   assert.match(along.told!, /already did the page part .* The rest goes to Claude/);
-  const broken = await gated(t, { steps: ['show_the_recommendation'], only: .9 }, async () => { throw new Error('fdcController.run: no element #rec'); });
+  const idle = await gated(t, { steps: ['next_section'], only: .9 }, async () => { throw new StageNothing('nothing to do there', [], '', view.commands[0]); });
+  const nothing = await idle.sessionSwitch.screen('go back', 'r4');
+  assert.equal(nothing.handled, undefined, 'nothing to do: the request goes on');
+  assert.match(nothing.note!, /there was nothing to do there; do what the user asked/);
+    const broken = await gated(t, { steps: ['show_the_recommendation'], only: .9 }, async () => { throw new Error('fdcController.run: no element #rec'); });
   const failed = await broken.sessionSwitch.screen('highlight the recommendation', 'r3');
   assert.equal(failed.handled, undefined, 'a failure goes to the harness');
   assert.match(failed.note!, /page's controls failed: fdcController\.run: no element #rec\. Fix the page's controller/);

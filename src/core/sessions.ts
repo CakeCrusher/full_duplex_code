@@ -8,10 +8,10 @@
 import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import { listCompanions, type CompanionEntry } from './companions.ts';
-import { StageError } from './stage.ts';
+import { StageError, StageNothing } from './stage.ts';
 import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, PAGE_WORK, UNLISTED, type PageJudgment, type Session } from './delegation-audit.ts';
 import type { Screened } from './mediator.ts';
-import { companionHandled, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, sessionsHandled, sessionsOutcome } from './prompts.ts';
+import { companionHandled, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
 
@@ -40,13 +40,13 @@ export class SessionSwitch {
   constructor(bridge: Harness) { this.bridge = bridge; }
 
   /** Jev's check of a request GPT Live passed on, before it reaches the harness. */
-  async screen(said: string, requestId: string, earlier?: string): Promise<Screened> {
+  async screen(said: string, requestId: string, earlier?: string, companion?: string): Promise<Screened> {
     const bridge = this.bridge;
     // The page on the stage is read meanwhile; without one, Jev is asked nothing about a page.
     const [companions, page] = await Promise.all([listCompanions(bridge, true, 800), bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
     // Only companions this one can reach and turn on or off.
     const sessions: Session[] = companions.filter(c => c.current || (c.reachable && c.link)).map(c => ({ id: c.id, folder: c.folder, agent: c.agent, on: c.voice !== 'none', current: c.current, blocked: c.blocked }));
-    const judgment = await bridge.handOffAudit!.judge(said, sessions, 3000, page, earlier), { needsAgent } = judgment, asked = judgment.sessions!;
+    const judgment = await bridge.handOffAudit!.judge(said, sessions, 3000, page, earlier, companion), { needsAgent } = judgment, asked = judgment.sessions!;
     bridge.log({ type: 'sessions.judged', requestId, needsAgent, ...asked, companionOnly: judgment.companionOnly, page: judgment.page });
     if (asked.asked < ASKED) {
       if (judgment.page?.steps.length) return this.present(judgment.page, needsAgent);
@@ -84,6 +84,8 @@ export class SessionSwitch {
       if (only >= PAGE_ONLY && work < PAGE_WORK) return { needsAgent, handled: pageHandled(agent, done, onScreen), page: true };
       return { needsAgent, note: pageDoneNote(done), told: pageAlongside(agent, done, onScreen) };
     } catch (error) {
+      // Nothing to do there: not the page's fault, but not done either, so the request goes on.
+      if (error instanceof StageNothing) return { needsAgent, note: pageNothingNote(error.failed), told: pageNothing(agent, error.failed) };
       // The agent gets the request with the error, to fix its page; GPT Live hears how far it got.
       const message = (error as Error).message, failed = error instanceof StageError ? [error.failed] : steps.map(id => bridge.stage.view?.commands.find(c => c.id === id) ?? { id, say: id });
       const done = error instanceof StageError ? error.done : [];

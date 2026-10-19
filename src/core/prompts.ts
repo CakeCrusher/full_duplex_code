@@ -123,6 +123,10 @@ export const stageBrief = (title: string, names: readonly string[], phrases: rea
 export const stageOutline = (title: string, outline: string) => `What the page "${title.slice(0, 80)}" says, part by part, for presenting it:\n${outline.slice(0, 2400)}`;
 export const cueNoDelegation = 'Nothing to delegate: the page moves when you say a part\'s name, and it already did. Carry on presenting, without "one moment".';
 export const cueShown = (onScreen: string) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}`;
+export const pageNothing = ({ profile: { name } }: Agent, failed: { say: string }) =>
+  `The page had nothing to do for that (${failed.say.replace(/\.$/, '')}). The request went to ${name}.`;
+export const pageNothingNote = (failed: { say: string }) =>
+  `The voice tool tried to do this on the page in the browser (${failed.say.replace(/\.$/, '')}) but there was nothing to do there; do what the user asked.`;
 export const pageDoneNote = (done: readonly { say: string }[]) =>
   `The voice tool already did the page part of this in the browser (${steps(done)}); don't do that again, do the rest.`;
 export const pageFailedNote = (done: readonly { say: string }[], error: string, page?: { title: string; url: string }) =>

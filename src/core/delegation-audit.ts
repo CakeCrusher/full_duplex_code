@@ -48,12 +48,14 @@ export const COMPANION_ONLY = .85;
 // work .38-.82. Misjudged page-only words still reach the agent, with the next request.
 export const PAGE_STEP = .5, PAGE_ONLY = .4, PAGE_WORK = .3;
 // Words before the utterance that no request carried yet still reach the agent later; they are context here.
+// What the companion said just before: "yes, please" answers its offer ("want me to show the diagrams?").
+const COMPANION_SETTING = ' `companion_before` is what the voice companion said just before `utterance`; use it only to understand short replies such as "yes, please".';
 const EARLIER_SETTING = ' `earlier` is what the operator said before `utterance` that has not reached the coding agent yet (the companion answered it, or `utterance` finishes it); it will reach the agent later. Use it only as context and judge `utterance`.';
 const PAGE_SETTING = ' A page is open in the browser beside the conversation (`page`). The voice tool can move it, show and highlight its parts with the listed page commands, without the coding agent. Commands whose id starts with page_ are the page\'s own (slides, tabs, views): prefer them when they fit.';
 // Each step names a whole command, so Jev's independent answers never have to agree on its arguments.
 const pageQuestions = (page: StageView) => {
   const criteria = { none: 'No page command: nothing is to be shown, moved or highlighted on the page.', ...Object.fromEntries(page.commands.map(c => [c.id, c.say])) };
-  const step = (n: number) => ({ type: 'choice', instructions: `List the page commands the operator asks for, in order, writing a command once for each time it should run ("forward three sections" is the next-section command three times). Asking to make, add, change or fix something is work for the coding agent, never a page command. Which command is number ${n} in that list? Choose none if the list is shorter.`, criteria });
+  const step = (n: number) => ({ type: 'choice', instructions: `List the page commands the operator asks for, in order, writing a command once for each time it should run ("forward three sections" is the next-section command three times). Asking to make, add, change or fix something is work for the coding agent, never a page command; asking to explain, present or run through something that is on the page also asks to show it. Which command is number ${n} in that list? Choose none if the list is shorter.`, criteria });
   return {
     page_steps: { type: 'choice', instructions: 'How many page commands should run, counting each repetition ("forward three sections" is 3, "go to the options and highlight the recommendation" is 2)? Work for the coding agent (making, adding, changing or fixing anything), questions and talk are not page commands.', criteria: { '0': 'No page command.', '1': 'One.', '2': 'Two.', '3': 'Three.', '4': 'Four.', '5': 'Five or more.' } },
     page_step_1: step(1), page_step_2: step(2), page_step_3: step(3),
@@ -116,9 +118,10 @@ export class DelegationAudit {
     this.apiKey = apiKey; this.file = file; this.log = log; this.fetch = fetch;
   }
   /** Jev's probability that the operator's words must reach the agent, and with running sessions, its reading of them for session changes. */
-  async judge(utterance: string, sessions?: Session[], timeoutMs = 5000, page?: StageView, earlier?: string): Promise<Judgment> {
-    const state: Record<string, string> = { setting: SETTING + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : '') + (earlier ? EARLIER_SETTING : ''), utterance: utterance.replace(/\s+/g, ' ').trim().slice(-600) };
+  async judge(utterance: string, sessions?: Session[], timeoutMs = 5000, page?: StageView, earlier?: string, companion?: string): Promise<Judgment> {
+    const state: Record<string, string> = { setting: SETTING + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : '') + (earlier ? EARLIER_SETTING : '') + (companion ? COMPANION_SETTING : ''), utterance: utterance.replace(/\s+/g, ' ').trim().slice(-600) };
     if (earlier) state.earlier = earlier.replace(/\s+/g, ' ').trim().slice(-400);
+    if (companion) state.companion_before = companion.replace(/\s+/g, ' ').trim().slice(-300);
     if (sessions) state.sessions = sessionLines(sessions) || '(none)';
     if (page) state.page = pageLine(page);
     const questions = { ...QUESTIONS, ...sessions ? sessionQuestions(sessions) : {}, ...page ? pageQuestions(page) : {} };
