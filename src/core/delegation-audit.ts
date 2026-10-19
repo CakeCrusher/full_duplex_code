@@ -52,7 +52,7 @@ const pageQuestions = (page: StageView) => {
   const criteria = { none: 'No page command: nothing is to be shown, moved or highlighted on the page.', ...Object.fromEntries(page.commands.map(c => [c.id, c.say])) };
   const step = (n: number) => ({ type: 'choice', instructions: `List the page commands the operator asks for, in order, writing a command once for each time it should run ("forward three sections" is the next-section command three times). Which command is number ${n} in that list? Choose none if the list is shorter.`, criteria });
   return {
-    page_steps: { type: 'choice', instructions: 'How many page commands should run, counting each repetition ("forward three sections" is 3, "go to the options and highlight the recommendation" is 2)? Work for the coding agent, questions and talk are not page commands.', criteria: { '0': 'No page command.', '1': 'One.', '2': 'Two.', '3': 'Three or more.' } },
+    page_steps: { type: 'choice', instructions: 'How many page commands should run, counting each repetition ("forward three sections" is 3, "go to the options and highlight the recommendation" is 2)? Work for the coding agent, questions and talk are not page commands.', criteria: { '0': 'No page command.', '1': 'One.', '2': 'Two.', '3': 'Three.', '4': 'Four.', '5': 'Five or more.' } },
     page_step_1: step(1), page_step_2: step(2), page_step_3: step(3),
     page_only: { type: 'noul', instructions: 'Is moving, showing or highlighting things on the page all the operator asks, with nothing for the coding agent to do, change, research or answer?', criteria: { true: 'Only page commands, with at most filler or thanks.', false: 'Also asks for work, a change, research, an answer or anything else beyond the page. When in doubt, false.' } },
   };
@@ -134,7 +134,10 @@ export class DelegationAudit {
       };
       const count = Number(answers?.page_steps?.choice) || 0, steps = [step('page_step_1'), step('page_step_2'), step('page_step_3')];
       // A step 1 without a count still runs; the count otherwise says where the list ends.
-      judgment.page = { steps: steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id), only: p('page_only'), count };
+      let chosen = steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id);
+      // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
+      if (steps[0] && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
+      judgment.page = { steps: chosen, only: p('page_only'), count };
     }
     return judgment;
   }

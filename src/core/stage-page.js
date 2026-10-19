@@ -94,7 +94,14 @@
     commands.push({ id: 'clear_highlight', say: 'Remove the highlight', run: async () => { stage.ringOn = false; place(); return 'The highlight is off.'; } });
     const used = new Set(commands.map(c => c.id));
     const unique = id => { let out = id, n = 2; while (used.has(out)) out = `${id}_${n++}`; used.add(out); return out; };
-    for (const h of units('heading')) commands.push({ id: unique(`goto_${slug(text(h))}`), say: `Go to the ${level(h) <= sectionLevel() ? 'section' : 'heading'} "${text(h).slice(0, 90)}"`, run: () => go(h, 'start') });
+    // A section's own name (its id, or a short label above the heading) helps match what people call it.
+    const named = h => {
+      const section = h.closest('section[id], article[id]'), id = h.id || (section?.querySelector(UNITS.heading) === h ? section.id : '');
+      const label = h.previousElementSibling && text(h.previousElementSibling).length < 40 ? text(h.previousElementSibling) : '';
+      const extra = [/^[a-z][\w-]{2,30}$/i.test(id) && !/^h\d|^section\d/i.test(id) ? id.replace(/[-_]/g, ' ') : '', label].filter(Boolean).join(', ');
+      return extra ? ` (${extra})` : '';
+    };
+    for (const h of units('heading')) commands.push({ id: unique(`goto_${slug(text(h))}`), say: `Go to the ${level(h) <= sectionLevel() ? 'section' : 'heading'} "${text(h).slice(0, 90)}"${named(h)}`, run: () => go(h, 'start') });
     for (const el of document.querySelectorAll('[data-fdc]')) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, run: () => go(el) });
     return commands;
   };

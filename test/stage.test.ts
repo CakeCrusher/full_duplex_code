@@ -51,6 +51,8 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   assert.deepEqual((await audit.judge('options', undefined, 3000, view)).page!.steps, ['goto_options'], 'a confident first step runs without a count');
   answers = { ...answers, page_steps: { choice: '3' }, page_step_1: choice('next_section', .4), page_step_2: choice('made_up'), page_step_3: choice('next_section') };
   assert.deepEqual((await audit.judge('next', undefined, 3000, view)).page!.steps, ['next_section']);
+  answers = { ...answers, page_steps: { choice: '5' }, page_step_1: choice('next_section'), page_step_2: choice('next_section'), page_step_3: choice('none') };
+  assert.deepEqual((await audit.judge('down five sections', undefined, 3000, view)).page!.steps, Array(5).fill('next_section'), 'one command repeated runs as often as counted');
   answers = { needs_agent: { noul: .9 } };
   assert.equal((await audit.judge('fix the parser', undefined, 3000)).page, undefined, 'no page, no page questions');
   assert.equal(sent.questions.page_steps, undefined);
