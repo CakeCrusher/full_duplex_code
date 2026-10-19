@@ -200,8 +200,17 @@ export class Harness {
     }, 1000);
   }
   /** GPT Live said more: a cue in it moves the page now, and GPT Live quietly hears what is on screen. */
+  /** GPT Live's sentence so far, and when the page last moved by its words or the gate: then it is presenting. */
+  sentence = ''; presentedAt = 0;
   heardSpeech(delta: string) {
+    this.sentence = (this.sentence + delta).slice(-600);
+    // At the end of each sentence, while presenting, the ring follows what the sentence was about.
+    if (/[.!?]["”’)]?\s*$/.test(delta)) {
+      const sentence = this.sentence.trim(); this.sentence = '';
+      if (Date.now() - this.presentedAt < 60000) this.stage.follow(sentence).then(on => { if (on) this.log({ type: 'stage.followed', sentence: sentence.slice(-160), ...on }); }).catch(() => {});
+    }
     for (const cue of this.speechCues.hear(delta)) {
+      this.presentedAt = Date.now(); this.sentence = '';
       const started = Date.now();
       if (this.mediator) this.mediator.cueAt = started;
       this.stage.run([cue.run]).then(({ onScreen }) => {

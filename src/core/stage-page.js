@@ -187,8 +187,28 @@
     const seen = [...document.querySelectorAll('p, li, td, figcaption, h1, h2, h3')].filter(el => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && visible(el); }).map(text).join(' ').slice(0, 1500);
     return `Page "${document.title}" (${location.href}), scrolled ${Math.round(scrollY)} of ${Math.max(0, document.documentElement.scrollHeight - innerHeight)} px.\nWhere: ${window.fdcController?.where?.() ?? describe(current('paragraph'))}\nHeadings:\n${headings.join('\n')}\nInteractive elements:\n${lines.join('\n')}\nOn screen now: ${seen}`;
   };
+  // Following speech: the paragraph, item or row on screen that shares the most words with GPT Live's latest sentence.
+  const STOP = new Set('the and for with that this you are was its from they their what when which into about there here have has not but all can will one our your let lets look now just then than also each more most very like some any out who how why where were been being these those them his her she him had would could should does did done get got make made over only both such same other'.split(' '));
+  const stem = w => w.replace(/['’]s$/, '').replace(/(ings|ing|ed|es|s)$/, '');
+  const words = s => new Set((String(s).toLowerCase().match(/[a-z0-9][a-z0-9'’-]{2,}/g) ?? []).filter(w => !STOP.has(w)).map(stem));
+  const inView = el => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight; };
+  const followSpeech = sentence => {
+    const said = words(sentence);
+    if (said.size < 2) return null;
+    let best = null, bestScore = 0;
+    for (const el of document.querySelectorAll('p, li, tr, dd, blockquote, figcaption, h2, h3, h4')) {
+      if (!visible(el) || !inView(el) || el.closest('#__fdc_ring')) continue;
+      const own = words(text(el)); if (own.size < 2) continue;
+      let shared = 0; for (const w of said) if (own.has(w)) shared++;
+      const score = shared / Math.min(said.size, own.size);
+      if (shared >= 2 && score > bestScore) { best = el; bestScore = score; }
+    }
+    if (!best || bestScore < 0.3) return null;
+    if (best !== stage.at) { stage.at = best; stage.ringOn = true; best.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); place(); }
+    return { on: text(best).slice(0, 100), score: Math.round(bestScore * 100) / 100 };
+  };
   const stage = window.__fdcStage = {
-    version: VERSION, history: [], at: null, ringOn: false, indexed: [], digest,
+    version: VERSION, history: [], at: null, ringOn: false, indexed: [], digest, follow: followSpeech,
     /** For action code: element [n] of the last digest, showing an element (scroll and ring), waiting. */
     el: n => { const el = stage.indexed[n - 1]; if (!el) throw new Error(`No element [${n}]`); return el; },
     show: async el => { if (!el) throw new Error('Nothing to show'); return go(el); },

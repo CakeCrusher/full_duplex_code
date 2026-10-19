@@ -101,5 +101,10 @@ export class Stage {
     this.log({ type: 'stage.acted', tabId: this.tabId, code, ms: Date.now() - started });
     return out;
   }
+  /** Moves the ring to what GPT Live's sentence is about, among what is on screen; resolves to it, or null. */
+  async follow(sentence: string): Promise<{ on: string; score: number } | null> {
+    if (!this.tabId) return null;
+    return this.browser.evaluate(this.tabId, `${SCRIPT}\n;window.__fdcStage.follow(${JSON.stringify(sentence.slice(-400))})`, 2000);
+  }
   close() { this.browser.close(); }
 }
