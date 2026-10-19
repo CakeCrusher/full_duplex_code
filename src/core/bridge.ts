@@ -10,7 +10,7 @@ import { DelegationAudit } from './delegation-audit.ts';
 import { askAgent, distillPrompt, parseDistilled } from './instruction-distiller.ts';
 import { JevTuner, type TuningChange } from './jev-tuner.ts';
 import { Stage } from './stage.ts';
-import { CueMatcher } from './speech-cues.ts';
+import { CueMatcher, type SpeechCue } from './speech-cues.ts';
 import { cueMovedNote, cueShown } from './prompts.ts';
 import { FastAction } from './fast-action.ts';
 import { UsageLedger } from './usage-ledger.ts';
@@ -211,21 +211,26 @@ export class Harness {
       const sentence = this.sentence.trim(); this.sentence = '';
       if (Date.now() - this.presentedAt < 60000) this.stage.follow(sentence).then(on => { if (on) this.log({ type: 'stage.followed', sentence: sentence.slice(-160), ...on }); }).catch(() => {});
     }
-    for (const cue of this.speechCues.hear(delta)) {
-      if (Date.now() - this.aheadAt < 4000) { this.log({ type: 'stage.cue_skipped', run: cue.run, reason: 'just moved ahead' }); continue; }
-      this.presentedAt = Date.now(); this.sentence = '';
-      // Answering the operator by moving the page: their words still go to the gate and, unless the move was all they
-      // asked, to the agent, noted, so neither moves it again.
-      const history = this.mediator?.history;
-      if (history && Date.now() - history.lastInputAt < 15000) history.cueLatest(cueMovedNote);
-      const started = Date.now();
-      if (this.mediator) this.mediator.cueAt = started;
-      this.stage.run([cue.run]).then(({ onScreen }) => {
-        this.log({ type: 'stage.cue', run: cue.run, label: cue.label, ms: Date.now() - started });
-        this.publish({ type: 'stage', done: [cue.label], onScreen, cue: true });
-        this.mediator?.context.add('thinking', cueShown(onScreen), null);
-      }).catch(error => this.log({ type: 'stage.cue_failed', run: cue.run, label: cue.label, message: (error as Error).message }));
-    }
+    for (const cue of this.speechCues.hear(delta)) void this.runCue(cue);
+  }
+  async runCue(cue: SpeechCue) {
+    // Listening ahead may be moving the page for the operator's words right now: the cue waits to see.
+    const looking = this.mediator?.looking;
+    if (looking) await looking.catch(() => {});
+    if (Date.now() - this.aheadAt < 4000) { this.log({ type: 'stage.cue_skipped', run: cue.run, reason: 'just moved ahead' }); return; }
+    this.presentedAt = Date.now(); this.sentence = '';
+    // Answering the operator by moving the page: their words still go to the gate and, unless the move was all they
+    // asked, to the agent, noted, so neither moves it again.
+    const history = this.mediator?.history;
+    if (history && Date.now() - history.lastInputAt < 15000) history.cueLatest(cueMovedNote);
+    const started = Date.now();
+    if (this.mediator) this.mediator.cueAt = started;
+    try {
+      const { onScreen } = await this.stage.run([cue.run]);
+      this.log({ type: 'stage.cue', run: cue.run, label: cue.label, ms: Date.now() - started });
+      this.publish({ type: 'stage', done: [cue.label], onScreen, cue: true });
+      this.mediator?.context.add('thinking', cueShown(onScreen), null);
+    } catch (error) { this.log({ type: 'stage.cue_failed', run: cue.run, label: cue.label, message: (error as Error).message }); }
   }
   /** The operator removes an instruction Jev learned, by its ID. */
   removeInstruction(id: unknown) { return this.voiceSessions.removeLearned(id); }

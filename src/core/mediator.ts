@@ -69,7 +69,9 @@ export class Mediator {
   ahead?: Ahead;
   aheadTimer?: NodeJS.Timeout; looking?: Promise<void>; aheadDone?: { told: string; at: number };
   /** Words Jev began reading before the operator had clearly paused (by their fragments), the words looked at last, and when the microphone last heard them. */
-  read?: { words: string; at: number; judging: Promise<PageJudgment | undefined> }; readTimer?: NodeJS.Timeout; looked?: string; micAt = 0; levelsAt = 0;
+  read?: { words: string; judging: Promise<PageJudgment | undefined> }; readTimer?: NodeJS.Timeout; looked?: string; micAt = 0; levelsAt = 0;
+  /** When the operator's latest words began arriving, and the last of them arrived. */
+  wordsAt = 0; lastWordAt = 0;
   /** The operator's words of each request, for Jev to tune the companion from (jev-tuner.ts). */
   onSaid?: (said: string) => void;
   onObservation: (event: Observation) => void;
@@ -108,6 +110,9 @@ export class Mediator {
     // GPT Live's transcript of the operator also shows they are talking, for pages that send no levels.
     if (event.type === 'session.input_transcript.delta' && String(event.delta ?? '').trim()) {
       this.floor.hear();
+      const now = Date.now();
+      if (now - this.lastWordAt > 2000) this.wordsAt = now;
+      this.lastWordAt = now;
       // A pause after the operator's words: look ahead at them. The transcript arrives a word at a time and rarely
       // ends a sentence (9 of 3,345 utterances in the operator's sessions), so it takes a finished sentence, or
       // quiet, microphone included: "Next" of "next slide", or of "next, can you fix…", is not read while they speak.
@@ -182,7 +187,7 @@ export class Mediator {
     const words = request?.freshSeqs?.join(',');
     if (!request?.fresh || !words || request.cued || request.fresh.split(' ').length > 30 || this.read?.words === words) return;
     const lastOperator = request.utterances.findLastIndex(u => u.role === 'operator'), companion = request.utterances.slice(0, lastOperator).findLast(u => u.role === 'intermediary')?.text;
-    this.read = { words, at: now, judging: this.ahead!.judge(this.clean(request.fresh), request.earlier && this.clean(request.earlier), companion && this.clean(companion)).catch(error => { this.log({ type: 'stage.ahead_error', message: (error as Error).message }); return undefined; }) };
+    this.read = { words, judging: this.ahead!.judge(this.clean(request.fresh), request.earlier && this.clean(request.earlier), companion && this.clean(companion)).catch(error => { this.log({ type: 'stage.ahead_error', message: (error as Error).message }); return undefined; }) };
   }
   /** The operator paused: if their latest words only ask for the page, it moves now (sessions.ts aheadAct). */
   async lookAhead() {
@@ -197,7 +202,8 @@ export class Mediator {
     const id = `ahead-${randomUUID()}`, lastOperator = request.utterances.findLastIndex(u => u.role === 'operator'), companion = request.utterances.slice(0, lastOperator).findLast(u => u.role === 'intermediary')?.text;
     this.history.claim({ ...request, seqs }, id);
     // Jev may already be reading these very words.
-    const read = this.read?.words === words ? this.read : undefined, since = read?.at ?? Date.now();
+    // A cue since the operator began these words answered them: the page isn't moved twice.
+    const read = this.read?.words === words ? this.read : undefined, since = this.wordsAt;
     this.read = undefined;
     this.looking = (async () => {
       let result: { told: string } | undefined;

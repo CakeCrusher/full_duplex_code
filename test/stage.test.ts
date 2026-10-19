@@ -281,6 +281,28 @@ test("listening ahead acts as soon as GPT Live starts answering, unless the oper
   assert.deepEqual(acted, ['Next slide'], 'once');
 });
 
+test("a cue waits for listening ahead's move in progress, and runs only if it moved nothing", async t => {
+  const { h } = await harness(t);
+  const runs: string[][] = [];
+  h.stage = { describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; }, view, observe() {}, close() {}, follow: async () => null } as any;
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {}; live.append = async () => {};
+  const mediator = new Mediator({ live, observer, deliver: () => {}, log: () => {}, publish: () => {}, clean: String, hold: null });
+  t.after(() => { mediator.stop(); observer.close(); });
+  let finish!: () => void;
+  mediator.looking = new Promise<void>(resolve => { finish = resolve; });
+  h.voiceSessions.mediator = mediator;
+  const cue = { run: 'goto_options', label: 'options', words: ['options'], name: true };
+  const first = h.runCue(cue);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(runs, [], 'it waits');
+  h.aheadAt = Date.now(); finish(); await first;
+  assert.deepEqual(runs, [], 'listening ahead moved the page: the cue is skipped');
+  h.aheadAt = 0; mediator.looking = Promise.resolve();
+  await h.runCue(cue);
+  assert.deepEqual(runs, [['goto_options']], 'it moved nothing: the cue runs');
+});
+
 test('listening ahead moves nothing for words a cue already moved the page for, or moves it for while Jev reads them', async t => {
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {}; live.append = async () => {};
