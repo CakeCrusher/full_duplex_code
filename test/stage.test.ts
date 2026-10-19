@@ -58,7 +58,7 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   const audit = new DelegationAudit({ apiKey: 'k', file: '/dev/null', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers }) }; } });
   const choice = (id: string, p = .95) => ({ choice: id, probabilities: { [id]: p } });
   answers = { needs_agent: { noul: .2 }, page_steps: { choice: '2' }, page_step_1: choice('goto_options'), page_step_2: choice('show_the_recommendation'), page_step_3: choice('show_the_recommendation'), page_only: { noul: .8 } };
-  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, work: 1, other: 0, count: 2 });
+  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, work: 1, other: 0, count: 2, first: .95 });
   assert.match(sent.state.page, /Briefing .*The viewer is at: section "Intro"/);
   assert.deepEqual(Object.keys(sent.questions.page_step_1.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation', 'other_action']);
   answers = { ...answers, page_steps: { choice: '0' }, page_step_2: choice('none') };
@@ -166,4 +166,29 @@ test('a page controller returning anything is kept to well-formed commands and c
   const view = (await stage.describe(0))!;
   assert.deepEqual(view.commands, [{ id: 'slide_3', say: 'Go to slide 3', name: '3' }, { id: 'ok', say: 'Fine' }]);
   assert.deepEqual(view.cues, []); assert.equal(view.about, null); assert.equal((view as any).outline, undefined); assert.equal(view.title, '7');
+});
+
+test('listening ahead: the page moves as the operator pauses; GPT Live\'s delegation then sends nothing new, and the words still reach the agent later, noted', async t => {
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
+  const appends: [string, string, string | null][] = []; live.append = async (kind: string, content: string, delegationId: string | null) => { appends.push([kind, content, delegationId]); };
+  const deliveries: any[] = [], asked: string[] = [];
+  let release!: () => void;
+  const slow = new Promise<void>(resolve => { release = resolve; });
+  const ahead = async (said: string) => { asked.push(said); await slow; return /next slide/i.test(said) ? { told: 'Moved: next slide.' } : undefined; };
+  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate: async () => ({ needsAgent: .9 }), ahead });
+  t.after(() => { m.stop(); observer.close(); });
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Next slide.', start_ms: 0, end_ms: 700 });
+  await until(() => asked.length);
+  m.delegate('d1', 700);
+  assert.equal(deliveries.length, 0, 'a delegation arriving while it looks waits');
+  release();
+  await until(() => appends.some(([, , id]) => id === 'd1'));
+  assert.deepEqual(asked, ['Next slide.']);
+  assert.ok(appends.some(([kind, text, id]) => kind === 'thinking' && text === 'Moved: next slide.' && id === null), 'GPT Live hears it at once');
+  assert.ok(appends.some(([kind, text, id]) => kind === 'thinking' && text === 'Moved: next slide.' && id === 'd1'), 'and in answer to its delegation');
+  assert.equal(deliveries.length, 0, 'nothing goes to the agent now');
+  m.handOff('operator ended voice');
+  await until(() => deliveries.length);
+  assert.match(deliveries[0].content, /only about showing things on the page.*\n\nuser: Next slide\.$/s, 'the words still reach the agent, noted');
 });

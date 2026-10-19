@@ -31,7 +31,7 @@ export interface Session { id: string; folder: string; agent: string; on: boolea
 /** Jev's reading of a request for session orchestration. */
 export interface SessionsJudgment { asked: number; only: number; unlisted: number; turnOn: string[]; turnOff: string[] }
 /** Jev's reading of a request for the page on the stage: the commands to run, in order. */
-export interface PageJudgment { steps: string[]; only: number; count: number; /** Jev's probability that work is asked of the agent besides the page commands. */ work?: number; /** That something is asked of the page that no command does. */ other?: number }
+export interface PageJudgment { steps: string[]; only: number; count: number; /** How likely Jev's first step is. */ first?: number; /** Jev's probability that work is asked of the agent besides the page commands. */ work?: number; /** That something is asked of the page that no command does. */ other?: number }
 export interface Judgment { needsAgent: number | null; sessions?: SessionsJudgment; /** Only about how the voice companion behaves, nothing for the agent. */ companionOnly?: number; page?: PageJudgment }
 
 // Probabilities above which Jev's reading is acted on. A request is kept from the harness only when
@@ -155,7 +155,8 @@ export class DelegationAudit {
       // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
       if (steps[0] && steps[1] === steps[0] && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
       // A missing answer about work counts as work: the request then reaches the agent.
-      judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: answers?.page_work ? p('page_work') : 1, other, count };
+      const first = Number(answers?.page_step_1?.probabilities?.[answers?.page_step_1?.choice] ?? answers?.page_step_1?.confidence ?? 0);
+      judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: answers?.page_work ? p('page_work') : 1, other, count, first };
       // Each step's likeliest commands, for tuning the page questions.
       const top = (name: string) => Object.entries(answers?.[name]?.probabilities ?? {}).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 3).map(([id, v]) => `${id} ${Number(v).toFixed(2)}`).join(', ');
       this.log({ type: 'page.judged', utterance: state.utterance, count: answers?.page_steps?.choice, step_1: top('page_step_1'), step_2: top('page_step_2'), step_3: top('page_step_3'), only: p('page_only'), work: p('page_work'), other });

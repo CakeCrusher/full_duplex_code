@@ -12,7 +12,7 @@ import { StageError, StageNothing } from './stage.ts';
 import type { PageAction } from './fast-action.ts';
 import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, PAGE_OTHER, PAGE_WORK, UNLISTED, type PageJudgment, type Session } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
-import { companionHandled, improvisedFailedNote, lookingNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
+import { companionHandled, improvisedFailedNote, lookingNote, pageAhead, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
 
@@ -28,6 +28,8 @@ export function startBlocked(bridge: Harness): string | undefined {
   return 'its page has not been clicked since it opened (Chrome allows sound and the microphone only after a click)';
 }
 
+// Listening ahead acts before GPT Live delegates, so it needs more certainty than the gate: page only, no work, a sure first step.
+export const AHEAD_ONLY = .6, AHEAD_WORK = .2, AHEAD_STEP = .7;
 const name = (s: Session) => s.current ? 'this session' : s.folder;
 const names = (sessions: Session[]) => sessions.map(name).join(', ');
 const running = (sessions: Session[]) => sessions.map(s => `${s.folder} (${s.current ? 'this one, ' : ''}voice ${s.on ? 'on' : 'off'}${!s.on && s.blocked ? `, can't start: ${s.blocked}` : ''})`).join(', ');
@@ -119,6 +121,25 @@ export class SessionSwitch {
       bridge.log({ type: 'stage.improvise_failed', said, actions: steps, message, ms: Date.now() - started });
       return { needsAgent, note: improvisedFailedNote(message), told: pageNothing(agent, { say: `a one-off action (${message.slice(0, 120)})` }) };
     }
+  }
+
+  /**
+   * Listening ahead: the operator's latest words, read as soon as they pause, before GPT Live decides
+   * whether to delegate. Only a confident request for the page alone runs, at once; anything else is
+   * left to the gate. Resolves to what GPT Live is told, or undefined.
+   */
+  async ahead(said: string, earlier?: string, companion?: string): Promise<{ told: string } | undefined> {
+    const bridge = this.bridge;
+    if (!bridge.handOffAudit) return;
+    const page = await bridge.stage.describe().catch(() => undefined);
+    if (!page) return;
+    const judgment = await bridge.handOffAudit.judge(said, undefined, 1500, page, earlier, companion), p = judgment.page;
+    bridge.log({ type: 'stage.ahead_judged', said: said.slice(-160), page: p });
+    if (!p?.steps.length || p.only < AHEAD_ONLY || (p.work ?? 1) >= AHEAD_WORK || (p.first ?? 0) < AHEAD_STEP) return;
+    const { done, onScreen } = await bridge.stage.run(p.steps);
+    bridge.presentedAt = bridge.aheadAt = Date.now();
+    bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen, ahead: true });
+    return { told: pageAhead(bridge.agent, done, onScreen) };
   }
 
   async carryOut(on: Session[], off: Session[]) {

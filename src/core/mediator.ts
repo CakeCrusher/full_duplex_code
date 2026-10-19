@@ -12,6 +12,9 @@ import type { DelegationAudit, HandOff } from './delegation-audit.ts';
 import { cueNoDelegation, handledNote, nothingToSend, queueFailed, sessionEndRequest, uncertainNote, voiceRequest } from './prompts.ts';
 
 /** What the gate (Jev's check before delivery) found: its judgment, and when fdc handled the request itself, what GPT Live is told instead. */
+/** How long the operator pauses before listening ahead reads their words. */
+const AHEAD_PAUSE_MS = 350;
+
 export interface Gated {
   needsAgent?: number | null; handled?: string;
   /** Handled because it was only about how the companion behaves. */
@@ -53,17 +56,20 @@ export class Mediator {
   audit?: DelegationAudit;
   /** The gate: reads a request GPT Live passed on before it reaches the harness (sessions, the companion, the page), when Jev is configured. */
   gate?: (said: string, requestId: string, earlier?: string, companion?: string) => Promise<Gated>;
+  /** Listening ahead (sessions.ts ahead): the page moves as the operator pauses, before any delegation. */
+  ahead?: (said: string, earlier?: string, companion?: string) => Promise<{ told: string } | undefined>;
+  aheadTimer?: NodeJS.Timeout; looking?: Promise<void>; aheadDone?: { told: string; at: number };
   /** The operator's words of each request, for Jev to tune the companion from (jev-tuner.ts). */
   onSaid?: (said: string) => void;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
-  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, audit, gate, onSaid, firstRecordId = 0 }: {
+  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, audit, gate, ahead, onSaid, firstRecordId = 0 }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
-    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; audit?: DelegationAudit; gate?: (said: string, requestId: string, earlier?: string, companion?: string) => Promise<Gated>; onSaid?: (said: string) => void;
+    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; audit?: DelegationAudit; gate?: (said: string, requestId: string, earlier?: string, companion?: string) => Promise<Gated>; ahead?: (said: string, earlier?: string, companion?: string) => Promise<{ told: string } | undefined>; onSaid?: (said: string) => void;
     /** Context records are numbered after this one: a fork's context already holds its source's. */
     firstRecordId?: number;
   }) {
-    this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.learner = learner; this.audit = audit; this.gate = gate; this.onSaid = onSaid;
+    this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.learner = learner; this.audit = audit; this.gate = gate; this.ahead = ahead; this.onSaid = onSaid;
     this.agent = agent;
     this.floor = new Floor({ thinkMs: tuning.thinkMs, pauseMs: tuning.pauseMs });
     if (hold === undefined) hold = holdOf(tuning);
@@ -91,6 +97,8 @@ export class Mediator {
     // GPT Live's transcript of the operator also shows they are talking, for pages that send no levels.
     if (event.type === 'session.input_transcript.delta' && String(event.delta ?? '').trim()) {
       this.floor.hear();
+      // A pause in the operator's words: look ahead at them.
+      if (this.ahead) { clearTimeout(this.aheadTimer); this.aheadTimer = setTimeout(() => { void this.lookAhead(); }, AHEAD_PAUSE_MS); }
     }
     if (event.type === 'session.input_audio.append' && typeof event.audio === 'string') this.history.hearAudio(event);
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
@@ -135,9 +143,38 @@ export class Mediator {
   /** The microphone level of the page this voice session listens to. */
   hear(level: MicrophoneLevel) { if (operatorSpeaking(level)) this.floor.hear(); }
   schedule(fn: () => void, ms: number) { const timer = setTimeout(() => { this.timers.delete(timer); fn(); }, ms); this.timers.add(timer); }
+  /** The operator paused: if their latest words only ask for the page, it moves now (sessions.ts ahead). */
+  async lookAhead() {
+    if (this.looking || this.live.state !== 'active') return;
+    const request = this.history.request(Infinity);
+    if (!request?.fresh || !request.freshSeqs?.length || request.fresh.split(' ').length > 30) return;
+    // Only the latest words are taken meanwhile, so a delegation arriving now waits rather than sends them.
+    const id = `ahead-${randomUUID()}`, lastOperator = request.utterances.findLastIndex(u => u.role === 'operator'), companion = request.utterances.slice(0, lastOperator).findLast(u => u.role === 'intermediary')?.text;
+    this.history.claim({ ...request, seqs: request.freshSeqs }, id);
+    this.looking = (async () => {
+      let result: { told: string } | undefined;
+      try { result = await this.ahead!(this.clean(request.fresh), request.earlier && this.clean(request.earlier), companion && this.clean(companion)); }
+      catch (error) { this.log({ type: 'stage.ahead_error', message: (error as Error).message }); }
+      // Done on the page: the words still reach the agent with the next request, noted.
+      this.history.release(id, result ? handledNote('page') : undefined);
+      if (!result) return;
+      this.aheadDone = { told: result.told, at: Date.now() };
+      this.log({ type: 'stage.ahead', said: request.fresh.slice(-160) });
+      if (this.live.state === 'active') this.context.add('thinking', result.told, null);
+    })();
+    try { await this.looking; } finally { this.looking = undefined; }
+  }
   delegate(delegationId: string, offsetMs: number) {
     if (this.live.state !== 'active') return;
+    // Listening ahead is reading these words: decide once it has.
+    if (this.looking) { void this.looking.then(() => this.delegate(delegationId, offsetMs)); return; }
     const request = this.history.request(offsetMs);
+    // GPT Live delegating what listening ahead already did on the page: it hears so, and nothing more goes now.
+    if ((!request || !request.fresh) && this.aheadDone && Date.now() - this.aheadDone.at < 8000) {
+      this.log({ type: 'bridge.delegation_ahead', delegationId });
+      this.context.add('thinking', this.aheadDone.told, delegationId); this.aheadDone = undefined;
+      return;
+    }
     if (!request) {
       this.log({ type: 'bridge.delegation_suppressed', delegationId, reason: 'No new operator speech to send' });
       // Presenting, GPT Live sometimes delegates to move the page its words already moved.
@@ -226,6 +263,7 @@ export class Mediator {
   }
   stop(reason = 'voice ended') {
     this.ended ??= reason;
+    clearTimeout(this.aheadTimer);
     this.feed.stop(); this.context.stop(); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();
     this.live.off('event', this.onLive); this.observer.off('observation', this.onObservation);
   }

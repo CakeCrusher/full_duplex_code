@@ -202,6 +202,8 @@ export class Harness {
   /** GPT Live said more: a cue in it moves the page now, and GPT Live quietly hears what is on screen. */
   /** GPT Live's sentence so far, and when the page last moved by its words or the gate: then it is presenting. */
   sentence = ''; presentedAt = 0;
+  /** When listening ahead last moved the page: GPT Live's cues then wait a moment, so "next slide" doesn't run twice. */
+  aheadAt = 0;
   heardSpeech(delta: string) {
     this.sentence = (this.sentence + delta).slice(-600);
     // At the end of each sentence, while presenting, the ring follows what the sentence was about.
@@ -210,6 +212,7 @@ export class Harness {
       if (Date.now() - this.presentedAt < 60000) this.stage.follow(sentence).then(on => { if (on) this.log({ type: 'stage.followed', sentence: sentence.slice(-160), ...on }); }).catch(() => {});
     }
     for (const cue of this.speechCues.hear(delta)) {
+      if (Date.now() - this.aheadAt < 4000) { this.log({ type: 'stage.cue_skipped', run: cue.run, reason: 'just moved ahead' }); continue; }
       this.presentedAt = Date.now(); this.sentence = '';
       // Answering the operator by moving the page: their words still reach the agent, noted, so it doesn't move it again.
       const history = this.mediator?.history;

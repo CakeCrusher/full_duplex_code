@@ -113,6 +113,8 @@ export const handledNote = (what: keyof typeof HANDLED) =>
 const steps = (done: readonly { say: string }[]) => done.map(d => d.say.replace(/\.$/, '')).join(', then ');
 export const pageHandled = ({ profile: { product } }: Agent, done: readonly { say: string }[], onScreen: string) =>
   `Nothing was sent to ${product}: the voice tool did it on the page (${steps(done)}). On screen now: ${onScreen.slice(0, 700)} Tell the operator in a few words what they are looking at, or just carry on if they are stepping through; don't describe the move.`;
+export const pageAhead = ({ profile: { product } }: Agent, done: readonly { say: string }[], onScreen: string) =>
+  `As the operator finished speaking, the voice tool already did it on the page (${steps(done)}). On screen now: ${onScreen.slice(0, 600)} Nothing goes to ${product} for this: say in a few words what they are looking at, without delegating it or describing the move.`;
 export const pageAlongside = ({ profile: { name } }: Agent, done: readonly { say: string }[], onScreen: string) =>
   `The voice tool already did the page part (${steps(done)}); on screen now: ${onScreen.slice(0, 500)} The rest goes to ${name}.`;
 export const pageFailed = ({ profile: { name } }: Agent, error: string, done: readonly { say: string }[] = []) =>

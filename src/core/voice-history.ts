@@ -22,6 +22,8 @@ export interface SpokenRequest {
   fresh: string;
   /** Their words before it that no earlier request took: GPT Live answered them, or they began what this finishes. */
   earlier?: string;
+  /** The fragments of `fresh`. */
+  freshSeqs?: number[];
 }
 // Any sample louder than this is sound; the page's gate sends exact silence, which echoes back at about 1.
 const SOUND_PEAK = 64;
@@ -104,7 +106,10 @@ export class VoiceHistory {
     const notes = [...new Set(all.map(f => f.note).filter(note => note !== undefined))];
     const said = utterances(all.filter(f => !f.note && !unheard.includes(f))).filter(u => u.role === 'operator').map(u => u.text.replace(/\s+/g, ' ').trim());
     const fresh = said.at(-1) ?? '', earlier = said.slice(0, -1).join(' ');
-    return { utterances: spoken, through: all.at(-1)!.seq, seqs: all.map(f => f.seq), fresh, ...earlier ? { earlier } : {}, ...notes.length ? { notes } : {}, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
+    // The latest utterance's own fragments: back from the last new operator piece to a pause of over 2 s.
+    const mine = all.filter(f => f.role === 'operator' && !f.note && !unheard.includes(f)), freshSeqs: number[] = [];
+    for (let i = mine.length - 1; i >= 0 && (i === mine.length - 1 || mine[i + 1].startMs - mine[i].endMs <= 2000); i--) freshSeqs.unshift(mine[i].seq);
+    return { utterances: spoken, through: all.at(-1)!.seq, seqs: all.map(f => f.seq), fresh, freshSeqs, ...earlier ? { earlier } : {}, ...notes.length ? { notes } : {}, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
   }
   /** Notes the operator's latest words that no request took yet (the voice moved the page for them). */
   noteLatest(note: string) {
