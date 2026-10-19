@@ -43,3 +43,23 @@ test("speech carried to a page whose fork is refused goes with the seeded sessio
   await settle(100);
   assert.ok(delivered.some(d => d.content.includes('argv')), 'the operator words reached the agent');
 });
+
+test("speech carried to a fork that never starts reaches the agent when the page doesn't start over", async t => {
+  const { h, lives, published } = await harness(t);
+  const delivered: any[] = [];
+  h.deliver = (request: any) => { delivered.push(request); };
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  lives[0].say('operator', words, 0);
+  // Voice moves to another page: the conversation goes on there as a fork, which OpenAI answers but never starts.
+  Live.deferStart.add('1');
+  const starting = h.voiceSessions.start('sdp2', page('q'), 'fresh').catch(error => error);
+  await until(() => lives[1]);
+  assert.ok(lives[1].options.fork, 'a fork');
+  lives[1].answered = true;
+  h.voiceSessions.carryMs = 100;
+  lives[1].abort('session startup timed out');
+  await starting;
+  assert.ok(published.some(({ event, page }) => event.type === 'voice_closed' && event.reconnect && page === 'q'), 'the page is told to start over');
+  await settle(300);
+  assert.ok(delivered.some(d => d.content.includes('argv')), 'it does not: the operator words reached the agent');
+});
