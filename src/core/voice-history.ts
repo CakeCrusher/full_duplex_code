@@ -107,12 +107,14 @@ export class VoiceHistory {
     if (!spoken.some(u => u.role === 'operator')) return null;
     const notes = [...new Set(all.flatMap(f => [f.note, f.cued]).filter(note => note !== undefined))];
     const said = utterances(all.filter(f => !f.note && !unheard.includes(f))).filter(u => u.role === 'operator').map(u => u.text.replace(/\s+/g, ' ').trim());
-    const fresh = said.at(-1) ?? '', earlier = said.slice(0, -1).join(' ');
+    const fresh = said.at(-1) ?? '';
     // Only the latest words count as moved for: earlier words a cue answered (and GPT Live never delegated) don't make
-    // the gate skip the page for what the operator asks now.
+    // the gate skip the page for what the operator asks now, nor are they context for it ("highlight your
+    // recommendation" after "take me to the options" isn't the options).
     const mine = all.filter(f => f.role === 'operator' && !f.note && !unheard.includes(f)), latest: TranscriptFragment[] = [];
     for (let i = mine.length - 1; i >= 0 && (i === mine.length - 1 || mine[i + 1].startMs - mine[i].endMs <= 2000); i--) latest.unshift(mine[i]);
     const cued = latest.some(f => f.cued);
+    const earlier = utterances(mine.filter(f => !f.cued && !latest.includes(f))).map(u => u.text.replace(/\s+/g, ' ').trim()).join(' ');
     return { utterances: spoken, through: all.at(-1)!.seq, seqs: all.map(f => f.seq), fresh, ...earlier ? { earlier } : {}, ...cued ? { cued } : {}, ...notes.length ? { notes } : {}, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
   }
   /** Marks the operator's latest words that no request took yet: the voice moved the page for them. */
