@@ -135,13 +135,15 @@ export class SessionSwitch {
    * left to the gate. Resolves to what GPT Live is told, or undefined.
    */
   async ahead(said: string, earlier?: string, companion?: string): Promise<{ told: string } | undefined> {
-    const bridge = this.bridge;
+    const bridge = this.bridge, started = Date.now();
     if (!bridge.handOffAudit) return;
     const page = await bridge.stage.describe().catch(() => undefined);
     if (!page) return;
     const judgment = await bridge.handOffAudit.judge(said, undefined, 1500, page, earlier, companion), p = judgment.page;
     bridge.log({ type: 'stage.ahead_judged', said: said.slice(-160), page: p });
     if (!p?.steps.length || p.only < AHEAD_ONLY || (p.work ?? 1) >= AHEAD_WORK || (p.first ?? 0) < AHEAD_STEP) return;
+    // GPT Live moved the page by its own words meanwhile: moving it again would go one too far ("next slide").
+    if ((bridge.mediator?.cueAt ?? 0) >= started) { bridge.log({ type: 'stage.ahead_skipped', said: said.slice(-160), reason: 'a cue moved the page meanwhile' }); return; }
     const { done, onScreen } = await bridge.stage.run(p.steps);
     bridge.presentedAt = bridge.aheadAt = Date.now();
     bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen, ahead: true });

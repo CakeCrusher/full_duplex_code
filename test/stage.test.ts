@@ -238,3 +238,22 @@ test('listening ahead never reads half a sentence: the transcript arrives a word
   await until(() => asked.length);
   assert.deepEqual(asked, ['Next, can you fix the parser?']);
 });
+
+test('listening ahead moves nothing for words a cue already moved the page for, or moves it for while Jev reads them', async t => {
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {}; live.append = async () => {};
+  const asked: string[] = [];
+  const m = new Mediator({ live, observer, deliver: () => {}, log: () => {}, publish: () => {}, clean: String, hold: null, gate: async () => ({}), ahead: async said => { asked.push(said); return undefined; } });
+  t.after(() => { m.stop(); observer.close(); });
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Next slide.', start_ms: 0, end_ms: 700 });
+  m.history.cueLatest('moved');
+  await new Promise(resolve => setTimeout(resolve, 600));
+  assert.deepEqual(asked, [], 'cued words are the gate\'s to judge');
+  const { h } = await harness(t);
+  const runs: string[][] = [];
+  h.stage = { describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; }, view, observe() {}, close() {} } as any;
+  h.handOffAudit = { judge: async () => { m.cueAt = Date.now(); return { needsAgent: .1, page: { steps: ['next_section'], only: .9, work: 0, count: 1, first: .95 } }; } } as any;
+  h.voiceSessions.mediator = m;
+  assert.equal(await h.sessionSwitch.ahead('next section'), undefined);
+  assert.deepEqual(runs, [], 'a cue moved the page while Jev read the words');
+});

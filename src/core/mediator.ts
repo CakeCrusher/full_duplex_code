@@ -149,7 +149,8 @@ export class Mediator {
   async lookAhead() {
     if (this.looking || this.live.state !== 'active') return;
     const request = this.history.request(Infinity);
-    if (!request?.fresh || !request.freshSeqs?.length || request.fresh.split(' ').length > 30) return;
+    // Words GPT Live already moved the page for (a cue) are the gate's to judge, without moving it again.
+    if (!request?.fresh || !request.freshSeqs?.length || request.cued || request.fresh.split(' ').length > 30) return;
     // Only the latest words are taken meanwhile, so a delegation arriving now waits rather than sends them.
     const id = `ahead-${randomUUID()}`, lastOperator = request.utterances.findLastIndex(u => u.role === 'operator'), companion = request.utterances.slice(0, lastOperator).findLast(u => u.role === 'intermediary')?.text;
     this.history.claim({ ...request, seqs: request.freshSeqs }, id);
