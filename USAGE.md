@@ -166,6 +166,27 @@ The launcher registers passive lifecycle hooks, including tool batches, subagent
 
 Hooks report tool operations at their boundaries. A running command's stdout normally arrives with its result, not as a continuous byte stream. Unsent terminal drafts and private thinking are not part of this feed.
 
+## Present a page
+
+When Claude shows you a page in Chrome (a diagram, a deck, a report), fdc moves it while you talk, without waiting
+for Claude. The voice presents, Claude produces, and fdc's voice tool sits between them:
+
+- **The voice moves it as it speaks.** Ask for a part by name ("go to the secure handshake") or for a walkthrough:
+  the voice says "let's look at" and the part's name, and the page goes there and highlights it as the words are said.
+- **The voice tool moves it on request.** "Next", "go back", "the DNS lookup, then the response", "highlight the
+  explanation under the DNS lookup", "go back to the diagram" (another page Claude opened): the voice tool runs the
+  page's commands in about a second and tells the voice what is on screen. Only what the page can't do goes to Claude.
+- **Changes go to Claude.** "Take me to the response and make its text shorter" moves the page at once and passes the
+  rewrite on.
+- **Complaints improve the page.** When the page doesn't do what you meant ("the page isn't moving"), the request
+  reaches Claude with a note to improve the page's controls, so the voice can do it next time.
+
+The page's controls come from its structure (headings, sections, slides, read like a screen reader would) and, for
+anything interactive, from a small controller Claude writes into the page following [STAGE.md](STAGE.md). fdc's page
+notes each move: "The page followed the voice" or "The voice tool moved the page". This needs
+[Open Claude in Chrome](https://github.com/noemica-io/open-claude-in-chrome), the browser tools Claude uses: fdc reaches the page through the same
+connection. Without it, page requests go to Claude like any other.
+
 ## Approvals and attention
 
 By default, approve tools and respond to Claude's permission prompts in the terminal. The companion can tell you that attention is needed, but it does not approve tools for you. To launch Claude with tool permission checks disabled, pass `--dangerously-skip-permissions` as shown below.
@@ -385,6 +406,7 @@ The TypeScript sources run directly under Node; the bridge strips the page modul
 - `src/adapters/pi/` is the same for Pi: the extension Pi loads (`extension.ts`), its command (`launch.ts`), its events and session file as observations (`observer.ts`), and delivery through the extension (`delivery.ts`).
 - Every adapter reads its agent's own arguments (`arguments.ts`).
 - `src/launcher/` holds the launcher's option parsing, Enter prompt and tunnel; `src/cli.ts` runs them.
+- Presenting a page lives in `src/core/presenter.ts` (the voice's words moving the page, the gate's page requests), `src/core/stage.ts` with `stage-page.js` (the page in the browser, reached through Open Claude in Chrome), `speech-cues.ts` and `fast-action.ts` (one-off steps when no page command fits); the gate itself is in `sessions.ts`, judged by Jev (`delegation-audit.ts`).
 - `web/` is the page: audio I/O, page UI, bridge client, WebRTC peer, timeline view, sound cues and the audio worklet.
 
 The core reaches an agent only through the adapter contract in `src/core/adapter.ts`: a `profile` (names, the event that ends a turn, whether assistant text streams during the turn and whether a request can reach a running turn), `launch()`, `observations` in one shared format (kind, text, raw event, time, turn state), `deliver()`, which reports how far a request got, and `history()`. Prompts, context labels, the page and the timeline take the agent's names from its profile.
