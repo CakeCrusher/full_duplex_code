@@ -166,9 +166,11 @@ export class DelegationAudit {
       let chosen = steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id);
       // Two steps that came to the same command through different commands for its part are one step, not a repeat.
       const raw = ['page_step_1', 'page_step_2', 'page_step_3'].map(name => answers?.[name]?.choice);
-      chosen = chosen.filter((id, index) => !index || id !== chosen[index - 1] || raw[index] === raw[index - 1]);
+      // Only a relative move repeats ("next, next"); going to the same part twice is going there once.
+      const relative = (id: string) => /next|previous|prev|back|forward|scroll|down|up/.test(id);
+      chosen = chosen.filter((id, index) => !index || id !== chosen[index - 1] || (raw[index] === raw[index - 1] && relative(id)));
       // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
-      if (steps[0] && steps[1] === steps[0] && raw[1] === raw[0] && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
+      if (steps[0] && steps[1] === steps[0] && raw[1] === raw[0] && relative(steps[0]) && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
       // Work unanswered counts as asked, so the words still reach the agent: keeping them from it is the costly mistake.
       judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: p('page_work', 1), other, count, unhappy: p('page_unhappy') };
       // Each step's likeliest commands, for tuning the page questions.
