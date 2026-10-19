@@ -12,7 +12,17 @@ import type { DelegationAudit, HandOff } from './delegation-audit.ts';
 import { handledNote, nothingToSend, queueFailed, sessionEndRequest, uncertainNote, voiceRequest } from './prompts.ts';
 
 /** What Jev's check before delivery found: its judgment, and when fdc handled the request itself, what GPT Live is told instead. */
-export interface Screened { needsAgent?: number | null; handled?: string; /** Handled because it was only about how the companion behaves. */ companion?: boolean }
+export interface Screened {
+  needsAgent?: number | null; handled?: string;
+  /** Handled because it was only about how the companion behaves. */
+  companion?: boolean;
+  /** Handled because it only asked for things on the page, done there. */
+  page?: boolean;
+  /** For the harness, with the request: what fdc already did, or what failed. */
+  note?: string;
+  /** For GPT Live, as the request goes on. */
+  told?: string;
+}
 
 /** The part of a Live session the mediator uses. */
 export interface MediatedLive extends ContextSink, Pick<EventEmitter, 'on' | 'off'> {
@@ -147,9 +157,13 @@ export class Mediator {
     const said = this.clean(request.fresh);
     let screened: Screened | undefined;
     try { screened = await this.screen!(said, id); } catch (error) { this.log({ type: 'screen.error', message: (error as Error).message }); }
-    if (screened?.handled === undefined) return this.send(id, request, content, delegationId, screened?.needsAgent);
-    this.log({ type: 'bridge.request_handled', id, delegationId, said, companion: screened.companion });
-    this.giveBack(id, handledNote(screened.companion ? 'companion' : 'sessions'));
+    if (screened?.told && this.live.state === 'active') this.context.add('thinking', screened.told, delegationId);
+    if (screened?.handled === undefined) {
+      const noted = screened?.note ? this.clean(voiceRequest(request.utterances, [...request.notes ?? [], screened.note])) : content;
+      return this.send(id, request, noted, delegationId, screened?.needsAgent);
+    }
+    this.log({ type: 'bridge.request_handled', id, delegationId, said, companion: screened.companion, page: screened.page });
+    this.giveBack(id, handledNote(screened.page ? 'page' : screened.companion ? 'companion' : 'sessions'));
     // A preference about the companion is still a standing instruction to learn, and Jev's to tune from.
     if (screened.companion) this.consider(id, request, said); else this.previousUtterance = said;
     if (this.live.state === 'active') this.context.add('thinking', screened.handled, delegationId);

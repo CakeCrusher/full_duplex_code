@@ -9,6 +9,7 @@
 // arrived only because voice ended (GPT Live had kept it), next to Jev's judgment, for learning how
 // often GPT Live and Jev disagree, and in which direction.
 import fs from 'node:fs';
+import type { StageView } from './stage.ts';
 
 type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
 
@@ -29,7 +30,9 @@ export type HandOff = 'passed' | 'answered';
 export interface Session { id: string; folder: string; agent: string; on: boolean; current: boolean; /** Why its voice can't start without the operator. */ blocked?: string | null }
 /** Jev's reading of a request for session orchestration. */
 export interface SessionsJudgment { asked: number; only: number; unlisted: number; turnOn: string[]; turnOff: string[] }
-export interface Judgment { needsAgent: number | null; sessions?: SessionsJudgment; /** Only about how the voice companion behaves, nothing for the agent. */ companionOnly?: number }
+/** Jev's reading of a request for the page on the stage: the commands to run, in order. */
+export interface PageJudgment { steps: string[]; only: number; count: number }
+export interface Judgment { needsAgent: number | null; sessions?: SessionsJudgment; /** Only about how the voice companion behaves, nothing for the agent. */ companionOnly?: number; page?: PageJudgment }
 
 // Probabilities above which Jev's reading is acted on. A request is kept from the harness only when
 // it surely asks for nothing but session changes: a work request kept from it is the costly error.
@@ -39,6 +42,22 @@ export const ASKED = .7, ONLY = .7, UNLISTED = .7;
 // .7 or more, two of them questions for the harness about the companion's own code (lost work); none .85.
 // Six plain preferences ("stop waking up for every little thing", "don't pause so quickly") scored .85-.93.
 export const COMPANION_ONLY = .85;
+// A page command is run when Jev's choice of it is at least this likely. A request is kept from the
+// harness as page-only from PAGE_ONLY: on 9 trial requests (Oct 19), page-only ones scored .70-.92,
+// ones with work in them .02-.09.
+export const PAGE_STEP = .5, PAGE_ONLY = .5;
+const PAGE_SETTING = ' A page is open in the browser beside the conversation (`page`). The voice tool can move it, show and highlight its parts with the listed page commands, without the coding agent.';
+// Each step names a whole command, so Jev's independent answers never have to agree on its arguments.
+const pageQuestions = (page: StageView) => {
+  const criteria = { none: 'No page command: nothing is to be shown, moved or highlighted on the page.', ...Object.fromEntries(page.commands.map(c => [c.id, c.say])) };
+  const step = (n: number) => ({ type: 'choice', instructions: `List the page commands the operator asks for, in order, writing a command once for each time it should run ("forward three sections" is the next-section command three times). Which command is number ${n} in that list? Choose none if the list is shorter.`, criteria });
+  return {
+    page_steps: { type: 'choice', instructions: 'How many page commands should run, counting each repetition ("forward three sections" is 3, "go to the options and highlight the recommendation" is 2)? Work for the coding agent, questions and talk are not page commands.', criteria: { '0': 'No page command.', '1': 'One.', '2': 'Two.', '3': 'Three or more.' } },
+    page_step_1: step(1), page_step_2: step(2), page_step_3: step(3),
+    page_only: { type: 'noul', instructions: 'Is moving, showing or highlighting things on the page all the operator asks, with nothing for the coding agent to do, change, research or answer?', criteria: { true: 'Only page commands, with at most filler or thanks.', false: 'Also asks for work, a change, research, an answer or anything else beyond the page. When in doubt, false.' } },
+  };
+};
+const pageLine = (page: StageView) => `${page.title} (${page.url})${page.about ? `: ${page.about}` : ''}. The viewer is at: ${page.where}`.slice(0, 900);
 
 const SESSIONS_SETTING = ' The operator may run several companions at once, each beside its own coding session in its own folder (`sessions`); each one\'s voice can be on or off, and several can be on together. fdc, the voice tool itself, turns them on or off; the coding agent does not. Every listed session is already running, so starting, opening or turning on a listed session (named by its folder or project) means turning its voice on, and stopping or closing one means turning its voice off.';
 const sessionQuestions = (sessions: Session[]) => ({
@@ -92,10 +111,11 @@ export class DelegationAudit {
     this.apiKey = apiKey; this.file = file; this.log = log; this.fetch = fetch;
   }
   /** Jev's probability that the operator's words must reach the agent, and with running sessions, its reading of them for session changes. */
-  async judge(utterance: string, sessions?: Session[], timeoutMs = 5000): Promise<Judgment> {
-    const state: Record<string, string> = { setting: SETTING + (sessions ? SESSIONS_SETTING : ''), utterance: utterance.replace(/\s+/g, ' ').trim().slice(-600) };
+  async judge(utterance: string, sessions?: Session[], timeoutMs = 5000, page?: StageView): Promise<Judgment> {
+    const state: Record<string, string> = { setting: SETTING + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : ''), utterance: utterance.replace(/\s+/g, ' ').trim().slice(-600) };
     if (sessions) state.sessions = sessionLines(sessions) || '(none)';
-    const questions = sessions ? { ...QUESTIONS, ...sessionQuestions(sessions) } : QUESTIONS;
+    if (page) state.page = pageLine(page);
+    const questions = { ...QUESTIONS, ...sessions ? sessionQuestions(sessions) : {}, ...page ? pageQuestions(page) : {} };
     const response = await this.fetch(URL, { method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'jev-latest', state, questions }), signal: AbortSignal.timeout(timeoutMs) });
     if (!response.ok) throw new Error(`Jev returned HTTP ${response.status}`);
     const { answers } = await response.json();
@@ -105,6 +125,16 @@ export class DelegationAudit {
       const chosen = (choice: string) => sessions.filter((_, index) => answers?.[`session_${index + 1}`]?.choice === choice).map(s => s.id);
       judgment.sessions = { asked: p('sessions_asked'), only: p('only_sessions'), unlisted: p('unlisted_session'), turnOn: chosen('turn_on'), turnOff: chosen('turn_off') };
       judgment.companionOnly = p('companion_only');
+    }
+    if (page) {
+      const step = (name: string) => {
+        const answer = answers?.[name], id = answer?.choice;
+        const likely = Number(answer?.probabilities?.[id] ?? answer?.confidence ?? 1);
+        return typeof id === 'string' && likely >= PAGE_STEP && page.commands.some(c => c.id === id) ? id : undefined;
+      };
+      const count = Number(answers?.page_steps?.choice) || 0, steps = [step('page_step_1'), step('page_step_2'), step('page_step_3')];
+      // A step 1 without a count still runs; the count otherwise says where the list ends.
+      judgment.page = { steps: steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id), only: p('page_only'), count };
     }
     return judgment;
   }

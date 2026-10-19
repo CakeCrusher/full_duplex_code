@@ -1,0 +1,75 @@
+# Making a page steerable by voice
+
+fdc's voice tool can move the page the user is looking at without you. It reads the page's
+structure and runs commands in it through the browser tools, in about a second, so the user can
+say "go to the results", "next slide" or "highlight the total" without waiting for a turn of
+yours. Everything below is optional and additive: the more of it a page has, the more it can do.
+
+Show the page with the browser tools (navigate a tab, or open one): the tab you show is the one
+the voice tool steers.
+
+## 1. Structure (free)
+
+Use real headings (`h1`–`h4`) for sections, and paragraphs, lists, figures and tables for the
+rest. The voice tool already navigates by these like a screen reader: next or previous section,
+heading, paragraph, list item or figure; go to any heading by name; back to where the user was;
+top; highlight what is on screen.
+
+## 2. Annotations (cheap)
+
+Put `data-fdc="what this is"` on the elements worth pointing at that aren't headings: a key
+number, the recommendation, a chart, a step, a warning.
+
+```html
+<p data-fdc="the recommendation">Keep GPT Live and build …</p>
+<figure data-fdc="latency chart: request to view change">…</figure>
+```
+
+Each one becomes a command "Show and highlight: the recommendation".
+
+## 3. A controller (for anything interactive)
+
+For slides, tabs, maps, charts, filters, animations or an app, define `window.fdcController`
+in the page:
+
+```js
+window.fdcController = {
+  // One line: what this page is.
+  about: 'Slide deck: Q3 review, 12 slides',
+  // What the voice tool may run. Each command is whole: one id, no arguments.
+  commands() {
+    return [
+      { id: 'next_slide', say: 'Go to the next slide' },
+      { id: 'previous_slide', say: 'Go to the previous slide' },
+      ...slides.map((s, i) => ({ id: `slide_${i + 1}`, say: `Go to slide ${i + 1}: "${s.title}"` })),
+      { id: 'show_revenue_chart', say: 'Open the revenue chart full screen' },
+    ];
+  },
+  // Do it, and resolve once the view has settled. Throw with a clear message if it can't be done.
+  async run(id) {
+    // …
+    return 'Slide 4 of 12: "Margins". Gross margin is 41%, up 3 points.';
+  },
+  // Optional: where the user is now, in words.
+  where() { return `Slide ${current + 1} of 12: "${slides[current].title}"`; },
+  // Optional: phrases that run a command as the voice says them, to keep the page in step with speech.
+  cues() { return [{ say: 'next slide', run: 'next_slide' }]; },
+};
+```
+
+Rules that make it work well:
+
+- **Whole commands.** List one command per target (one per slide, tab, place or filter value)
+  instead of a command with a parameter. Ids use lowercase letters, digits and underscores;
+  keep it under about 60 commands.
+- **`say` is how it is chosen.** Write what the command does in plain words, naming its target
+  the way the user would.
+- **Sequences belong in one command.** If showing something takes several steps (open a tab,
+  wait for it, scroll to a row, highlight it), make it one command and `await` each step in
+  `run()`. The voice tool can also run up to three commands in a row when the user asks for them.
+- **Return what is on screen.** A sentence or two about what the user now sees; the voice uses it
+  to talk about the page.
+- **Fail loudly.** If `run()` throws, the voice tool sends you the request with the error, so you
+  can fix the controller.
+- **Keep it current.** `commands()` is read again before each use, so it can follow the page's
+  state (for example, only the slides that exist).

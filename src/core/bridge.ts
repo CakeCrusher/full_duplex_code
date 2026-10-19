@@ -9,6 +9,7 @@ import { InstructionLearner, LearnedLog, type LearnedInstruction } from './instr
 import { DelegationAudit } from './delegation-audit.ts';
 import { askAgent, distillPrompt, parseDistilled } from './instruction-distiller.ts';
 import { JevTuner, type TuningChange } from './jev-tuner.ts';
+import { Stage } from './stage.ts';
 import { UsageLedger } from './usage-ledger.ts';
 import { Timeline } from './timeline.ts';
 import { StatusLog, statusSnapshot, type BridgeEvent } from './status.ts';
@@ -69,6 +70,8 @@ export class Harness {
   clean: (text: unknown) => string;
   statusLog: StatusLog; log: (event: BridgeEvent) => void; publish: (event: BridgeEvent, page?: Page) => void; fault: (error: Error, page?: Page) => void;
   ledger: UsageLedger; timeline: Timeline; outbox: Outbox; voiceSessions: VoiceSessions; endpoints: Endpoints;
+  /** The page the agent last showed the operator, which the gate can move (stage.ts). */
+  stage: Stage;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
   constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides, jevTuning = false, store = true }: HarnessOptions) {
     this.agent = agent; this.root = root; this.runDir = runDir; this.cwd = cwd; this.sessionId = sessionId; this.apiKey = apiKey;
@@ -87,6 +90,7 @@ export class Harness {
     if (jevKey && jevTuning) this.tuner = new JevTuner({ apiKey: jevKey, log: this.log });
     if (jevKey) this.handOffAudit = new DelegationAudit({ apiKey: jevKey, file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log });
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
+    this.stage = new Stage({ log: this.log });
     this.sessionSwitch = new SessionSwitch(this);
     this.voiceSessions = new VoiceSessions(this, { store });
     if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log,
@@ -103,6 +107,7 @@ export class Harness {
     observer.on('observation', ({ raw, ...event }) => this.publish({ type: 'agent_observation', ...event, text: withoutBinary(event.text) }));
     // The agent's work, priced for Standby (activity.ts): a subagent's events are its parent's business.
     observer.on('observation', (observation: Observation) => { if (!observation.child && observation.kind !== 'event') this.voiceSessions.activity.add(observation.kind); });
+    observer.on('observation', (observation: Observation) => { if (!observation.child) this.stage.observe(observation); });
     observer.on('status', event => { this.log({ type: 'agent.status', ...event }); this.publish({ type: 'agent_status', ...event }); });
     observer.on('fault', error => this.fault(error));
     const { name, transport } = agent.profile;
@@ -223,7 +228,7 @@ export class Harness {
     if (this.live) await this.live.close('harness stopped');
     this.voiceSessions.handOffCarried();
     this.mediator?.stop();
-    this.audit?.close(); this.saveTimeline();
+    this.audit?.close(); this.stage.close(); this.saveTimeline();
     this.pages.close();
     await this.endpoints.close();
     await agentClosed;

@@ -23,6 +23,7 @@ Delegate to the backend when:
 - The operator asks for coding work, a task change, a message to ${name}, or an investigation needing new information.
 - The operator asks to turn the voice of their other sessions on or off, or to switch sessions: the voice tool carries that out, not ${name}, and tells you the outcome. Never say it is done before that.
 - The operator voices a preference or frustration about how you or the voice tool behave (how much you talk, how quickly the voice pauses, what wakes it): the voice tool adjusts its own settings from it and tells you; ${name} does not receive it.
+- The operator asks to see something on the page in front of them: go to a part, show, scroll, next, back, highlight. Delegate at once, even for a single "next": the voice tool moves the page itself in about a second and tells you what is on screen, so you can talk about it. Don't describe the move before it happens.
 Do not delegate to the backend when:
 - You can answer from observed work or the conversation.
 - The operator is directing your conversation, or you need clarification.
@@ -105,8 +106,21 @@ export const voiceRequest = (utterances: readonly Pick<Utterance, 'role' | 'text
   `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.${notesText(notes)}\n\n${transcript(utterances)}`;
 // Why speech an earlier request took is in this one: it never reached the agent.
 const notesText = (notes: readonly string[]) => notes.length ? ` ${notes.join(' ')}` : '';
-export const handledNote = (what: 'sessions' | 'companion') =>
-  `Some of it went to the voice tool earlier and not to you, because the voice tool judged it to be only ${what === 'sessions' ? 'about turning voice sessions on or off' : "about how the voice assistant itself should behave"}; the voice tool has done that part. Act on the rest, which may finish what it began.`;
+const HANDLED = { sessions: 'about turning voice sessions on or off', companion: 'about how the voice assistant itself should behave', page: 'about showing things on the page in the browser' };
+export const handledNote = (what: keyof typeof HANDLED) =>
+  `Some of it went to the voice tool earlier and not to you, because the voice tool judged it to be only ${HANDLED[what]}; the voice tool has done that part. Act on the rest, which may finish what it began.`;
+// The page on the stage (stage.ts): what the gate did there, for GPT Live and for the agent.
+const steps = (done: readonly { say: string }[]) => done.map(d => d.say.replace(/\.$/, '')).join(', then ');
+export const pageHandled = ({ profile: { product } }: Agent, done: readonly { say: string }[], onScreen: string) =>
+  `Nothing was sent to ${product}: the voice tool did it on the page (${steps(done)}). On screen now: ${onScreen.slice(0, 700)} Tell the operator in a few words what they are looking at, or just carry on if they are stepping through; don't describe the move.`;
+export const pageAlongside = ({ profile: { name } }: Agent, done: readonly { say: string }[], onScreen: string) =>
+  `The voice tool already did the page part (${steps(done)}); on screen now: ${onScreen.slice(0, 500)} The rest goes to ${name}.`;
+export const pageFailed = ({ profile: { name } }: Agent, error: string) =>
+  `The page couldn't do that (${error.slice(0, 200)}). The request went to ${name}, who made the page, to fix its controls and do it.`;
+export const pageDoneNote = (done: readonly { say: string }[]) =>
+  `The voice tool already did the page part of this in the browser (${steps(done)}); don't do that again, do the rest.`;
+export const pageFailedNote = (done: readonly { say: string }[], error: string) =>
+  `The voice tool tried to do this on the page in the browser (${steps(done)}) and the page's controls failed: ${error.slice(0, 400)}. Fix the page's controller (window.fdcController or its data-fdc annotations) so this works, then do what the user asked.`;
 export const uncertainNote = 'Some of it may have reached you already: its delivery was uncertain. Don\'t repeat work it already started.';
 // Speech the voice assistant had not passed on when the voice session ended.
 export const sessionEndRequest = (reason: string, utterances: readonly Pick<Utterance, 'role' | 'text'>[], notes: readonly string[] = []) =>
