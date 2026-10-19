@@ -144,9 +144,10 @@ export class DelegationAudit {
       };
       const count = Number(answers?.page_steps?.choice) || 0, steps = [step('page_step_1'), step('page_step_2'), step('page_step_3')];
       // A step 1 without a count still runs; the count otherwise says where the list ends.
-      // Jev's "no page command" with work asked: nothing runs ("make the options section bigger" isn't a move).
-      const none = answers?.page_steps?.choice === '0' && p('page_work') >= PAGE_WORK;
-      let chosen = none ? [] : steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id);
+      // Jev often counts 0 steps for a few words ("system map", "changes") while sure of the part, so a sure first step
+      // runs anyway. With work asked too, that shows the part being worked on ("add a summary to the sessions part"),
+      // and the request still goes to the agent: skipping it missed 1 in 7 navigation requests on the synthetic set.
+      let chosen = steps.slice(0, count ? Math.min(count, 3) : steps[0] ? 1 : 0).filter((id): id is string => !!id);
       // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
       if (steps[0] && steps[1] === steps[0] && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
       // Work unanswered counts as asked, so the words still reach the agent: keeping them from it is the costly mistake.
