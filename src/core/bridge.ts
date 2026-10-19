@@ -11,7 +11,7 @@ import { askAgent, distillPrompt, parseDistilled } from './instruction-distiller
 import { JevTuner, type TuningChange } from './jev-tuner.ts';
 import { Stage } from './stage.ts';
 import { CueMatcher } from './speech-cues.ts';
-import { cueShown } from './prompts.ts';
+import { cueMovedNote, cueShown } from './prompts.ts';
 import { FastAction } from './fast-action.ts';
 import { UsageLedger } from './usage-ledger.ts';
 import { Timeline } from './timeline.ts';
@@ -211,6 +211,9 @@ export class Harness {
     }
     for (const cue of this.speechCues.hear(delta)) {
       this.presentedAt = Date.now(); this.sentence = '';
+      // Answering the operator by moving the page: their words still reach the agent, noted, so it doesn't move it again.
+      const history = this.mediator?.history;
+      if (history && Date.now() - history.lastInputAt < 15000) history.noteLatest(cueMovedNote);
       const started = Date.now();
       if (this.mediator) this.mediator.cueAt = started;
       this.stage.run([cue.run]).then(({ onScreen }) => {

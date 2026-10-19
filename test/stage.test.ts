@@ -71,6 +71,8 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   assert.deepEqual((await audit.judge('down five sections', undefined, 3000, view)).page!.steps, Array(5).fill('next_section'), 'one command repeated runs as often as counted');
   answers = { ...answers, page_steps: { choice: '2' }, page_step_1: choice('goto_options'), page_step_2: choice('other_action', .9), page_step_3: choice('none') };
   assert.deepEqual((await audit.judge('go to the options and highlight the third row', undefined, 3000, view)).page!.steps, [], 'another action anywhere: the whole request is a one-off action');
+  answers = { ...answers, page_steps: { choice: '0' }, page_step_1: choice('goto_options'), page_step_2: choice('none'), page_work: { noul: .8 } };
+  assert.deepEqual((await audit.judge('make the options section bigger', undefined, 3000, view)).page!.steps, [], "Jev's no page command, with work asked: nothing moves");
   answers = { needs_agent: { noul: .9 } };
   assert.equal((await audit.judge('fix the parser', undefined, 3000)).page, undefined, 'no page, no page questions');
   assert.equal(sent.questions.page_steps, undefined);
@@ -132,4 +134,34 @@ test('a one-off action that reaches outside the page is refused before it runs',
   assert.equal(await reply('el(3).click();\nreturn "The table is open.";').write('open the table', 'digest'), 'el(3).click();\nreturn "The table is open.";');
   assert.equal(await reply('```js\nel(1).click();\n```').write('x', 'digest'), 'el(1).click();', 'fences are dropped');
   for (const code of ['await fetch("https://x")', 'location.href = "https://x"', 'localStorage.clear()', 'window.open("x")', 'document.cookie']) await assert.rejects(reply(code).write('x', 'digest'), /Refused an action that reaches outside the page/, code);
+});
+
+test('requests reach the agent in the order made, however long each one\'s gate takes', async t => {
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
+  live.append = async () => {};
+  const deliveries: any[] = [];
+  let release!: () => void;
+  const slow = new Promise<void>(resolve => { release = resolve; });
+  const gate = async (said: string): Promise<Gated> => { if (/bigger/.test(said)) await slow; return { needsAgent: .9 }; };
+  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate });
+  t.after(() => { m.stop(); observer.close(); });
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Go to the options and make its title bigger.', start_ms: 0, end_ms: 900 });
+  m.delegate('d1', 900);
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Actually, make it smaller instead.', start_ms: 5000, end_ms: 6000 });
+  m.delegate('d2', 6000);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(deliveries.length, 0, 'the second waits for the first');
+  release();
+  await until(() => deliveries.length === 2);
+  assert.match(deliveries[0].content, /bigger/); assert.match(deliveries[1].content, /smaller/);
+});
+
+test('a page controller returning anything is kept to well-formed commands and cues', async () => {
+  const odd = { title: 7, url: 'http://localhost/x.html', about: { not: 'text' }, where: null, outline: ['no'], commands: [{ id: 'slide_3', say: 'Go to slide 3', name: 3 }, { id: 4 }, null, 'x', { id: 'ok', say: 'Fine' }], cues: { say: 'next' } };
+  const stage = new Stage({ log: () => {}, browser: { evaluate: async () => odd, close() {} } as any });
+  stage.tabId = 1;
+  const view = (await stage.describe(0))!;
+  assert.deepEqual(view.commands, [{ id: 'slide_3', say: 'Go to slide 3', name: '3' }, { id: 'ok', say: 'Fine' }]);
+  assert.deepEqual(view.cues, []); assert.equal(view.about, null); assert.equal((view as any).outline, undefined); assert.equal(view.title, '7');
 });

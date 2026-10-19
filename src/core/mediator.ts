@@ -151,17 +151,32 @@ export class Mediator {
     this.history.claim(request, id);
     // Words a request already took that went to fdc, or may not have arrived, were judged then.
     if (this.gate && request.fresh) return this.gated(id, request, content, delegationId);
-    this.send(id, request, content, delegationId);
+    this.inTurn(() => this.send(id, request, content, delegationId));
+  }
+  /**
+   * Requests reach the agent in the order the operator made them, however long each one's gate takes
+   * (a page action or a one-off action can take seconds): while a gate works, later sends wait their turn.
+   */
+  order: Promise<unknown> = Promise.resolve(); gating = 0;
+  inTurn(step: () => unknown) {
+    if (!this.gating) { step(); return; }
+    this.order = this.order.then(step).catch(error => this.fault(error as Error));
   }
   // The gate reads the request first; one that only turns sessions on or off, or is only about how the
   // companion behaves, is handled by fdc, and GPT Live is told so instead. Its words stay
   // undelegated: they go with the next request, noted, since they may begin what it finishes.
-  async gated(id: string, request: SpokenRequest, content: string, delegationId: string) {
+  gated(id: string, request: SpokenRequest, content: string, delegationId: string) {
     const said = this.clean(request.fresh);
-    let gated: Gated | undefined;
     // What GPT Live said last before the operator's latest words: the offer a "yes, please" accepts.
     const lastOperator = request.utterances.findLastIndex(u => u.role === 'operator'), companion = request.utterances.slice(0, lastOperator).findLast(u => u.role === 'intermediary')?.text;
-    try { gated = await this.gate!(said, id, request.earlier && this.clean(request.earlier), companion && this.clean(companion)); } catch (error) { this.log({ type: 'gate.error', message: (error as Error).message }); }
+    // The gate starts now; what it decides takes effect in turn.
+    const judging = this.gate!(said, id, request.earlier && this.clean(request.earlier), companion && this.clean(companion)).catch(error => { this.log({ type: 'gate.error', message: (error as Error).message }); return undefined; });
+    this.gating++;
+    const done = this.order.then(() => judging).then(gated => this.afterGate(id, request, content, delegationId, said, gated)).finally(() => { this.gating--; });
+    this.order = done.catch(error => this.fault(error as Error));
+    return done;
+  }
+  afterGate(id: string, request: SpokenRequest, content: string, delegationId: string, said: string, gated: Gated | undefined) {
     if (gated?.told && this.live.state === 'active') this.context.add('thinking', gated.told, delegationId);
     if (gated?.handled === undefined) {
       const noted = gated?.note ? this.clean(voiceRequest(request.utterances, [...request.notes ?? [], gated.note])) : content;
@@ -201,11 +216,13 @@ export class Mediator {
     if (!request) return;
     const id = randomUUID();
     this.history.claim(request, id);
-    try {
-      this.deliver({ id, content: this.clean(sessionEndRequest(reason, request.utterances, request.notes)), delegationId: null, voiceSessionId: this.live.id, queuedAt: Date.now() });
-      this.log({ type: 'bridge.session_end_handoff', id, reason, utterances: request.utterances.length });
-      this.check(id, request, 'answered');
-    } catch (error) { this.history.release(id); this.fault(error as Error); }
+    this.inTurn(() => {
+      try {
+        this.deliver({ id, content: this.clean(sessionEndRequest(reason, request.utterances, request.notes)), delegationId: null, voiceSessionId: this.live.id, queuedAt: Date.now() });
+        this.log({ type: 'bridge.session_end_handoff', id, reason, utterances: request.utterances.length });
+        this.check(id, request, 'answered');
+      } catch (error) { this.history.release(id); this.fault(error as Error); }
+    });
   }
   stop(reason = 'voice ended') {
     this.ended ??= reason;

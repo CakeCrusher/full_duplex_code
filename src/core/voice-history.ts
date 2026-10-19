@@ -106,6 +106,14 @@ export class VoiceHistory {
     const fresh = said.at(-1) ?? '', earlier = said.slice(0, -1).join(' ');
     return { utterances: spoken, through: all.at(-1)!.seq, seqs: all.map(f => f.seq), fresh, ...earlier ? { earlier } : {}, ...notes.length ? { notes } : {}, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
   }
+  /** Notes the operator's latest words that no request took yet (the voice moved the page for them). */
+  noteLatest(note: string) {
+    const pending = this.fragments.filter(f => f.role === 'operator' && !f.sent && !f.claim && !f.note);
+    let noted = 0;
+    // The latest utterance: back to a pause of over 2 s.
+    for (let i = pending.length - 1; i >= 0 && (i === pending.length - 1 || pending[i + 1].startMs - pending[i].endMs <= 2000); i--) { pending[i].note = note; noted++; }
+    return noted;
+  }
   /** The request is on its way: no other request takes its speech meanwhile. */
   claim(request: SpokenRequest, id: string) { for (const seq of request.seqs) this.fragments[seq].claim = id; }
   /** The request didn't reach the agent: its speech goes with the next one, with why. */
