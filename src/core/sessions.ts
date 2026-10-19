@@ -11,7 +11,7 @@ import { listCompanions, type CompanionEntry } from './companions.ts';
 import { StageError, StageNothing } from './stage.ts';
 import { ASKED, COMPANION_ONLY, ONLY, PAGE_ONLY, PAGE_OTHER, PAGE_WORK, UNLISTED, type PageJudgment, type Session } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
-import { companionHandled, improvisedFailedNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
+import { companionHandled, improvisedFailedNote, lookingNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, sessionsHandled, sessionsOutcome } from './prompts.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
 
@@ -54,7 +54,9 @@ export class SessionSwitch {
       // the request still goes to the agent, noting the page part is done.
       if (judgment.page && (judgment.page.other ?? 0) >= PAGE_OTHER && bridge.fastAction) return this.improvise(said, needsAgent, (judgment.page.work ?? 1) >= PAGE_WORK);
       // Only about how the companion behaves: Jev's tuning and instruction learning take it from here, not the harness.
-      return (judgment.companionOnly ?? 0) >= COMPANION_ONLY ? { needsAgent, handled: companionHandled(bridge.agent), companion: true } : { needsAgent };
+      if ((judgment.companionOnly ?? 0) >= COMPANION_ONLY) return { needsAgent, handled: companionHandled(bridge.agent), companion: true };
+      // For the agent: what the user was looking at when they said it ("make this bigger").
+      return page ? { needsAgent, note: lookingNote(page) } : { needsAgent };
     }
     // A session named that isn't running: Jev still picks the nearest listed one to turn on ("switch to runta" chose
     // video-editing), so nothing is turned on or off; GPT Live is told which ones are running.
