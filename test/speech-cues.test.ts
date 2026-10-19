@@ -83,3 +83,16 @@ test('the gate moves nothing again for words the voice moved the page for; only 
   await h.sessionSwitch.gate('take me to the sessions', 'r3');
   assert.deepEqual(runs, [['goto_sessions']], 'without a cue, the gate moves the page');
 });
+
+test("GPT Live is briefed on the page once it can be read: a new tab's blank page is read again shortly", async t => {
+  const { harness, page } = await import('./live-fake.ts');
+  const { h, lives } = await harness(t);
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  let reads = 0;
+  h.stage.describe = (async () => { if (reads++ === 0) throw new Error('javascript_tool failed: Cannot access a chrome:// URL'); return view; }) as any;
+  await h.voiceSessions.briefStage();
+  assert.ok(!lives[0].appended.some(([kind, text]) => kind === 'instructions' && /is open beside you/.test(text)), 'not yet');
+  await new Promise(resolve => setTimeout(resolve, 1700));
+  assert.ok(lives[0].appended.some(([kind, text]) => kind === 'instructions' && /The page "Deck" is open beside you/.test(text)), 'briefed on the second read');
+  assert.ok(reads >= 2);
+});
