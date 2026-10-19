@@ -433,7 +433,7 @@ export class VoiceSessions {
     if (run.briefed === signature) return;
     run.briefed = signature;
     this.bridge.log({ type: 'stage.briefed', url: view.url, names, phrases });
-    await live.append('instructions', stageBrief(view.title, names, phrases, others)).catch(error => this.bridge.log({ type: 'stage.error', message: (error as Error).message }));
+    await live.append('instructions', stageBrief(view.title, names, phrases, others, view.where)).catch(error => this.bridge.log({ type: 'stage.error', message: (error as Error).message }));
     if (view.outline) run.mediator.context.add('thinking', stageOutline(view.title, view.outline), null);
   }
   liveEvent(run: Run, event: any) {
