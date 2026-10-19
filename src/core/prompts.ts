@@ -117,6 +117,10 @@ export const pageAlongside = ({ profile: { name } }: Agent, done: readonly { say
   `The voice tool already did the page part (${steps(done)}); on screen now: ${onScreen.slice(0, 500)} The rest goes to ${name}.`;
 export const pageFailed = ({ profile: { name } }: Agent, error: string, done: readonly { say: string }[] = []) =>
   `${done.length ? `The page did part of it (${steps(done)}), then` : 'The page'} couldn't go on (${error.slice(0, 200)}). The request went to ${name}, who made the page, to fix its controls and do it.`;
+export const pageNothing = ({ profile: { name } }: Agent, failed: { say: string }) =>
+  `The page had nothing to do for that (${failed.say.replace(/\.$/, '')}). The request went to ${name}.`;
+export const pageNothingNote = (failed: { say: string }) =>
+  `The voice tool tried to do this on the page in the browser (${failed.say.replace(/\.$/, '')}) but there was nothing to do there; do what the user asked.`;
 export const pageDoneNote = (done: readonly { say: string }[]) =>
   `The voice tool already did the page part of this in the browser (${steps(done)}); don't do that again, do the rest.`;
 export const pageFailedNote = (done: readonly { say: string }[], error: string, page?: { title: string; url: string }) =>

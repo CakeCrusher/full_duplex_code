@@ -18,6 +18,8 @@ export class StageError extends Error {
   done: StageCommand[]; onScreen: string; failed: StageCommand;
   constructor(message: string, done: StageCommand[], onScreen: string, failed: StageCommand) { super(message); this.done = done; this.onScreen = onScreen; this.failed = failed; }
 }
+/** A page command had nothing to do (no earlier place to go back to, no next slide): the request goes on. */
+export class StageNothing extends StageError {}
 
 export class Stage {
   browser: Browser;
@@ -53,12 +55,13 @@ export class Stage {
     if (!tabId) throw new Error('No page is on the stage');
     const started = Date.now();
     // Steps run in order; one that throws stops the rest, and what ran before it is still reported.
-    const { said, error } = await this.browser.evaluate<{ said: string[]; error?: string }>(tabId, `${SCRIPT}\n;(async () => { const said = []; for (const id of ${JSON.stringify(ids)}) { try { said.push(await window.__fdcStage.run(id)); } catch (e) { return { said, error: String(e && e.message || e) }; } } return { said }; })()`, 15000);
+    const { said, error, nothing } = await this.browser.evaluate<{ said: string[]; error?: string; nothing?: boolean }>(tabId, `${SCRIPT}\n;(async () => { const said = []; for (const id of ${JSON.stringify(ids)}) { let out; try { out = await window.__fdcStage.run(id); } catch (e) { return { said, error: String(e && e.message || e) }; } if (out == null) return { said, nothing: true }; said.push(out); } return { said }; })()`, 15000);
     this.viewAt = 0;
     const command = (id: string) => view?.commands.find(c => c.id === id) ?? { id, say: id };
     const done = ids.slice(0, said.length).map(command);
-    this.log({ type: error ? 'stage.failed' : 'stage.ran', tabId, ids, ran: said.length, error, ms: Date.now() - started });
+    this.log({ type: error ? 'stage.failed' : nothing ? 'stage.nothing' : 'stage.ran', tabId, ids, ran: said.length, error, ms: Date.now() - started });
     if (error) throw new StageError(error, done, said.at(-1) ?? '', command(ids[said.length]));
+    if (nothing) throw new StageNothing('nothing to do there', done, said.at(-1) ?? '', command(ids[said.length]));
     return { done, onScreen: said.at(-1) ?? '' };
   }
   close() { this.browser.close(); }
