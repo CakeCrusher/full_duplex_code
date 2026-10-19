@@ -130,20 +130,26 @@ export class SessionSwitch {
   }
 
   /**
-   * Listening ahead: the operator's latest words, read as soon as they pause, before GPT Live decides
-   * whether to delegate. Only a confident request for the page alone runs, at once; anything else is
-   * left to the gate. Resolves to what GPT Live is told, or undefined.
+   * Listening ahead: the operator's latest words, read as they pause, before GPT Live decides whether to
+   * delegate. First what they ask of the page (nothing moves: the mediator may read words that turn out
+   * unfinished), then, once they've paused, only a confident request for the page alone runs; anything
+   * else is left to the gate. Resolves to what GPT Live is told, or undefined.
    */
-  async ahead(said: string, earlier?: string, companion?: string): Promise<{ told: string } | undefined> {
-    const bridge = this.bridge, started = Date.now();
+  async aheadJudge(said: string, earlier?: string, companion?: string): Promise<PageJudgment | undefined> {
+    const bridge = this.bridge;
     if (!bridge.handOffAudit) return;
     const page = await bridge.stage.describe().catch(() => undefined);
     if (!page) return;
     const judgment = await bridge.handOffAudit.judge(said, undefined, 1500, page, earlier, companion), p = judgment.page;
     bridge.log({ type: 'stage.ahead_judged', said: said.slice(-160), page: p });
+    return p;
+  }
+  /** Runs what aheadJudge found, if confident; `since` is when it began reading the page. */
+  async aheadAct(p: PageJudgment | undefined, since: number, said = ''): Promise<{ told: string } | undefined> {
+    const bridge = this.bridge;
     if (!p?.steps.length || p.only < AHEAD_ONLY || (p.work ?? 1) >= AHEAD_WORK || (p.first ?? 0) < AHEAD_STEP) return;
     // GPT Live moved the page by its own words meanwhile: moving it again would go one too far ("next slide").
-    if ((bridge.mediator?.cueAt ?? 0) >= started) { bridge.log({ type: 'stage.ahead_skipped', said: said.slice(-160), reason: 'a cue moved the page meanwhile' }); return; }
+    if ((bridge.mediator?.cueAt ?? 0) >= since) { bridge.log({ type: 'stage.ahead_skipped', said: said.slice(-160), reason: 'a cue moved the page meanwhile' }); return; }
     const { done, onScreen } = await bridge.stage.run(p.steps);
     bridge.presentedAt = bridge.aheadAt = Date.now();
     bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen, ahead: true });
