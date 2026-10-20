@@ -31,7 +31,7 @@ export interface Session { id: string; folder: string; agent: string; on: boolea
 /** Jev's reading of a request for session orchestration. */
 export interface SessionsJudgment { asked: number; only: number; unlisted: number; turnOn: string[]; turnOff: string[] }
 /** Jev's reading of a request for the page on the stage: the commands to run, in order. */
-export interface PageJudgment { steps: string[]; only: number; count: number; /** That the operator is unhappy with what the page did or can't do. */ unhappy?: number; /** Jev's probability that work is asked of the agent besides the page commands. */ work?: number; /** That something is asked of the page that no command does. */ other?: number }
+export interface PageJudgment { steps: string[]; only: number; count: number; /** That the operator is unhappy with what the page did or can't do. */ unhappy?: number; /** Jev's probability that work is asked of the agent besides the page commands. */ work?: number; /** That something is asked of the page that no command does. */ other?: number; /** That the operator asks to be walked through the page, part after part. */ walk?: number }
 export interface Judgment { needsAgent: number | null; sessions?: SessionsJudgment; /** Only about how the voice companion behaves, nothing for the agent. */ companionOnly?: number; page?: PageJudgment }
 
 // Probabilities above which Jev's reading is acted on. A request is kept from the harness only when
@@ -50,6 +50,8 @@ export const COMPANION_ONLY = .85;
 export const PAGE_STEP = .45, PAGE_ONLY = .4, PAGE_WORK = .3, PAGE_OTHER = .5;
 // A complaint about the page that no command answers goes to the agent to improve the page's controller.
 export const PAGE_UNHAPPY = .6;
+// A walkthrough asked for: fdc paces it (presenter.ts), unless the request also asks for work.
+export const PAGE_WALK = .6, WALK_WORK = .6;
 // Words before the utterance that no request carried yet still reach the agent later; they are context here.
 // What the companion said just before: "yes, please" answers its offer ("want me to show the diagrams?").
 const COMPANION_SETTING = ' `companion_before` is what the voice companion said just before `utterance`; use it only to understand short replies such as "yes, please".';
@@ -63,10 +65,11 @@ const pageQuestions = (page: StageView) => {
   return {
     page_steps: { type: 'choice', instructions: 'How many page commands should run, counting each repetition ("forward three sections" is 3, "go to the options and highlight the recommendation" is 2)? Work for the coding agent (making, adding, changing or fixing anything), questions and talk are not page commands.', criteria: { '0': 'No page command.', '1': 'One.', '2': 'Two.', '3': 'Three.', '4': 'Four.', '5': 'Five or more.' } },
     page_step_1: step(1), page_step_2: step(2), page_step_3: step(3),
-    page_only: { type: 'noul', instructions: 'Is moving, showing or highlighting things on the page all the operator asks, with nothing for the coding agent to do, change, research or answer?', criteria: { true: 'Only page commands, with at most filler or thanks. Judge `utterance` alone, not `earlier`.', false: 'Also asks for work, a change, research, an answer or anything else beyond the page. When in doubt, false.' } },
+    page_only: { type: 'noul', instructions: 'Is moving, showing or highlighting things on the page all the operator asks, with nothing for the coding agent to do, change, research or answer?', criteria: { true: 'Only page commands, with at most filler or thanks; or to be walked through or shown what the page already says, which the companion presents itself. Judge `utterance` alone, not `earlier`.', false: 'Also asks for work, a change, research, an answer or anything else beyond the page. When in doubt, false.' } },
+    page_walk: { type: 'noul', instructions: 'Does the operator ask to be walked through the page, part after part: a presentation of several parts, not one part, a single move, a question or a change?', criteria: { true: 'A walkthrough or presentation of the page or of several of its parts: "walk me through it", "run me through tonight\'s slides", "present it to me", "go through the rest".', false: 'One part, a single move, a question, work for the coding agent, or anything else.' } },
     page_unhappy: { type: 'noul', instructions: 'Is the operator unhappy with what the page just did or can\'t do: it didn\'t move, went to the wrong place or page, highlighted the wrong thing, or can\'t show what they mean?', criteria: { true: 'A complaint or correction about the page\'s moves or what it shows ("the page isn\'t moving", "that\'s not where I asked", "you didn\'t highlight it", "no, the other page").', false: 'Anything else: a plain request to go somewhere or show something, a question, work for the coding agent, or a complaint about how the voice companion talks.' } },
     // The same question from the other side: independent answers, so a request is page-only only when both agree.
-    page_work: { type: 'noul', instructions: 'Besides moving, showing or highlighting things on the page, does the operator ask the coding agent to make, add, change, fix, explain or look into anything?', criteria: { true: 'Some work, change, research or answer is asked of the coding agent in `utterance`, even alongside a page command: changing how the page looks (bigger, bolder, colours, wording) is work.', false: 'Only page commands, or naming, describing, finding or pointing at a part of the page to go to, with at most filler or thanks. Judge `utterance` alone, not `earlier`.' } },
+    page_work: { type: 'noul', instructions: 'Besides moving, showing or highlighting things on the page, does the operator ask the coding agent to make, add, change, fix, explain or look into anything?', criteria: { true: 'Some work, change, research or answer is asked of the coding agent in `utterance`, even alongside a page command: changing how the page looks (bigger, bolder, colours, wording) is work.', false: 'Only page commands, or naming, describing, finding or pointing at a part of the page to go to, with at most filler or thanks; or to be walked through or shown what the page already says, which the companion presents itself. Judge `utterance` alone, not `earlier`.' } },
   };
 };
 /** The part a command goes to, by its name without a number before it ("stage 3: DNS lookup" is "dns lookup"). */
@@ -184,7 +187,7 @@ export class DelegationAudit {
       // One command repeated ("down three paragraphs"): the count says how often, past the three steps asked.
       if (steps[0] && steps[1] === steps[0] && raw[1] === raw[0] && relative(steps[0]) && count > chosen.length && chosen.every(id => id === steps[0])) chosen = Array(count).fill(steps[0]);
       // Work unanswered counts as asked, so the words still reach the agent: keeping them from it is the costly mistake.
-      judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: p('page_work', 1), other, count, unhappy: p('page_unhappy') };
+      judgment.page = { steps: other >= PAGE_OTHER ? [] : chosen, only: p('page_only'), work: p('page_work', 1), other, count, unhappy: p('page_unhappy'), walk: p('page_walk') };
       // Each step's likeliest commands, for tuning the page questions.
       const top = (name: string) => Object.entries(answers?.[name]?.probabilities ?? {}).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 3).map(([id, v]) => `${id} ${Number(v).toFixed(2)}`).join(', ');
       this.log({ type: 'page.judged', utterance: state.utterance, count: answers?.page_steps?.choice, step_1: top('page_step_1'), step_2: top('page_step_2'), step_3: top('page_step_3'), only: p('page_only'), work: answers?.page_work?.noul ?? null, other });

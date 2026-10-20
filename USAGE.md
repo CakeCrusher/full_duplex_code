@@ -174,6 +174,9 @@ for Claude. The voice presents, Claude produces, and fdc's voice tool sits betwe
 - **The voice moves it as it speaks.** Ask for a part by name ("go to the secure handshake"), for the next or previous
   one, or for a walkthrough: the voice says "let's look at" and the part's name, or "let's go to the next one" or
   "let's go back one", and the page goes there as the words are said.
+- **Walkthroughs are paced.** Ask to be walked through ("walk me through tonight's slides"): the voice presents the part on
+  screen, and each time it finishes and goes quiet, fdc moves the page on and has it present the next one, until the
+  last part or until you speak.
 - **The voice tool moves it on request.** "Next", "go back", "the DNS lookup, then the response", "highlight the
   explanation under the DNS lookup", "go back to the diagram" (another page Claude opened): the voice tool runs the
   page's commands in about a second and tells the voice what is on screen. Only what the page can't do goes to Claude.

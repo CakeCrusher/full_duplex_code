@@ -99,8 +99,8 @@ export class VoiceSessions {
   }
   /** Whether this page's microphone is the one voice listens to: the page running voice, or the one on Standby. */
   listensTo(page: Page) { return page === this.page || page === this.standby?.page; }
-  /** When the microphone last heard the operator's voice. */
-  voiceAt = -Infinity;
+  /** When the microphone last heard the operator's voice, and when GPT Live's audio last played. */
+  voiceAt = -Infinity; liveSpeechAt = 0;
   /**
    * The listening page's microphone and speaker levels (about 0.1 s each), priced: the operator's voice and GPT Live's.
    * A voice holds for more than a moment: a knock rings through one window, a word through several. On the operator's
@@ -110,7 +110,7 @@ export class VoiceSessions {
     const voice = operatorVoice(level), held = voice && level.at - this.voiceAt < 250;
     if (voice) this.voiceAt = level.at;
     if (held) this.activity.add('operator');
-    if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS) this.activity.add('live');
+    if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS) { this.activity.add('live'); this.liveSpeechAt = level.at; }
   }
   /**
    * Every second: voice that has been quiet for the Standby window goes on Standby, and voice on

@@ -120,3 +120,32 @@ test("GPT Live is briefed on the page once it can be read: a new tab's blank pag
   assert.ok(lives[0].appended.some(([kind, text]) => kind === 'instructions' && /The page "Deck" is open beside you/.test(text)), 'briefed on the second read');
   assert.ok(reads >= 2);
 });
+
+test('a walkthrough asked for: the first part shows, and each time the voice finishes one and goes quiet, the page moves on; the operator speaking ends it', async t => {
+  const { harness, page, until } = await import('./live-fake.ts');
+  const { h, lives } = await harness(t);
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  let slide = 3; const runs: string[][] = [];
+  const deck = (): StageView => ({ ...view, where: `Slide ${slide} of 5`, commands: [{ id: 'page_next', say: 'Go to the next slide' }, { id: 'page_slide_3', say: 'Go to slide 3', name: 'Margins' }] });
+  h.stage = { describe: async () => deck(), run: async (ids: string[]) => { runs.push(ids); if (ids[0] === 'page_next' && slide < 5) slide++; return { done: [], onScreen: `Slide ${slide} of 5` }; }, follow: async () => null, view: deck(), observe() {}, close() {} } as any;
+  h.handOffAudit = { judge: async () => ({ needsAgent: .4, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: { steps: ['page_slide_3'], only: .8, work: .3, count: 1, walk: .9 } }) } as any;
+  h.presenter.walkQuietMs = 50;
+  const gated = await h.sessionSwitch.gate('walk me through the rest', 'r1');
+  assert.match(gated.handled!, /Nothing was sent to Claude Code: the operator asked to be walked through the page.*Slide 3 of 5.*Present this part/);
+  assert.deepEqual(runs, [['page_slide_3']]);
+  const commentary = () => lives[0].appended.filter(([kind, text]) => kind === 'commentary' && /The page moved on/.test(text)).map(([, text]) => text);
+  await new Promise(resolve => setTimeout(resolve, 700));
+  assert.deepEqual(runs, [['page_slide_3']], 'nothing moves before the voice has presented the part');
+  h.presenter.heard('Margins are up three points. ');
+  await until(() => commentary().length === 1);
+  assert.match(commentary()[0], /Slide 4 of 5.*Present it in a few sentences/);
+  h.presenter.heard('Costs fell. ');
+  await until(() => commentary().length === 2);
+  h.presenter.heard('That is the last one. ');
+  await until(() => !h.presenter.walking);
+  assert.equal(slide, 5); assert.equal(commentary().length, 2, 'the last part ends it: a step that goes nowhere is not presented');
+  // Asked again, and the operator speaks up meanwhile: it stops.
+  slide = 3; await h.sessionSwitch.gate('walk me through the rest', 'r2');
+  h.voiceSessions.mediator!.history.lastInputAt = Date.now() + 10000;
+  await until(() => !h.presenter.walking);
+});

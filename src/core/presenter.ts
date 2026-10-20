@@ -4,11 +4,11 @@
 // fits (fast-action.ts). The page itself, and how fdc reaches it, is the stage (stage.ts).
 import type { Harness } from './bridge.ts';
 import { CueMatcher, unglue } from './speech-cues.ts';
-import { StageError, StageNothing, type StageView } from './stage.ts';
+import { Stage, StageError, StageNothing, type StageView } from './stage.ts';
 import { FastAction, type PageAction } from './fast-action.ts';
-import { PAGE_ONLY, PAGE_OTHER, PAGE_UNHAPPY, PAGE_WORK, type PageJudgment } from './delegation-audit.ts';
+import { PAGE_ONLY, PAGE_OTHER, PAGE_UNHAPPY, PAGE_WALK, PAGE_WORK, WALK_WORK, type PageJudgment } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
-import { controllerNote, cueHandled, cueMovedNote, cueShown, improvisedFailedNote, lookingNote, oneOffDone, oneOffNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote } from './prompts.ts';
+import { controllerNote, cueHandled, cueMovedNote, cueShown, improvisedFailedNote, lookingNote, oneOffDone, oneOffNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, walkNext, walkStarted } from './prompts.ts';
 
 export class Presenter {
   bridge: Harness;
@@ -20,10 +20,18 @@ export class Presenter {
   cuedInSentence = false; judging = false;
   /** One-off actions on the stage when no page command fits. */
   fastAction?: FastAction;
+  /**
+   * A walkthrough the operator asked for, paced by fdc: GPT Live presents one part per turn and stops (it rarely goes on by
+   * itself), and when it has finished and been quiet a moment, the page moves on and it is told to present the next part.
+   * It ends when the operator speaks, at the last part, or when voice ends.
+   */
+  walking?: { startedAt: number; movedAt: number; parts: number; timer: ReturnType<typeof setInterval> };
+  pacing = false; spokeAt = 0; walkQuietMs = 2500;
   constructor(bridge: Harness, apiKey?: string) { this.bridge = bridge; if (apiKey && apiKey !== 'unused') this.fastAction = new FastAction({ apiKey }); }
   /** GPT Live said more: a cue in it moves the page now, and GPT Live quietly hears what is on screen. */
   heard(delta: string) {
     const bridge = this.bridge;
+    this.spokeAt = Date.now();
     this.sentence = (this.sentence + delta).slice(-600);
     for (const cue of this.speechCues.hear(delta)) {
       this.presentedAt = Date.now(); this.sentence = ''; this.cuedInSentence = true;
@@ -73,8 +81,51 @@ export class Presenter {
    * With work in the request too, it still goes to the agent, noting the page part is done.
    */
   async request(page: PageJudgment, said: string, needsAgent: number | null, cued?: boolean): Promise<Gated | undefined> {
+    if ((page.walk ?? 0) >= PAGE_WALK && (page.work ?? 1) < WALK_WORK) return this.walk(page, needsAgent, cued);
     if (page.steps.length) return cued ? this.cued(page, needsAgent) : this.present(page, needsAgent);
     if ((page.other ?? 0) >= PAGE_OTHER && this.fastAction) return cued ? this.cued(page, needsAgent) : this.improvise(said, needsAgent, !(page.only >= PAGE_ONLY && (page.work ?? 1) < PAGE_WORK));
+  }
+  /** A walkthrough asked for: its first part shows (unless the voice already moved there), and fdc paces the rest. */
+  async walk({ steps }: PageJudgment, needsAgent: number | null, cued?: boolean): Promise<Gated> {
+    const bridge = this.bridge;
+    let onScreen = '';
+    if (steps.length && !cued) onScreen = await bridge.stage.run(steps.slice(0, 1)).then(ran => ran.onScreen, () => '');
+    onScreen ||= (await bridge.stage.describe(0).catch(() => undefined))?.where ?? '';
+    this.stopWalking();
+    const now = Date.now(), timer = setInterval(() => void this.pace(), 500);
+    timer.unref?.();
+    this.walking = { startedAt: now, movedAt: now, parts: 0, timer };
+    this.presentedAt = now;
+    bridge.log({ type: 'stage.walk', state: 'started' });
+    return { needsAgent, handled: walkStarted(bridge.agent, onScreen), page: true };
+  }
+  /** While walking: once the voice has presented the part on screen and gone quiet, the next part, unless the operator spoke. */
+  async pace(now = Date.now()) {
+    const walking = this.walking, bridge = this.bridge;
+    if (!walking || this.pacing) return;
+    const history = bridge.mediator?.history;
+    // Their own words just after asking are the request itself; anything later is the operator leading again.
+    if (!bridge.mediator || (history?.lastInputAt ?? 0) > Math.max(walking.movedAt, walking.startedAt + 4000) || walking.parts >= 40) return this.stopWalking('the operator spoke');
+    const spoke = Math.max(this.spokeAt, bridge.voiceSessions?.liveSpeechAt ?? 0);
+    if (spoke <= walking.movedAt || now - spoke < this.walkQuietMs) return;
+    this.pacing = true;
+    try {
+      const view = await bridge.stage.describe(0), next = view && Stage.cues(view).find(c => c.step && c.label.startsWith('next'))?.run;
+      if (!view || !next) return this.stopWalking('no next part');
+      const { onScreen } = await bridge.stage.run([next]);
+      // A step that went nowhere ("Already on the last slide") ends it.
+      if ((await bridge.stage.describe(0))?.where === view.where) return this.stopWalking('the last part');
+      walking.movedAt = this.presentedAt = Date.now(); walking.parts++;
+      bridge.log({ type: 'stage.walk', state: 'next', run: next });
+      bridge.publish({ type: 'stage', done: ['The next part'], onScreen });
+      bridge.mediator?.context.add('commentary', walkNext(onScreen));
+    } catch (error) { this.stopWalking(error instanceof StageNothing ? 'the last part' : (error as Error).message); }
+    finally { this.pacing = false; }
+  }
+  stopWalking(reason?: string) {
+    if (!this.walking) return;
+    clearInterval(this.walking.timer); this.walking = undefined;
+    if (reason) this.bridge.log({ type: 'stage.walk', state: 'stopped', reason });
   }
   /** For the agent, with a request the page didn't do: its controls fell short (the operator is unhappy with it), or where the user was looking. */
   noteFor(view: StageView, page?: PageJudgment) { return (page?.unhappy ?? 0) >= PAGE_UNHAPPY ? controllerNote(view) : lookingNote(view); }

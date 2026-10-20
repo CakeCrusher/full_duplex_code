@@ -33,6 +33,7 @@ Delegate to the backend when:
 - The operator is unhappy with what the page did or can't do (it didn't move, went to the wrong place, can't show what they mean): pass it on; ${name} can improve the page's controls.
 Do not delegate to the backend when:
 - You can answer from observed work, the conversation, the page, or what you know (how things work in general): answer it yourself.
+- The operator asks you to walk them through, present or explain what the page shows: present it yourself right away, part by part, moving the page as you go; never pass it on or wait for ${name}.
 - The operator is directing your conversation, or you need clarification.
 Existing terminal prompts are already submitted. Never resend them. Confirm successful delivery briefly when the bridge confirms it; do not claim delivery before that confirmation or mistake it for completed work.${canSteer ? '' : ` Delivered requests wait until ${name}'s current turn ends.`}`;
 }
@@ -120,9 +121,9 @@ export const handledNote = (what: keyof typeof HANDLED) =>
 // Without a command's guidance for Jev ("(only when they say go back without naming a part)").
 const steps = (done: readonly { say: string }[]) => done.map(d => d.say.replace(/\s*\([^()]*\)\s*$/, '').replace(/\.$/, '')).join(', then ');
 export const pageHandled = ({ profile: { product } }: Agent, done: readonly { say: string }[], onScreen: string) =>
-  `Nothing was sent to ${product}: the voice tool did it on the page (${steps(done)}). On screen now: ${onScreen.slice(0, 700)} Tell the operator in a few words what they are looking at, or just carry on if they are stepping through; don't describe the move.`;
+  `Nothing was sent to ${product}: the voice tool did it on the page (${steps(done)}). On screen now: ${onScreen.slice(0, 700)} Tell the operator in a few words what they are looking at, or just carry on if they are stepping through; don't describe the move. If they asked you to walk them through or present the page, go on now, part by part, yourself.`;
 export const pageAlongside = ({ profile: { name } }: Agent, done: readonly { say: string }[], onScreen: string) =>
-  `The voice tool already did the page part (${steps(done)}); on screen now: ${onScreen.slice(0, 500)} The rest goes to ${name}.`;
+  `The voice tool already did the page part (${steps(done)}); on screen now: ${onScreen.slice(0, 500)} The rest goes to ${name}; if they asked you to walk them through or present the page, do that yourself now.`;
 export const pageFailed = ({ profile: { name } }: Agent, error: string, done: readonly { say: string }[] = []) =>
   `${done.length ? `The page did part of it (${steps(done)}), then` : 'The page'} couldn't go on (${error.slice(0, 200)}). The request went to ${name}, who made the page, to fix its controls and do it.`;
 // Speech cues (speech-cues.ts): GPT Live moves the page with its own words.
@@ -132,6 +133,11 @@ export const stageOutline = (title: string, outline: string) => `What the page "
 export const cueNoDelegation = 'Nothing to delegate: the page moved when you said the part\'s name. Say what is there without "one moment", then stop unless the operator asked you to walk them through.';
 export const cueMovedNote = 'The voice assistant moved the page in the browser as it answered some of this; don\'t move or open pages for that again, but do anything else it asks.';
 export const cueHandled = ({ profile: { product } }: Agent) => `Nothing was sent to ${product}: you already moved the page as you spoke, which was all the operator asked.`;
+// A walkthrough fdc paces (presenter.ts): the voice presents one part per turn, and the page moves on when it finishes.
+export const walkStarted = ({ profile: { product } }: Agent, onScreen: string) =>
+  `Nothing was sent to ${product}: the operator asked to be walked through the page, and the voice tool paces it. On screen now: ${onScreen.slice(0, 700)} Present this part in a few sentences, then stop: when you finish, the page moves on to the next part and you are told what to present next. Don't ask whether to go on.`;
+export const walkNext = (onScreen: string) =>
+  `The page moved on to the next part as you finished; on screen now: ${onScreen.slice(0, 700)} Present it in a few sentences, then stop; don't ask whether to go on.`;
 export const cueShown = (onScreen: string) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}`;
 export const pageNothing = ({ profile: { name } }: Agent, failed: { say: string }) =>
   `The page had nothing to do for that (${failed.say.replace(/\.$/, '')}). The request went to ${name}.`;

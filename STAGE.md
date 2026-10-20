@@ -87,5 +87,8 @@ Rules that make it work well:
   tool then sends you the request with the error, so you can fix the controller.
 - **Grow it.** When the voice tool tells you the user wanted something the controls couldn't do, add a command (or
   a name, an annotation) for it in the controller's file, so the voice can do it next time.
+- **Change the page, change its controller.** Every edit that adds, removes, renames or reorders parts
+  updates the controller's file in the same change: new parts get commands and names, removed ones lose
+  theirs. A page whose controller lags behind it is the commonest reason the voice can't move it.
 - **Keep it current.** `commands()` is read again before each use, so it can follow the page's
   state (for example, only the slides that exist).
