@@ -138,10 +138,11 @@ export class Presenter {
       history.cueLatest(cueMovedNote);
       this.movedForOperatorAt = Date.now();
       if (walk) { bridge.mediator?.context.add('commentary', walkStarted(bridge.agent, await this.startWalk(page.steps))); return true; }
-      const { done, onScreen } = await bridge.stage.run(page.steps);
+      const moving = Date.now(), { done, onScreen } = await bridge.stage.run(page.steps);
       this.presentedAt = Date.now();
       bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });
-      bridge.mediator?.context.add('thinking', operatorMoved(onScreen), null);
+      // Already answering before the page moved, GPT Live can't have known what it shows: it is told to say it.
+      bridge.mediator?.context.add(this.spokeAt >= moving ? 'commentary' : 'thinking', operatorMoved(onScreen), null);
       return true;
     } catch (error) { bridge.log({ type: 'stage.turn_failed', said: said.slice(-200), message: (error as Error).message }); return false; }
   }

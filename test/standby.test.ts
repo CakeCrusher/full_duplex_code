@@ -57,7 +57,7 @@ test('speech wakes it, priced like everything else; the new session is seeded, n
   assert.equal(lives[1].options.fork, undefined, 'never a slow fork');
   assert.ok(lives[1].options.input.some((item: any) => item.role === 'user' && /dark mode/.test(item.content[0].text)), 'seeded with the conversation');
   assert.equal(lives[1].greeting, undefined, 'no greeting');
-  await until(() => lives[1].appended.some(([kind, text]) => kind === 'thinking' && /The conversation continues.*Don't greet.*The operator has started speaking/s.test(text)));
+  await until(() => lives[1].appended.some(([kind, text]) => kind === 'thinking' && /The conversation continues.*Don't greet.*Sound from the operator woke it.*If no words of theirs arrive, say nothing/s.test(text)));
   assert.ok(!lives[1].appended.some(([kind]) => kind === 'commentary'), 'the operator speaking is the cue: nothing else is said first');
 });
 
