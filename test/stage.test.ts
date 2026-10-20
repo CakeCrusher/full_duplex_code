@@ -2,6 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
 import { Stage, StageNothing, type StageView } from '../src/core/stage.ts';
@@ -212,4 +214,17 @@ test('a page controller returning anything is kept to well-formed commands', asy
   const view = (await stage.describe(0))!;
   assert.deepEqual(view.commands, [{ id: 'slide_3', say: 'Go to slide 3', name: '3' }, { id: 'ok', say: 'Fine' }]);
   assert.equal(view.about, null); assert.equal((view as any).outline, undefined); assert.equal(view.title, '7');
+});
+
+test('the page on stage is remembered across restarts of fdc, and forgotten once its tab is gone', async () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'fd-stage-')), 'stage', 'x.json');
+  const first = new Stage({ log: () => {}, browser: { evaluate: async () => ({}), close() {} } as any, file });
+  first.observe(posted('mcp__open-claude-in-chrome-hybrid__navigate', { url: 'http://localhost/deck.html', tabId: 41 }));
+  const logged: any[] = [];
+  const again = new Stage({ log: event => logged.push(event), browser: { evaluate: async () => { throw new Error('Tab 41 is not in the MCP group.'); }, close() {} } as any, file });
+  assert.equal(again.tabId, 41, 'a restart picks the page up again');
+  assert.equal(logged[0].type, 'stage.restored');
+  await again.describe(0).catch(() => {});
+  assert.equal(again.tabId, undefined, 'its tab closed meanwhile: no stage');
+  assert.equal(new Stage({ log: () => {}, file }).tabId, undefined, 'and the next start knows it');
 });

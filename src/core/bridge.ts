@@ -39,6 +39,8 @@ export interface HarnessOptions {
   agentArgs?: string[];
   /** Ask OpenAI to store voice sessions so that Resume voice can fork them (default true; --no-store turns it off). */
   store?: boolean;
+  /** Where the page being presented is remembered, so a restart of fdc picks it up again (stage.ts). */
+  stageFile?: string;
 }
 
 // The bridge: one local process between the page, GPT Live and the agent.
@@ -76,7 +78,7 @@ export class Harness {
   /** Shows the operator the stage in step with GPT Live: speech cues, the following ring, the gate's page requests. */
   presenter: Presenter;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
-  constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides, jevTuning = false, store = true }: HarnessOptions) {
+  constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides, jevTuning = false, store = true, stageFile }: HarnessOptions) {
     this.agent = agent; this.root = root; this.runDir = runDir; this.cwd = cwd; this.sessionId = sessionId; this.apiKey = apiKey;
     this.voice = voice; this.observation = observation; this.port = port; this.portFallback = portFallback;
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
@@ -93,7 +95,7 @@ export class Harness {
     if (jevKey && jevTuning) this.tuner = new JevTuner({ apiKey: jevKey, log: this.log });
     if (jevKey) this.handOffAudit = new DelegationAudit({ apiKey: jevKey, file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log });
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
-    this.stage = new Stage({ log: this.log, onChange: () => void this.voiceSessions?.briefStage() });
+    this.stage = new Stage({ log: this.log, file: stageFile, onChange: () => void this.voiceSessions?.briefStage() });
     this.presenter = new Presenter(this, apiKey);
     this.sessionSwitch = new SessionSwitch(this);
     this.voiceSessions = new VoiceSessions(this, { store });

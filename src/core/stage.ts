@@ -2,6 +2,7 @@
 // stage script there (stage-page.js) through its own connection to Open Claude in Chrome, so
 // the gate can move the page, highlight and read it without the agent.
 import fs from 'node:fs';
+import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { Observation } from './adapter.ts';
 import { Browser } from './browser.ts';
@@ -36,7 +37,20 @@ export class Stage {
   pages = new Map<number, { title: string; url: string; about: string | null }>();
   /** The stage moved to another tab. */
   onChange?: () => void;
-  constructor({ log, browser = new Browser(), onChange }: { log: (event: Record<string, unknown>) => void; browser?: Browser; onChange?: () => void }) { this.log = log; this.browser = browser; this.onChange = onChange; }
+  /** Where the tab on stage is remembered across restarts of fdc (a day at most); describe() drops it if it is gone. */
+  file?: string;
+  constructor({ log, browser = new Browser(), onChange, file }: { log: (event: Record<string, unknown>) => void; browser?: Browser; onChange?: () => void; file?: string }) {
+    this.log = log; this.browser = browser; this.onChange = onChange; this.file = file;
+    try {
+      const saved = file ? JSON.parse(fs.readFileSync(file, 'utf8')) : undefined;
+      if (Number.isInteger(saved?.tabId) && saved.tabId > 0 && Date.now() - saved.at < 86400000) { this.tabId = saved.tabId; log({ type: 'stage.restored', tabId: saved.tabId, url: saved.url }); }
+    } catch {}
+  }
+  /** Remembers the tab on stage (or that there is none) for the next start of fdc. */
+  remember() {
+    if (!this.file) return;
+    try { fs.mkdirSync(path.dirname(this.file), { recursive: true }); fs.writeFileSync(this.file, JSON.stringify({ tabId: this.tabId ?? null, url: this.view?.url ?? this.pages.get(this.tabId ?? 0)?.url ?? null, at: Date.now() })); } catch {}
+  }
   /**
    * The agent's own browser tool calls say which tab it showed the operator. At the end of each of its turns the page is
    * read again, since the agent may have rebuilt it however it reloaded it: the voice is briefed anew if its parts changed.
@@ -50,7 +64,7 @@ export class Stage {
     const tabId = Number(created ?? named);
     if (!Number.isInteger(tabId) || tabId <= 0) return;
     if (tabId !== this.tabId) this.log({ type: 'stage.tab', tabId, by: raw.tool_name });
-    this.tabId = tabId; this.view = undefined;
+    this.tabId = tabId; this.view = undefined; this.remember();
     this.onChange?.();
   }
   /** What the stage shows and the commands it offers; undefined without a stage. */
@@ -63,7 +77,7 @@ export class Stage {
     try { view = await this.browser.evaluate<Omit<StageView, 'tabId'>>(tabId, `${SCRIPT}\n;window.__fdcStage.describe()`, 3000); }
     catch (error) {
       // The tab was closed (or left the shared group): there is no stage until the agent shows another page.
-      if (/not in the MCP group|No tab with id|tab.*(closed|not found)/i.test((error as Error).message) && this.tabId === tabId) { this.log({ type: 'stage.gone', tabId }); this.tabId = undefined; this.view = undefined; this.pages.delete(tabId); }
+      if (/not in the MCP group|No tab with id|tab.*(closed|not found)/i.test((error as Error).message) && this.tabId === tabId) { this.log({ type: 'stage.gone', tabId }); this.tabId = undefined; this.view = undefined; this.pages.delete(tabId); this.remember(); }
       throw error;
     }
     // A page's own controller can return anything: keep only well-formed commands.
@@ -102,7 +116,7 @@ export class Stage {
     try { await this.browser.call('set_tab_focus', { tabId }); }
     catch (error) { this.pages.delete(tabId); throw new StageError(`That page's tab is gone (${(error as Error).message.slice(0, 120)})`, before.done, before.onScreen, step); }
     this.log({ type: 'stage.tab', tabId, by: 'voice' });
-    this.tabId = tabId; this.view = undefined; this.onChange?.();
+    this.tabId = tabId; this.view = undefined; this.remember(); this.onChange?.();
     const rest = at + 1 < ids.length ? await this.run(ids.slice(at + 1)) : undefined;
     const view = rest ? undefined : await this.describe(0).catch(() => undefined);
     return { done: [...before.done, step, ...rest?.done ?? []], onScreen: rest?.onScreen ?? `The page "${view?.title ?? page?.title}" is in front${view?.where ? `, at: ${view.where}` : ''}.` };
