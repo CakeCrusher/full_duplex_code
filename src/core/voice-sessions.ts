@@ -434,7 +434,7 @@ export class VoiceSessions {
     if (!view) return false;
     if (live.state !== 'active') return;
     // Every part the voice can name, up to the stage script's own cap on a page's commands (80).
-    const cues = Stage.cues(view), names = cues.filter(c => c.listed).map(c => c.label).slice(0, 80), steps = cues.some(c => /^(next|previous) /.test(c.label));
+    const cues = Stage.cues(view), names = cues.filter(c => c.listed).map(c => c.label).slice(0, 80), steps = cues.some(c => c.step);
     this.bridge.presenter.speechCues.set(cues);
     // A reload (often with a new query to bust the cache) is the same page unless its parts changed.
     const others = [...this.bridge.stage.pages].filter(([tabId]) => tabId !== view.tabId).map(([, page]) => page.title);
@@ -442,8 +442,9 @@ export class VoiceSessions {
     if (run.briefed === signature) return;
     run.briefed = signature;
     this.bridge.log({ type: 'stage.briefed', url: view.url, names, steps });
-    await live.append('instructions', stageBrief(view.title, names, steps, others, view.where)).catch(error => this.bridge.log({ type: 'stage.error', message: (error as Error).message }));
-    if (view.outline) run.mediator.context.add('thinking', stageOutline(view.title, view.outline), null);
+    // The outline goes with the brief, as instructions: sent as news, a woken voice read it out ("What the page says…")
+    // and started the page over.
+    await live.append('instructions', stageBrief(view.title, names, steps, others, view.where) + (view.outline ? `\n\n${stageOutline(view.title, view.outline)}` : '')).catch(error => this.bridge.log({ type: 'stage.error', message: (error as Error).message }));
   }
   liveEvent(run: Run, event: any) {
     const { live, page } = run;

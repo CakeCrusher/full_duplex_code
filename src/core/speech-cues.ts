@@ -2,8 +2,8 @@
 // turns to that part, or "let's go to the next one" and "let's go back one"; the moment those words
 // appear in its transcript, the stage runs the matching command, so the page keeps time with speech.
 
-/** A cue: the words that run a stage command, after a turning phrase. Listed: a name GPT Live is told. */
-export interface SpeechCue { run: string; label: string; words: string[]; listed?: boolean }
+/** A cue: the words that run a stage command, after a turning phrase. Listed: a name GPT Live is told; step: next or back. */
+export interface SpeechCue { run: string; label: string; words: string[]; listed?: boolean; step?: boolean }
 
 // Numbers said as words match names written with digits ("stage two" is "stage 2").
 const NUMBERS: Record<string, string> = { one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12' };
@@ -21,6 +21,10 @@ const TURNS = [['look', 'at'], ['go', 'to'], ['turn', 'to'], ['move', 'to'], ['j
 
 // A part's number said before its name ("let's look at stage one, the browser reads the address").
 const NUMBERING = /^(stage|step|slide|box|number|\d+)$/;
+// Presenting, GPT Live opens a part with its name ("'Kay, page twenty five: Moving the page by voice."): words that may
+// come before it in its sentence. On Oct 19 eight sentences opened with a name of two words or more, all eight
+// presenting that part (most of them while the page stayed put, waiting for "let's look at").
+const OPENERS = new Set(['okay', 'kay', 'ok', 'so', 'sure', 'alright', 'all', 'right', 'now', 'and', 'then', 'next', 'here', 'heres', 'first', 'finally', 'well', 'yes', 'yeah', 'great', 'um', 'uh', 'oh', 'page', 'slide', 'stage', 'part', 'step', 'number', 'twenty', 'thirty', 'forty', ...LEADING]);
 
 export class CueMatcher {
   cues: SpeechCue[] = [];
@@ -34,7 +38,11 @@ export class CueMatcher {
     this.lastAt = at; this.raw += delta;
     const words = normalize(this.raw).split(' ').filter(Boolean);
     // The last word may still be growing ("opt" then "ions") unless the text has moved past it.
-    const complete = /[\s.,!?;:)"']$/.test(this.raw) ? words.length : words.length - 1;
+    const complete = /[\s.,!?;:)"'”’]$/.test(this.raw) ? words.length : words.length - 1;
+    // Where each sentence starts, by word: a name may open one.
+    const starts = new Set([0]); let count = 0;
+    for (const sentence of unglue(this.raw).split(/(?<=[.!?…])["”’)]?\s+/)) { starts.add(count); count += normalize(sentence).split(' ').filter(Boolean).length; }
+    const opens = (start: number) => { let at = start; while (at > 0 && !starts.has(at) && (OPENERS.has(words[at - 1]) || /^\d+$/.test(words[at - 1]))) at--; return starts.has(at); };
     const found: { cue: SpeechCue; end: number }[] = [];
     for (const cue of this.cues) {
       for (let start = 0; start + cue.words.length <= complete; start++) {
@@ -47,7 +55,9 @@ export class CueMatcher {
         // Saying where the operator now is ("you're now at the request", "now we're on the request") moves the page
         // there too, so it is true.
         const now = ['at', 'on'].includes(before.at(-1)!) && (before.at(-2) === 'now' ? ['youre', 'were'].includes(before.at(-3)!) : before.at(-3) === 'now' && ['youre', 'were'].includes(before.at(-2)!));
-        if (!now) {
+        // A name of two words or more opening a sentence: GPT Live presenting that part.
+        const opening = !cue.step && cue.words.length >= 2 && opens(start);
+        if (!now && !opening) {
           const turn = TURNS.find(t => t.every((w, i) => before[before.length - t.length + i] === w));
           if (!turn) continue;
           const lead = before.slice(Math.max(0, before.length - turn.length - 3), before.length - turn.length);

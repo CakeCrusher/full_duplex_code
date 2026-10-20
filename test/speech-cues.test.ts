@@ -46,6 +46,24 @@ test('a name moves the page only after a turning phrase, once, as soon as its la
   assert.deepEqual(spoken(m, [' Now', ' the', ' sessions', ' parser', ' is', ' fixed.']), [], 'narrating work moves nothing');
 });
 
+test("a name of two words or more opening the voice's sentence moves the page: it is presenting that part", () => {
+  const deck: StageView = { ...view, commands: [
+    { id: 'page_slide_24', say: 'Go to slide 24', name: 'While you were out' },
+    { id: 'page_slide_25', say: 'Go to slide 25', name: 'Moving the page by voice' },
+    { id: 'page_slide_17', say: 'Go to slide 17', name: 'The ring' },
+    { id: 'page_slide_18', say: 'Go to slide 18', name: 'Highlighting: after a move' },
+    { id: 'page_next', say: 'Go to the next slide' },
+  ] };
+  const m = new CueMatcher(); m.set(Stage.cues(deck));
+  // As GPT Live said them on Oct 19, while the page stayed put.
+  assert.deepEqual(spoken(m, [" It's", ' a', ' quick', ' summary.', " 'Kay,", ' page', ' twenty', ' five:', ' “Moving', ' the', ' page', ' by', ' voice.”']), ['page_slide_25']);
+  assert.deepEqual(spoken(m, [' Following', ' that.', ' After', ' a', ' move,', ' the', ' page', ' scrolls', ' there.']), ['page_slide_18'], "a titled name's title opening a sentence");
+  assert.deepEqual(spoken(m, [' The', ' controller', ' is', ' in', ' its', ' own', ' file.', ' Next', ' is', ' “Moving', ' the', ' page', ' by', ' voice.”']), [], '"next is" previews it: no move');
+  assert.deepEqual(spoken(m, [' Before', ' the', ' rename,', ' it', ' was', ' given', ' “highlighting', ' after', ' a', ' move.”']), [], 'a name inside a sentence: no move');
+  assert.deepEqual(spoken(m, [' Okay.', ' The', ' ring', ' glided', ' down,', ' then', ' glowed.']), [], 'a one-word name opening a sentence is too common to move');
+  assert.deepEqual(spoken(m, [' Next', ' one.', ' Then', ' we', ' stop.']), [], 'next or back opening a sentence moves nothing');
+});
+
 test('a new response starts fresh after a pause', () => {
   const m = new CueMatcher(); m.set(Stage.cues(view));
   assert.deepEqual(m.hear(" Let's look at sessions.", 1000).map(c => c.run), ['goto_sessions']);

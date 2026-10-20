@@ -124,10 +124,10 @@ export class Stage {
     const find = (test: RegExp, ...fallbacks: string[]) => view.commands.find(c => c.id.startsWith('page_') && test.test(c.id))?.id ?? fallbacks.find(id => view.commands.some(c => c.id === id));
     const next = find(/(^|_)(next|forward)(_|$)/, 'next_slide', 'next_section'), previous = find(/(^|_)(previous|prev|back)(_|$)/, 'previous_slide', 'previous_section');
     for (const noun of ['one', 'slide', 'part', 'section', 'stage']) {
-      if (next) cues.push({ run: next, label: `next ${noun}`, words: cueWords(`next ${noun}`) });
-      if (previous) cues.push({ run: previous, label: `previous ${noun}`, words: cueWords(`previous ${noun}`) });
+      if (next) cues.push({ run: next, label: `next ${noun}`, words: cueWords(`next ${noun}`), step: true });
+      if (previous) cues.push({ run: previous, label: `previous ${noun}`, words: cueWords(`previous ${noun}`), step: true });
     }
-    if (previous) cues.push({ run: previous, label: 'back one', words: cueWords('back one') });
+    if (previous) cues.push({ run: previous, label: 'back one', words: cueWords('back one'), step: true });
     return cues;
   }
   /** What the viewer can act on, numbered, and what is on screen: for a one-off action. */
