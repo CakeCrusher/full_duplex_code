@@ -17,12 +17,12 @@ const view: StageView = { tabId: 1, title: 'Deck', url: 'http://localhost/d.html
     { id: 'page_slide_3', say: 'Go to slide 3', name: 'Highlighting: after a move' },
   ] };
 
-test("cues: the page's own names first, then section and annotation names, a titled name's title, and next and back", () => {
+test("cues: the page's own names first, then section and annotation names, and a titled name's title", () => {
   const cues = Stage.cues(view);
   assert.deepEqual(cues.filter(c => c.listed).map(c => `${c.run}:${c.words.join(' ')}`), [
     'page_slide_2:margins', 'page_slide_3:highlighting after a move', 'goto_sessions:sessions', 'goto_system_map:system map', 'goto_map:map', 'show_my_recommendation:recommendation'], 'the names the voice is told');
-  assert.deepEqual(cues.filter(c => !c.listed && !/^(next|previous|back) /.test(c.label)).map(c => `${c.run}:${c.label}`), ['page_slide_3:after a move'], 'the title alone, not told');
-  assert.ok(cues.some(c => c.run === 'page_next_slide' && c.label === 'next one') && cues.some(c => c.run === 'page_previous_slide' && c.label === 'back one'), "next and back take the page's own steps");
+  assert.deepEqual(cues.filter(c => !c.listed).map(c => `${c.run}:${c.label}`), ['page_slide_3:after a move'], 'the title alone, not told');
+  assert.equal(Stage.next(view), 'page_next_slide', "the page's own next step, for pacing a walkthrough");
   assert.deepEqual(cueWords("The Options!"), ['options']);
 });
 
@@ -35,35 +35,14 @@ test('a name moves the page only after a turning phrase, once, as soon as its la
   assert.deepEqual(spoken(m, [' and', ' the', ' sessions', ' again.']), [], 'the same cue does not fire again for later words');
   assert.deepEqual(spoken(m, [" Let's", ' go', ' back', ' to', ' the', ' system', ' map.']), ['goto_system_map'], 'the longer name wins');
   assert.deepEqual(spoken(m, [' Claude', ' will', ' look', ' at', ' the', ' sessions', ' code', ' next.']), [], "relaying the agent's work moves nothing");
-  assert.deepEqual(spoken(m, [" Let's", ' go', ' to', ' the', ' next', ' slide.']), ['page_next_slide'], "the next slide, after let's go to");
-  assert.deepEqual(spoken(m, [' Sure,', " let's", ' go', ' back', ' one.']), ['page_previous_slide'], 'back one');
+  assert.deepEqual(spoken(m, [" Let's", ' go', ' to', ' the', ' next', ' slide.']), [], "next and back are the operator's to ask: the voice tool takes them from their words");
   assert.deepEqual(spoken(m, [" Let's", ' look', ' at', ' after', ' a', ' move.']), ['page_slide_3'], "a titled name's title alone");
   assert.deepEqual(spoken(m, [' Okay,', ' now', " we're", ' on', ' the', ' system', ' map.']), ['goto_system_map'], "now we're on");
-  assert.deepEqual(spoken(m, [" Let's", ' figure', ' out', ' the', ' next', ' one.']), [], 'the next one without a turn to it moves nothing');
+  assert.deepEqual(spoken(m, [' In', ' your', ' words,', " “let's", ' look', ' at', ' the', ' system', ' map”.']), [], 'quoting the page or the operator moves nothing');
   assert.deepEqual(spoken(m, [' Claude', ' is', ' adding', ' a', ' next', ' slide', ' button.']), [], 'talking about a next slide moves nothing');
   assert.deepEqual(spoken(m, [" Let's", ' look', ' at', ' your', ' recommendation', ' here.']), ['show_my_recommendation'], 'my and your are the same name');
   assert.deepEqual(spoken(m, [" Let's", ' look', ' the', ' sessions', ' part.']), ['goto_sessions'], 'loosely said');
   assert.deepEqual(spoken(m, [' Now', ' the', ' sessions', ' parser', ' is', ' fixed.']), [], 'narrating work moves nothing');
-});
-
-test("a name of two words or more opening the voice's sentence moves the page: it is presenting that part", () => {
-  const deck: StageView = { ...view, commands: [
-    { id: 'page_slide_24', say: 'Go to slide 24', name: 'While you were out' },
-    { id: 'page_slide_25', say: 'Go to slide 25', name: 'Moving the page by voice' },
-    { id: 'page_slide_17', say: 'Go to slide 17', name: 'The ring' },
-    { id: 'page_slide_18', say: 'Go to slide 18', name: 'Highlighting: after a move' },
-    { id: 'page_next', say: 'Go to the next slide' },
-  ] };
-  const m = new CueMatcher(); m.set(Stage.cues(deck));
-  // As GPT Live said them on Oct 19, while the page stayed put.
-  assert.deepEqual(spoken(m, [" It's", ' a', ' quick', ' summary.', " 'Kay,", ' page', ' twenty', ' five:', ' “Moving', ' the', ' page', ' by', ' voice.”']), ['page_slide_25']);
-  assert.deepEqual(spoken(m, [' Following', ' that.', ' After', ' a', ' move,', ' the', ' page', ' scrolls', ' there.']), ['page_slide_18'], "a titled name's title opening a sentence");
-  assert.deepEqual(spoken(m, [' The', ' controller', ' is', ' in', ' its', ' own', ' file.', ' Next', ' is', ' “Moving', ' the', ' page', ' by', ' voice.”']), [], '"next is" previews it: no move');
-  assert.deepEqual(spoken(m, [' Before', ' the', ' rename,', ' it', ' was', ' given', ' “highlighting', ' after', ' a', ' move.”']), [], 'a name inside a sentence: no move');
-  assert.deepEqual(spoken(m, [' Okay.', ' The', ' ring', ' glided', ' down,', ' then', ' glowed.']), [], 'a one-word name opening a sentence is too common to move');
-  assert.deepEqual(spoken(m, [' Next', ' one.', ' Then', ' we', ' stop.']), [], 'next or back opening a sentence moves nothing');
-  assert.deepEqual(spoken(m, [" 'Kay,", ' “Moving', ' the', ' page', ' by', ' voice.”', ' In', ' your', ' words,', " “let's", ' go', ' to', ' the', ' next', ' one”', " 'Kay."]), ['page_slide_25'], 'reading the page aloud, a quoted "let\'s go to the next one" moves nothing');
-  assert.deepEqual(spoken(m, [" Let's", ' look', ' at', ' “While', ' you', ' were', ' out.”']), ['page_slide_24'], 'a quoted name after "let\'s look at" still moves');
 });
 
 test('a new response starts fresh after a pause', () => {
@@ -101,7 +80,7 @@ test('the gate moves nothing again for words the voice moved the page for; only 
   h.stage = { describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; }, view, observe() {}, close() {} } as any;
   h.handOffAudit = { judge: async () => ({ needsAgent: .2, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page }) } as any;
   const only = await h.sessionSwitch.gate('take me to the sessions', 'r1', undefined, undefined, true);
-  assert.equal(only.page, true); assert.match(only.handled!, /you already moved the page as you spoke/);
+  assert.equal(only.page, true); assert.match(only.handled!, /the page already shows what the operator asked for/);
   page = { steps: ['goto_sessions'], only: .1, work: .9, count: 1 };
   const more = await h.sessionSwitch.gate('show me the sessions and fix the typo', 'r2', undefined, undefined, true);
   assert.equal(more.handled, undefined); assert.equal(more.note, undefined, 'the request already carries the cue note');
@@ -152,21 +131,27 @@ test('a walkthrough asked for: the first part shows, and each time the voice fin
   await until(() => !h.presenter.walking);
 });
 
-test("the operator's own step: fdc takes it as the voice starts answering, once, whatever the voice says", async t => {
-  const { stepAsked } = await import('../src/core/presenter.ts');
-  for (const said of ['Okay, next.', "Let's continue", "Okay, Let's move on to the let's continue", 'next one please', 'Keep going.', "Let's move on to the next step"]) assert.equal(stepAsked(said), 'next', said);
-  for (const said of ['Go back.', 'No, no, go back', 'Wait, previous slide']) assert.equal(stepAsked(said), 'back', said);
-  for (const said of ['Go back to the diagram', 'Move on to the controller as a document', 'What comes next?', "Don't go back", 'Next time make it shorter', '']) assert.equal(stepAsked(said), undefined, said);
+test("the operator's words are judged once when they finish, and the page moves for them, whatever the voice says or passes on", async t => {
   const { harness, page, until } = await import('./live-fake.ts');
   const { h, lives } = await harness(t);
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
-  const runs: string[][] = [];
-  const deck: StageView = { ...view, where: 'Slide 24', commands: [{ id: 'page_next', say: 'Go to the next slide' }, { id: 'page_back', say: 'Go back a slide' }, { id: 'page_slide_27', say: 'Go to slide 27', name: 'One highlight at a time' }] };
-  h.stage = { tabId: 1, view: deck, describe: async () => deck, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: 'Slide 25: Moving the page by voice' }; }, follow: async () => null, observe() {}, close() {} } as any;
+  const runs: string[][] = [], judged: string[] = [];
+  const deck: StageView = { ...view, where: 'Slide 24', commands: [{ id: 'page_next', say: 'Go to the next slide' }, { id: 'page_slide_27', say: 'Go to slide 27', name: 'One highlight at a time' }] };
+  h.stage = { tabId: 1, view: deck, describe: async () => deck, run: async (ids: string[]) => { runs.push(ids); return { done: [{ id: ids[0], say: 'Go to the next slide' }], onScreen: 'Slide 25: Moving the page by voice' }; }, follow: async () => null, observe() {}, close() {} } as any;
+  const step = { needsAgent: .3, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 };
+  h.handOffAudit = { judge: async (said: string) => { judged.push(said); return { ...step, page: /continue/i.test(said) ? { steps: ['page_next'], only: .7, work: .1, count: 1, walk: .2 } : { steps: [], only: .1, work: .9, count: 0, walk: 0 } }; } } as any;
+  h.presenter.operatorQuietMs = 30;
   h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: "Okay, let's continue.", start_ms: 0, end_ms: 900 });
-  // The voice answers, naming the slide it wrongly thinks comes next, then says the step too.
-  h.voiceSessions.live!.emit('event', { type: 'session.output_transcript.delta', delta: ' One highlight at a time. ' });
-  h.voiceSessions.live!.emit('event', { type: 'session.output_transcript.delta', delta: "Let's go to the next one. " });
-  await until(() => lives[0].appended.some(([kind, text]) => kind === 'commentary' && /The page moved as the operator asked.*Slide 25/.test(text)));
-  assert.deepEqual(runs, [['page_next']], 'one step, and none of the voice\'s own move words in that answer');
+  await until(() => runs.length === 1);
+  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /The page moved as the operator asked.*Slide 25/.test(text)));
+  // The voice then answers, naming the slide it wrongly thinks comes next, and passes the words on too.
+  h.voiceSessions.live!.emit('event', { type: 'session.output_transcript.delta', delta: " Let's look at one highlight at a time. " });
+  const gated = await h.sessionSwitch.gate("Okay, let's continue.", 'r1');
+  assert.deepEqual(runs, [['page_next']], "one move, once: not again for the gate, nor for the voice's words in that answer");
+  assert.match(gated.handled!, /the page already shows what the operator asked for/);
+  assert.equal(judged.filter(said => /continue/.test(said)).length, 2, 'judged once by the presenter, once by the gate for routing');
+  // Words that ask nothing of the page move nothing.
+  h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: 'Fix the parser.', start_ms: 5000, end_ms: 6000 });
+  await until(() => judged.includes('Fix the parser.'));
+  assert.equal(runs.length, 1);
 });

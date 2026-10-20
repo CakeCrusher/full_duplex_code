@@ -109,8 +109,8 @@ export class Stage {
   }
   /**
    * What GPT Live can say to move the page as it talks, after "let's look at" or another turning phrase: a part's name
-   * (the page's own named places, sections, annotated parts), a long name's title alone ("after a move" for
-   * "Highlighting: after a move"), and the next or previous one, which take the page's own step when it has one.
+   * (the page's own named places, sections, annotated parts) or a long name's title alone ("after a move" for
+   * "Highlighting: after a move").
    */
   static cues(view: StageView): SpeechCue[] {
     const cues: SpeechCue[] = [];
@@ -121,14 +121,11 @@ export class Stage {
       const title = command.name!.split(/\s*[:—–]\s+|\s+-\s+/).at(-1)!;
       if (title !== command.name && cueWords(title).length >= 2) cues.push({ run: command.id, label: title, words: cueWords(title) });
     }
-    const find = (test: RegExp, ...fallbacks: string[]) => view.commands.find(c => c.id.startsWith('page_') && test.test(c.id))?.id ?? fallbacks.find(id => view.commands.some(c => c.id === id));
-    const next = find(/(^|_)(next|forward)(_|$)/, 'next_slide', 'next_section'), previous = find(/(^|_)(previous|prev|back)(_|$)/, 'previous_slide', 'previous_section');
-    for (const noun of ['one', 'slide', 'part', 'section', 'stage']) {
-      if (next) cues.push({ run: next, label: `next ${noun}`, words: cueWords(`next ${noun}`), step: true });
-      if (previous) cues.push({ run: previous, label: `previous ${noun}`, words: cueWords(`previous ${noun}`), step: true });
-    }
-    if (previous) cues.push({ run: previous, label: 'back one', words: cueWords('back one'), step: true });
     return cues;
+  }
+  /** The page's own step to its next part (a deck's next slide), or the next section. */
+  static next(view: StageView) {
+    return view.commands.find(c => c.id.startsWith('page_') && /(^|_)(next|forward)(_|$)/.test(c.id))?.id ?? ['next_slide', 'next_section'].find(id => view.commands.some(c => c.id === id));
   }
   /** What the viewer can act on, numbered, and what is on screen: for a one-off action. */
   async digest(): Promise<string> {

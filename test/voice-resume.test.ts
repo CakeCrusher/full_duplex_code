@@ -245,3 +245,10 @@ test('a fork asks only for storage, over WebSocket and WebRTC, and the Live clos
   assert.equal(rtc.instructions, 'inherited', 'the prompt shown is the one the fork inherited');
   rtc.abort('test done');
 });
+
+test("a session that started under other instructions of fdc's own is rebuilt from its text, not forked: a fork keeps its first instructions", () => {
+  const record = { liveSessionId: 'live_1', stored: true, finalized: true, endedAt: Date.now() - 60000, turns: [{ role: 'operator' as const, text: 'Next.' }], prompt: 'aaa' };
+  assert.equal(planFor(record, 'resume', 'aaa'), 'fork');
+  assert.equal(planFor(record, 'resume', 'bbb'), 'seed', 'instructions changed since');
+  assert.equal(planFor({ ...record, prompt: undefined }, 'resume', 'aaa'), 'seed', 'from before fdc kept track');
+});

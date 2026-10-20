@@ -20,6 +20,8 @@ export interface ResumeRecord {
   learnedCount?: number;
   /** A session whose fork OpenAI connected but never started: Resume rebuilds the conversation from its text instead. */
   forkFailed?: string;
+  /** Which of fdc's own instructions the last session started with (a hash): a fork keeps a session's first instructions. */
+  prompt?: string;
 }
 export interface SavedInstruction { id: string; text: string; learned?: string; learnedIn?: string }
 // OpenAI keeps stored recordings for 30 days.
@@ -33,8 +35,11 @@ const MESSAGE_TOKENS = 8, MARGIN_TOKENS = 256, TURN_CHARS = 4000, KEPT_TURNS = 2
 export const DROPPED_FORK_MS = 8000;
 export const forkable = (record: ResumeRecord, now = Date.now()) =>
   Boolean(record.liveSessionId && record.stored && record.forkFailed !== record.liveSessionId && record.endedAt && now - record.endedAt < RECORDING_MS && (record.finalized || now - record.endedAt >= DROPPED_FORK_MS));
-export const planFor = (record: ResumeRecord, mode: 'resume' | 'fresh'): ResumePlan =>
-  mode === 'fresh' ? 'fresh' : forkable(record) ? 'fork' : record.turns.length ? 'seed' : 'fresh';
+// A fork keeps the instructions its session first started with (OpenAI: "Forks inherit the GPT-Live model, voice, and
+// original instructions"), and every brief appended since: after fdc's own instructions change, the conversation is
+// rebuilt from its text instead, under today's (and so is one from before fdc kept track).
+export const planFor = (record: ResumeRecord, mode: 'resume' | 'fresh', prompt?: string): ResumePlan =>
+  mode === 'fresh' ? 'fresh' : forkable(record) && (!prompt || record.prompt === prompt) ? 'fork' : record.turns.length ? 'seed' : 'fresh';
 
 const message = (role: 'user' | 'assistant', text: string) => ({ type: 'message', role, content: [{ type: role === 'user' ? 'input_text' : 'output_text', text }] });
 const tokens = (input: readonly any[]) => input.reduce((n, item) => n + MESSAGE_TOKENS + estimatedTokens(item.content[0].text), 0);

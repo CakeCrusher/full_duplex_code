@@ -66,7 +66,7 @@ Rules that make it work well:
   instead of a command with a parameter. Ids use lowercase letters, digits and underscores;
   keep it under about 60 commands.
 - **`say` is how it is chosen.** Write what the command does in plain words, naming its target
-  the way the user would. Give a command that goes to a named place (a slide, a tab, a view) a
+  the way the user would, including how the page labels it on screen ("Tonight · 1 of 7", "Step 3"). Give a command that goes to a named place (a slide, a tab, a view) a
   `name`, the words people use for it: the voice says "let's look at" and that name to go there,
   as it talks. Only commands with a `name` can be reached that way; keep names short and distinct.
 - **Next and previous.** If the page steps (slides, stages, steps), give it commands whose ids say

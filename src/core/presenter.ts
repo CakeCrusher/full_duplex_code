@@ -1,25 +1,23 @@
 // The presenter: fdc showing the operator the page the coding agent made, in step with GPT Live, while the agent goes
-// on producing. GPT Live's own words move the page ("let's look at" a part, speech-cues.ts) and the ring follows its
-// sentences; the gate's page requests are carried out here too: the page's commands, or a one-off action when none
-// fits (fast-action.ts). The page itself, and how fdc reaches it, is the stage (stage.ts).
+// on producing. The operator never has to know how the page is moved:
+// - What they ask of the page is done from their own words: when they finish speaking, their latest words are judged
+//   once (Jev) and the page moves at once, or a walkthrough starts, whatever GPT Live says or passes on. GPT Live is
+//   told what is on screen and talks about it.
+// - A walkthrough is paced here: GPT Live presents the part on screen, and when it has finished, the page moves on.
+// - GPT Live can point as it talks ("let's look at" a part, speech-cues.ts), and the ring follows its sentences.
+// - Requests GPT Live passes on reach the gate (sessions.ts), which routes them; their page part is carried out here,
+//   unless it already was, or with a one-off action when no command does it (fast-action.ts).
+// The page itself, and how fdc reaches it, is the stage (stage.ts).
 import type { Harness } from './bridge.ts';
 import { CueMatcher, unglue } from './speech-cues.ts';
 import { Stage, StageError, StageNothing, type StageView } from './stage.ts';
 import { FastAction, type PageAction } from './fast-action.ts';
 import { PAGE_ONLY, PAGE_OTHER, PAGE_UNHAPPY, PAGE_WALK, PAGE_WORK, WALK_WORK, type PageJudgment } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
-import { stepTaken, controllerNote, cueHandled, cueMovedNote, cueShown, improvisedFailedNote, lookingNote, oneOffDone, oneOffNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, walkNext, walkStarted } from './prompts.ts';
+import { controllerNote, cueHandled, cueMovedNote, cueShown, improvisedFailedNote, lookingNote, oneOffDone, oneOffNote, operatorMoved, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, walkNext, walkStarted } from './prompts.ts';
 
-// The operator asking only for a step: every word a filler or part of "next", "continue", "move on", "go back".
-const FILLER = new Set('okay ok alright all right so and yes yeah sure um uh great cool good then now please wait no hey lets let us go move on to the a one slide step part section page please'.split(' '));
-const FORWARD = /\b(next|continue|keep going|go on|carry on|move on|ahead|forward)\b/, BACK = /\b(back|previous)\b/;
-export function stepAsked(said: string): 'next' | 'back' | undefined {
-  const words = said.toLowerCase().replace(/[’']/g, '').replace(/[^a-z ]+/g, ' ').split(/\s+/).filter(Boolean);
-  if (!words.length || words.length > 10) return;
-  const text = words.join(' '), back = BACK.test(text), forward = FORWARD.test(text);
-  if (back === forward || !words.every(w => FILLER.has(w) || ['next', 'continue', 'keep', 'going', 'carry', 'ahead', 'forward', 'back', 'previous'].includes(w))) return;
-  return forward ? 'next' : 'back';
-}
+/** The same words, however much of them each side caught. */
+const same = (a: string, b: string) => { const x = a.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(), y = b.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); return !!x && !!y && (x.includes(y) || y.includes(x)); };
 
 export class Presenter {
   bridge: Harness;
@@ -38,18 +36,22 @@ export class Presenter {
    */
   walking?: { startedAt: number; movedAt: number; parts: number; timer: ReturnType<typeof setInterval> };
   pacing = false; spokeAt = 0; walkQuietMs = 2500;
-  /** When fdc last took a step the operator asked for: the voice's own move words in that answer are not taken too. */
-  steppedAt = 0;
+  /** GPT Live's latest words, for Jev to read a short reply against ("continue" after it presented a part). */
+  voiceSaid = '';
+  /** The operator's latest words the presenter judged, and whether the page moved for them; the wait for them to finish. */
+  turn?: { said: string; moved: Promise<boolean> }; listening?: ReturnType<typeof setTimeout>; operatorQuietMs = 700;
+  /** When the page last moved for the operator's words: GPT Live's own move words in that answer are not taken too. */
+  movedForOperatorAt = 0;
   constructor(bridge: Harness, apiKey?: string) { this.bridge = bridge; if (apiKey && apiKey !== 'unused') this.fastAction = new FastAction({ apiKey }); }
   /** GPT Live said more: a cue in it moves the page now, and GPT Live quietly hears what is on screen. */
   heard(delta: string) {
     const bridge = this.bridge;
-    // The voice starts answering: the operator has finished, and if all they said was a step ("next", "let's continue",
-    // "go back"), fdc takes it now, whatever the voice says or passes on (it named the wrong slide, or none).
-    if (Date.now() - this.spokeAt > 1500) this.operatorStep();
+    // GPT Live starting to answer means the operator has finished.
+    if (Date.now() - this.spokeAt > 1500) { void this.operatorTurn(); this.voiceSaid = ''; }
     this.spokeAt = Date.now();
-    if (Date.now() - this.steppedAt < 8000) { this.sentence = (this.sentence + delta).slice(-600); return; }
+    this.voiceSaid = (this.voiceSaid + delta).slice(-300);
     this.sentence = (this.sentence + delta).slice(-600);
+    if (Date.now() - this.movedForOperatorAt < 8000) return;
     for (const cue of this.speechCues.hear(delta)) {
       this.presentedAt = Date.now(); this.sentence = ''; this.cuedInSentence = true;
       // Answering the operator by moving the page: their words still go to the gate and, unless the move was all they
@@ -102,29 +104,56 @@ export class Presenter {
     if (page.steps.length) return cued ? this.cued(page, needsAgent) : this.present(page, needsAgent);
     if ((page.other ?? 0) >= PAGE_OTHER && this.fastAction) return cued ? this.cued(page, needsAgent) : this.improvise(said, needsAgent, !(page.only >= PAGE_ONLY && (page.work ?? 1) < PAGE_WORK));
   }
-  /**
-   * The operator's latest words, when they are only a step forward or back: fdc takes it and tells the voice what is on
-   * screen. Decided at once, before the voice's answer or a request for the same words can move the page again.
-   */
-  operatorStep() {
-    const bridge = this.bridge, history = bridge.mediator?.history, said = history?.latestOperator() ?? '', direction = stepAsked(said);
-    const view = direction && bridge.stage.tabId ? bridge.stage.view : undefined;
-    const step = view && Stage.cues(view).find(c => c.step && c.label.startsWith(direction === 'next' ? 'next' : 'previous'))?.run;
-    if (!history || !step) return;
-    this.steppedAt = this.presentedAt = Date.now();
-    history.cueLatest(cueMovedNote);
-    if (this.walking) this.walking.movedAt = Date.now();
-    void bridge.stage.run([step]).then(({ onScreen }) => {
-      bridge.log({ type: 'stage.step', run: step, said });
-      bridge.publish({ type: 'stage', done: [direction === 'next' ? 'The next part' : 'The previous part'], onScreen });
-      bridge.mediator?.context.add('commentary', stepTaken(onScreen));
-    }, error => bridge.log({ type: 'stage.step_failed', run: step, message: (error as Error).message }));
+  /** The operator said more: once they have been quiet a moment, their words are judged. */
+  heardOperator() {
+    clearTimeout(this.listening);
+    this.listening = setTimeout(() => void this.operatorTurn(), this.operatorQuietMs);
+    this.listening.unref?.();
   }
-  /** A walkthrough asked for: its first part shows (unless the voice already moved there), and fdc paces the rest. */
+  /**
+   * The operator has finished (a moment's quiet, GPT Live answering, or a request for their words reaching the gate):
+   * their latest words are judged once, and what they ask of the page is done at once. Resolves to whether it moved.
+   */
+  operatorTurn(): Promise<boolean> {
+    clearTimeout(this.listening);
+    const bridge = this.bridge, history = bridge.mediator?.history, said = history?.latestOperator() ?? '';
+    if (!said || !history || !bridge.handOffAudit || !bridge.stage.tabId) return Promise.resolve(false);
+    if (this.turn && this.turn.said === said) return this.turn.moved;
+    const moved = this.judgeTurn(said, history, this.voiceSaid);
+    this.turn = { said, moved };
+    return moved;
+  }
+  /** For the gate: whether the page already moved for these words (then it moves nothing again). */
+  async movedFor(said: string) { const turn = this.turn; return !!turn && same(turn.said, said) && await turn.moved; }
+  async judgeTurn(said: string, history: NonNullable<Harness['mediator']>['history'], voiceSaid: string): Promise<boolean> {
+    const bridge = this.bridge, started = Date.now();
+    try {
+      const view = await bridge.stage.describe();
+      const page = view && (await bridge.handOffAudit!.judge(said, undefined, 3000, view, undefined, voiceSaid || undefined)).page;
+      if (!page) return false;
+      bridge.log({ type: 'stage.turn', said: said.slice(-200), steps: page.steps, walk: page.walk, only: page.only, work: page.work, ms: Date.now() - started });
+      const walk = (page.walk ?? 0) >= PAGE_WALK && (page.work ?? 1) < WALK_WORK;
+      if (!walk && !page.steps.length) return false;
+      // A request for these words now moves nothing again, and GPT Live's own move words in its answer aren't taken.
+      history.cueLatest(cueMovedNote);
+      this.movedForOperatorAt = Date.now();
+      if (walk) { bridge.mediator?.context.add('commentary', walkStarted(bridge.agent, await this.startWalk(page.steps))); return true; }
+      const { done, onScreen } = await bridge.stage.run(page.steps);
+      this.presentedAt = Date.now();
+      bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });
+      bridge.mediator?.context.add('thinking', operatorMoved(onScreen), null);
+      return true;
+    } catch (error) { bridge.log({ type: 'stage.turn_failed', said: said.slice(-200), message: (error as Error).message }); return false; }
+  }
+  /** A walkthrough the gate found asked for (unless the operator's words already started it): fdc paces it. */
   async walk({ steps }: PageJudgment, needsAgent: number | null, cued?: boolean): Promise<Gated> {
+    if (cued) return { needsAgent, handled: cueHandled(this.bridge.agent), page: true };
+    return { needsAgent, handled: walkStarted(this.bridge.agent, await this.startWalk(steps)), page: true };
+  }
+  /** Its first part shows, and fdc paces the rest: resolves to what is on screen. */
+  async startWalk(steps: string[]): Promise<string> {
     const bridge = this.bridge;
-    let onScreen = '';
-    if (steps.length && !cued) onScreen = await bridge.stage.run(steps.slice(0, 1)).then(ran => ran.onScreen, () => '');
+    let onScreen = steps.length ? await bridge.stage.run(steps.slice(0, 1)).then(ran => ran.onScreen, () => '') : '';
     onScreen ||= (await bridge.stage.describe(0).catch(() => undefined))?.where ?? '';
     this.stopWalking();
     const now = Date.now(), timer = setInterval(() => void this.pace(), 500);
@@ -132,7 +161,7 @@ export class Presenter {
     this.walking = { startedAt: now, movedAt: now, parts: 0, timer };
     this.presentedAt = now;
     bridge.log({ type: 'stage.walk', state: 'started' });
-    return { needsAgent, handled: walkStarted(bridge.agent, onScreen), page: true };
+    return onScreen;
   }
   /** While walking: once the voice has presented the part on screen and gone quiet, the next part, unless the operator spoke. */
   async pace(now = Date.now()) {
@@ -145,7 +174,7 @@ export class Presenter {
     if (spoke <= walking.movedAt || now - spoke < this.walkQuietMs) return;
     this.pacing = true;
     try {
-      const view = await bridge.stage.describe(0), next = view && Stage.cues(view).find(c => c.step && c.label.startsWith('next'))?.run;
+      const view = await bridge.stage.describe(0), next = view && Stage.next(view);
       if (!view || !next) return this.stopWalking('no next part');
       const { onScreen } = await bridge.stage.run([next]);
       // A step that went nowhere ("Already on the last slide") ends it.

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import type { OutboxEntry } from './outbox.ts';
@@ -170,6 +170,8 @@ export class VoiceSessions {
     publish({ type: 'voice_closed', reason, standbyEnded: true, moved: moved || undefined, reserved: false, finalized: true, usageSeconds: 0 }, standby.page);
     publish(this.bridge.status());
   }
+  /** fdc's own instructions for the voice, as a short hash: which ones a session started with. */
+  prompt() { return createHash('sha1').update(liveInstructions(this.bridge.agent)).digest('hex').slice(0, 12); }
   instructions() {
     const additional = this.additionalInstructions.map(item => item.text).join('\n\n');
     return liveInstructions(this.bridge.agent) + (additional ? `\n\nAdditional operator instructions:\n${additional}` : '');
@@ -243,7 +245,7 @@ export class VoiceSessions {
   /** What Resume voice would do now, for the page. */
   resumeStatus() {
     const record = this.current();
-    return { plan: planFor(record, 'resume'), fork: forkable(record), turns: record.turns.length, store: this.store };
+    return { plan: planFor(record, 'resume', this.prompt()), fork: forkable(record), turns: record.turns.length, store: this.store };
   }
   async appendInstruction(text: unknown, learned?: { id: string; text: string; scope: string }) {
     const { clean, log, publish } = this.bridge;
@@ -317,7 +319,7 @@ export class VoiceSessions {
     // The operator starting voice: Jev looks at the settings again (a wake or reconnect is not the operator starting it).
     if (!wake && !automatic) bridge.tuneFromInstructions();
     // A wake must be quick: a new session seeded with the conversation, never a slow fork.
-    let plan = wake ? record.turns.length ? 'seed' : 'fresh' : planFor(record, mode);
+    let plan = wake ? record.turns.length ? 'seed' : 'fresh' : planFor(record, mode, this.prompt());
     // Starting fresh after a drop: the speech it had not passed on goes to the agent now.
     if (plan === 'fresh' && !wake) this.handOffCarried();
     const requested = { at: Date.now(), plan };
@@ -434,17 +436,17 @@ export class VoiceSessions {
     if (!view) return false;
     if (live.state !== 'active') return;
     // Every part the voice can name, up to the stage script's own cap on a page's commands (80).
-    const cues = Stage.cues(view), names = cues.filter(c => c.listed).map(c => c.label).slice(0, 80), steps = cues.some(c => c.step);
+    const cues = Stage.cues(view), names = cues.filter(c => c.listed).map(c => c.label).slice(0, 80);
     this.bridge.presenter.speechCues.set(cues);
     // A reload (often with a new query to bust the cache) is the same page unless its parts changed.
     const others = [...this.bridge.stage.pages].filter(([tabId]) => tabId !== view.tabId).map(([, page]) => page.title);
-    const signature = JSON.stringify([view.url.replace(/[?#].*$/, ''), names, steps, others]);
+    const signature = JSON.stringify([view.url.replace(/[?#].*$/, ''), names, others]);
     if (run.briefed === signature) return;
     run.briefed = signature;
-    this.bridge.log({ type: 'stage.briefed', url: view.url, names, steps });
+    this.bridge.log({ type: 'stage.briefed', url: view.url, names });
     // The outline goes with the brief, as instructions: sent as news, a woken voice read it out ("What the page says…")
     // and started the page over.
-    await live.append('instructions', stageBrief(view.title, names, steps, others, view.where) + (view.outline ? `\n\n${stageOutline(view.title, view.outline)}` : '')).catch(error => this.bridge.log({ type: 'stage.error', message: (error as Error).message }));
+    await live.append('instructions', stageBrief(view.title, names, others, view.where) + (view.outline ? `\n\n${stageOutline(view.title, view.outline)}` : '')).catch(error => this.bridge.log({ type: 'stage.error', message: (error as Error).message }));
   }
   liveEvent(run: Run, event: any) {
     const { live, page } = run;
@@ -463,8 +465,9 @@ export class VoiceSessions {
     }
     if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.bridge.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
     if (event.type === 'session.started') this.begun(run);
-    // GPT Live's words can move the page as it says them.
+    // GPT Live's words can move the page as it says them; the operator's, once they finish.
     if (event.type === 'session.output_transcript.delta' && this.live === live) this.bridge.presenter.heard(String(event.delta ?? ''));
+    if (event.type === 'session.input_transcript.delta' && this.live === live && String(event.delta ?? '').trim()) this.bridge.presenter.heardOperator();
     if (event.type === 'session.delegation.created') this.activity.add('request');
     // ...and to the first words it says.
     if (event.type === 'session.output_transcript.delta' && !run.spoke) { run.spoke = true; this.bridge.log({ type: 'voice.first_words', plan: run.plan, automatic: run.automatic, firstWordsMs: Date.now() - run.requested.at }); }
@@ -488,6 +491,8 @@ export class VoiceSessions {
     for (const item of this.additionalInstructions) if (run.inForce.has(item.id)) Object.assign(item, { state: 'acknowledged', sessionId: live.id, acknowledgedAt: Date.now(), error: undefined, appended: false });
     if (plan === 'fresh') record.turns = [];
     Object.assign(record, { liveSessionId: live.id, stored: live.stored, finalized: false, endedAt: undefined, deliveredThrough: undefined });
+    // A fork started with its source's instructions; anything else with today's.
+    if (plan !== 'fork') record.prompt = this.prompt();
     this.noteInForce(run);
     this.audit = new AudioAudit({ dir: path.join(bridge.runDir, 'audio', live.reservation!), log: event => log({ liveRun: live.reservation, ...event }), onError: error => fault(error) });
     this.usage = { voiceSessionId: live.id!, startedAt: live.startedAt ?? Date.now(), seconds: 0, ratio: null, points: [] };

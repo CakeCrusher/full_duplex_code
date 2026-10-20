@@ -44,6 +44,8 @@ export class SessionSwitch {
   /** The gate: Jev's check of a request GPT Live passed on, before it reaches the harness. */
   async gate(said: string, requestId: string, earlier?: string, companion?: string, cued?: boolean): Promise<Gated> {
     const bridge = this.bridge;
+    // The presenter judges the operator's words for the page itself, if it hasn't yet: the page part is done once.
+    const presented = bridge.presenter.operatorTurn();
     // The page on the stage is read meanwhile; without one, Jev is asked nothing about a page.
     const [companions, page] = await Promise.all([listCompanions(bridge, true, 800), bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
     // Only companions this one can reach and turn on or off.
@@ -52,8 +54,9 @@ export class SessionSwitch {
     bridge.log({ type: 'sessions.judged', requestId, needsAgent, ...asked, companionOnly: judgment.companionOnly, page: judgment.page });
     if (asked.asked < ASKED) {
       // Asked of the page: the presenter does it (and says what went on to the agent, if anything).
-      const presented = page && judgment.page && await bridge.presenter.request(judgment.page, said, needsAgent, cued);
-      if (presented) return presented;
+      const moved = await presented.then(() => bridge.presenter.movedFor(said));
+      const done = page && judgment.page && await bridge.presenter.request(judgment.page, said, needsAgent, cued || moved);
+      if (done) return done;
       // Only about how the companion behaves: Jev's tuning and instruction learning take it from here, not the harness.
       if ((judgment.companionOnly ?? 0) >= COMPANION_ONLY) return { needsAgent, handled: companionHandled(bridge.agent), companion: true };
       // For the agent: what the page could not do, or what the user was looking at when they said it.
