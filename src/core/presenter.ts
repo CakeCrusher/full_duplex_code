@@ -38,9 +38,11 @@ export class Presenter {
   pacing = false; spokeAt = 0; walkQuietMs = 2500;
   /** GPT Live's latest words, for Jev to read a short reply against ("continue" after it presented a part). */
   voiceSaid = '';
-  /** The operator's latest words the presenter judged, and whether the page moved for them; the wait for them to finish. */
-  // GPT Live answering is the operator's end of turn; quiet alone counts only after a while (a pause mid-sentence isn't
-  // one: "Take me to … tonight" was judged as "Take me to").
+  /**
+   * The operator's latest words the presenter judged, and whether the page moved for them; the wait for them to finish.
+   * GPT Live answering is the end of the operator's turn; quiet alone counts only after a while (a pause mid-sentence
+   * isn't one: "Take me to … tonight" was judged as "Take me to").
+   */
   turn?: { said: string; moved: Promise<boolean> }; listening?: ReturnType<typeof setTimeout>; operatorQuietMs = 2500;
   /** When the page last moved for the operator's words: GPT Live's own move words in that answer are not taken too. */
   movedForOperatorAt = 0;
