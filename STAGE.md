@@ -29,8 +29,10 @@ Each one becomes a command "Show and highlight: the recommendation".
 
 ## 3. A controller (for anything interactive)
 
-For slides, tabs, maps, charts, filters, animations or an app, define `window.fdcController`
-in the page:
+For slides, tabs, maps, charts, filters, animations or an app, define `window.fdcController`.
+Keep it in its own file beside the page (`diagram.controller.js` for `diagram.html`, loaded with
+`<script src="diagram.controller.js"></script>` after the page's own script): it is a document you
+maintain and grow, and it survives rewrites of the page.
 
 ```js
 window.fdcController = {
@@ -55,8 +57,6 @@ window.fdcController = {
   // Optional: what the whole page says, part by part, starting each line with the part's name, so the
   // voice can present all of it (including slides or tabs not on screen) without asking you.
   outline() { return slides.map(s => `${s.title} — ${s.summary}`).join('\n'); },
-  // Optional: phrases that run a command as the voice says them, to keep the page in step with speech.
-  cues() { return [{ say: 'next slide', run: 'next_slide' }]; },
 };
 ```
 
@@ -67,7 +67,13 @@ Rules that make it work well:
   keep it under about 60 commands.
 - **`say` is how it is chosen.** Write what the command does in plain words, naming its target
   the way the user would. Give a command that goes to a named place (a slide, a tab, a view) a
-  `name`, the words people use for it: the voice can say "let's look at" and that name to go there.
+  `name`, the words people use for it: the voice says "let's look at" and that name to go there,
+  as it talks. Only commands with a `name` can be reached that way; keep names short and distinct.
+- **Next and previous.** If the page steps (slides, stages, steps), give it commands whose ids say
+  so (`next_slide`, `previous_slide`): the voice says "let's go to the next one" or "let's go back
+  one" and the page takes your step.
+- **Show what you do.** Your commands show their own result (the slide, a lit stage, a highlighted
+  row): the voice tool's ring steps aside when one of your commands runs, so one highlight shows.
 - **Hidden things are yours to show.** Annotations on slides or tabs that aren't on screen can't be
   reached by structure alone: give them commands that show their slide or tab first.
 - **Sequences belong in one command.** If showing something takes several steps (open a tab,
@@ -80,6 +86,6 @@ Rules that make it work well:
   when the controller itself is broken (an element it expects is missing, a call fails): the voice
   tool then sends you the request with the error, so you can fix the controller.
 - **Grow it.** When the voice tool tells you the user wanted something the controls couldn't do, add a command (or
-  a name, a cue, an annotation) for it, so the voice can do it next time.
+  a name, an annotation) for it in the controller's file, so the voice can do it next time.
 - **Keep it current.** `commands()` is read again before each use, so it can follow the page's
   state (for example, only the slides that exist).

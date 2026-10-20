@@ -171,8 +171,9 @@ Hooks report tool operations at their boundaries. A running command's stdout nor
 When Claude shows you a page in Chrome (a diagram, a deck, a report), fdc moves it while you talk, without waiting
 for Claude. The voice presents, Claude produces, and fdc's voice tool sits between them:
 
-- **The voice moves it as it speaks.** Ask for a part by name ("go to the secure handshake") or for a walkthrough:
-  the voice says "let's look at" and the part's name, and the page goes there and highlights it as the words are said.
+- **The voice moves it as it speaks.** Ask for a part by name ("go to the secure handshake"), for the next or previous
+  one, or for a walkthrough: the voice says "let's look at" and the part's name, or "let's go to the next one" or
+  "let's go back one", and the page goes there as the words are said.
 - **The voice tool moves it on request.** "Next", "go back", "the DNS lookup, then the response", "highlight the
   explanation under the DNS lookup", "go back to the diagram" (another page Claude opened): the voice tool runs the
   page's commands in about a second and tells the voice what is on screen. Only what the page can't do goes to Claude.
@@ -182,7 +183,9 @@ for Claude. The voice presents, Claude produces, and fdc's voice tool sits betwe
   reaches Claude with a note to improve the page's controls, so the voice can do it next time.
 
 The page's controls come from its structure (headings, sections, slides, read like a screen reader would) and, for
-anything interactive, from a small controller Claude writes into the page following [STAGE.md](STAGE.md). fdc's page
+anything interactive, from a small controller Claude writes beside the page following [STAGE.md](STAGE.md), in its own file
+it grows as you ask for more. One highlight shows at a time: fdc's ring around a part it moved to, or the page's own
+highlight after one of its commands. fdc's page
 notes each move: "The page followed the voice" or "The voice tool moved the page". This needs
 [Open Claude in Chrome](https://github.com/noemica-io/open-claude-in-chrome), the browser tools Claude uses: fdc reaches the page through the same
 connection. Without it, page requests go to Claude like any other.
@@ -207,8 +210,9 @@ Closing the companion tab also closes its voice connection. A disconnected voice
 
 When the conversation stays quiet, voice goes on **Standby**: GPT Live disconnects and its billing stops, but voice stays on. The page keeps your microphone open on this computer, sending nothing anywhere, and fdc keeps following Claude. Two soft falling notes mark it, the page says **Standby · speak to wake it**, and the timeline shows Standby as a gray band across every track.
 
-- **What counts as quiet.** Everything in the conversation has a price in one currency, nothing privileged: each tenth of a second of your sound or of GPT Live's audio 20, Claude's events by kind (a tool call 1, each display batch of a message 10, a finished or failed turn 30, an approval request 100), and requests GPT Live passes on (100). Each counts for exactly the quiet window, 15 seconds; when everything from the last 15 seconds is worth less than 50, voice goes on Standby: it keeps drifting toward Standby, and only activity worth the threshold holds it off. A request still on its way to Claude keeps voice on.
-- **What wakes it.** The same prices: about 0.3 s of sound your microphone's noise gate passes, Claude finishing a turn with its final message, an approval request, or a request. While it reconnects (about 0.8 seconds, 0.6 to 1.9) the page plays a soft pulse, then the start sound. **Wake now** wakes it at once.
+- **What counts as quiet.** Everything in the conversation has a price in one currency, nothing privileged: each tenth of a second of your voice or of GPT Live's audio 20, Claude's events by kind (a tool call 1, each display batch of a message 10, a finished or failed turn 30, an approval request 100), and requests GPT Live passes on (100). Each counts for exactly the quiet window, 15 seconds; when everything from the last 15 seconds is worth less than 50, voice goes on Standby: it keeps drifting toward Standby, and only activity worth the threshold holds it off. A request still on its way to Claude keeps voice on.
+- **What wakes it.** The same prices: about half a second of your voice (sound that repeats at a speaking pitch, for
+  longer than a tenth of a second: chewing, typing or a knock on the table don't count), Claude finishing a turn with its final message, an approval request, or a request. While it reconnects (about 0.8 seconds, 0.6 to 1.9) the page plays a soft pulse, then the start sound. **Wake now** wakes it at once.
 - **Nothing you say is lost.** On Standby the page holds the last 3 seconds of your microphone, and everything you say while voice reconnects. Once connected, that audio goes to GPT Live first and your live microphone follows behind it, catching up at your first pause, so GPT Live may answer a few seconds later than usual.
 - **The conversation continues.** A woken session is a new one seeded with the conversation's text, as Resume does without a fork, so it never waits for a slow fork. It's told the conversation paused and continues, and doesn't greet you. What Claude did meanwhile arrives as it would have live, and GPT Live reports what its speaking rules call for. Agent details older than the startup history aren't carried over.
 - **Ending it.** **End voice** works on Standby too; what you said that wasn't passed on goes to Claude, as when voice ends. Turning a session off by voice ends its Standby; turning it on wakes it.

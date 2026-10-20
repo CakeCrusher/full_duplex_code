@@ -138,7 +138,7 @@ export const pageNothing = ({ profile: { name } }: Agent, failed: { say: string 
 export const lookingNote = (page: { title: string; url: string; where: string }) =>
   `When they said it, the user was looking at "${page.title.slice(0, 80)}" (${page.url}) in the browser, at: ${page.where.replace(/\s+/g, ' ').slice(0, 300)}.`;
 export const controllerNote = (page: { title: string; url: string; where: string }) =>
-  `The user is unhappy with how the page "${page.title.slice(0, 80)}" (${page.url}) in the browser responded to voice, at: ${page.where.replace(/\s+/g, ' ').slice(0, 300)}. Its controls couldn't do what they meant: improve the page's controller (window.fdcController: its commands, names and cues, or its data-fdc annotations; see the voice tool's guide) so the voice can do it itself next time, reload the page, then do what they asked.`;
+  `The user is unhappy with how the page "${page.title.slice(0, 80)}" (${page.url}) in the browser responded to voice, at: ${page.where.replace(/\s+/g, ' ').slice(0, 300)}. Its controls couldn't do what they meant: improve the page's controller (window.fdcController, in its own file beside the page: its commands and names, or its data-fdc annotations; see the voice tool's guide) so the voice can do it itself next time, reload the page, then do what they asked.`;
 export const pageNothingNote = (failed: { say: string }) =>
   `The voice tool tried to do this on the page in the browser (${failed.say.replace(/\.$/, '')}) but there was nothing to do there; do what the user asked.`;
 // No page command did it, so the voice tool improvised: the page's controller is short of a command, which the agent adds.

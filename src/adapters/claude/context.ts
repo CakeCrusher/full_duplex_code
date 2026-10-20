@@ -22,6 +22,8 @@ export const claudeContext: ContextRule[] = [
   // The text of a file read, and the pages of a PDF read as images.
   { where: { tool_name: 'Read' }, key: 'tool_response.file.content', truncate: 1200 },
   { where: { tool_name: 'Read' }, key: 'tool_response.pages', truncate: 0 },
-  // Command output. The command and stderr are always whole.
+  // Command output. The command and stderr are always whole; flags that say nothing about what it did are not (GPT Live
+  // once read '"interrupted":false,"isImage":false,"noOutputExpected":false}' aloud).
   { where: { tool_name: 'Bash' }, key: 'tool_response.stdout', truncate: 1200 },
+  { where: { tool_name: 'Bash' }, key: ['tool_response.isImage', 'tool_response.noOutputExpected'], remove: true },
 ];
