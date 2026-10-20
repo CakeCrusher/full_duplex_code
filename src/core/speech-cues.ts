@@ -42,6 +42,14 @@ export class CueMatcher {
     // Where each sentence starts, by word: a name may open one.
     const starts = new Set([0]); let count = 0;
     for (const sentence of unglue(this.raw).split(/(?<=[.!?…])["”’)]?\s+/)) { starts.add(count); count += normalize(sentence).split(' ').filter(Boolean).length; }
+    // The words GPT Live is quoting (the page's text, the operator's words): a turning phrase inside quotes moves nothing
+    // (reading a slide aloud, it said “let's go to the next one” and the page jumped).
+    const quoted: boolean[] = []; let open = false;
+    for (const [token] of unglue(this.raw).matchAll(/[“”"]|[A-Za-z0-9’']+/g)) {
+      if (token === '“') open = true; else if (token === '”') open = false; else if (token === '"') open = !open;
+      else for (const _ of normalize(token).split(' ').filter(Boolean)) quoted.push(open);
+    }
+    const quoting = (start: number) => { let at = start - 1; while (at >= 0 && (LEADING.has(words[at]) || NUMBERING.test(words[at]) || words[at] === 'part' || words[at] === 'section')) at--; return quoted.length === words.length && at >= 0 && quoted[at]; };
     const opens = (start: number) => { let at = start; while (at > 0 && !starts.has(at) && (OPENERS.has(words[at - 1]) || /^\d+$/.test(words[at - 1]))) at--; return starts.has(at); };
     const found: { cue: SpeechCue; end: number }[] = [];
     for (const cue of this.cues) {
@@ -57,6 +65,7 @@ export class CueMatcher {
         const now = ['at', 'on'].includes(before.at(-1)!) && (before.at(-2) === 'now' ? ['youre', 'were'].includes(before.at(-3)!) : before.at(-3) === 'now' && ['youre', 'were'].includes(before.at(-2)!));
         // A name of two words or more opening a sentence: GPT Live presenting that part.
         const opening = !cue.step && cue.words.length >= 2 && opens(start);
+        if (!opening && quoting(start)) continue;
         if (!now && !opening) {
           const turn = TURNS.find(t => t.every((w, i) => before[before.length - t.length + i] === w));
           if (!turn) continue;

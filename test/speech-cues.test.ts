@@ -62,6 +62,8 @@ test("a name of two words or more opening the voice's sentence moves the page: i
   assert.deepEqual(spoken(m, [' Before', ' the', ' rename,', ' it', ' was', ' given', ' “highlighting', ' after', ' a', ' move.”']), [], 'a name inside a sentence: no move');
   assert.deepEqual(spoken(m, [' Okay.', ' The', ' ring', ' glided', ' down,', ' then', ' glowed.']), [], 'a one-word name opening a sentence is too common to move');
   assert.deepEqual(spoken(m, [' Next', ' one.', ' Then', ' we', ' stop.']), [], 'next or back opening a sentence moves nothing');
+  assert.deepEqual(spoken(m, [" 'Kay,", ' “Moving', ' the', ' page', ' by', ' voice.”', ' In', ' your', ' words,', " “let's", ' go', ' to', ' the', ' next', ' one”', " 'Kay."]), ['page_slide_25'], 'reading the page aloud, a quoted "let\'s go to the next one" moves nothing');
+  assert.deepEqual(spoken(m, [" Let's", ' look', ' at', ' “While', ' you', ' were', ' out.”']), ['page_slide_24'], 'a quoted name after "let\'s look at" still moves');
 });
 
 test('a new response starts fresh after a pause', () => {
