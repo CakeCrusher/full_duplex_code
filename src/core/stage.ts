@@ -115,7 +115,9 @@ export class Stage {
    */
   static cues(view: StageView): SpeechCue[] {
     const cues: SpeechCue[] = [];
-    for (const command of view.commands) if (command.name && (command.top || /^(show|page|slide)_/.test(command.id))) cues.push({ run: command.id, label: command.name, words: cueWords(command.name), name: true });
+    // The page's own named places first (its slides, views), then its annotations and headings: the voice is told them in this order.
+    const named = view.commands.filter(c => c.name && (c.top || /^(show|page|slide)_/.test(c.id)));
+    for (const command of [...named.filter(c => c.id.startsWith('page_')), ...named.filter(c => !c.id.startsWith('page_'))]) cues.push({ run: command.id, label: command.name!, words: cueWords(command.name!), name: true });
     for (const cue of view.cues ?? []) {
       // As the stage script names the page's commands: camelCase read as words ("nextSlide" is page_next_slide).
       const id = `page_${String(cue.run).replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}`;

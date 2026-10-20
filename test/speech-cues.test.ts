@@ -17,10 +17,10 @@ const view: StageView = { tabId: 1, title: 'Deck', url: 'http://localhost/d.html
   ],
   cues: [{ say: 'Next slide', run: 'next_slide' }, { say: 'Previous slide', run: 'previousSlide' }, { say: 'Missing', run: 'not_a_command' }] };
 
-test('cues: section and annotation names after a turning phrase, and the page\'s own phrases', () => {
+test('cues: the page\'s own names first, then section and annotation names, and the page\'s own phrases', () => {
   const cues = Stage.cues(view);
   assert.deepEqual(cues.map(c => `${c.run}:${c.words.join(' ')}:${c.name ?? false}`), [
-    'goto_sessions:sessions:true', 'goto_system_map:system map:true', 'goto_map:map:true', 'show_my_recommendation:recommendation:true', 'page_slide_2:margins:true', 'page_next_slide:next slide:false', 'page_previous_slide:previous slide:false'], "a controller's camelCase cue finds its command");
+    'page_slide_2:margins:true', 'goto_sessions:sessions:true', 'goto_system_map:system map:true', 'goto_map:map:true', 'show_my_recommendation:recommendation:true', 'page_next_slide:next slide:false', 'page_previous_slide:previous slide:false'], "a controller's camelCase cue finds its command");
   assert.deepEqual(cueWords("The Options!"), ['options']);
 });
 

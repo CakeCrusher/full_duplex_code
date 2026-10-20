@@ -425,7 +425,8 @@ export class VoiceSessions {
     const view = await this.bridge.stage.describe(0).catch(error => { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; });
     if (!view) return false;
     if (live.state !== 'active') return;
-    const cues = Stage.cues(view), names = cues.filter(c => c.name).map(c => c.label).slice(0, 24), phrases = cues.filter(c => !c.name).map(c => c.label).slice(0, 12);
+    // Every part the voice can name, up to the stage script's own cap on a page's commands (80).
+    const cues = Stage.cues(view), names = cues.filter(c => c.name).map(c => c.label).slice(0, 80), phrases = cues.filter(c => !c.name).map(c => c.label).slice(0, 40);
     this.bridge.presenter.speechCues.set(cues);
     // A reload (often with a new query to bust the cache) is the same page unless its parts changed.
     const others = [...this.bridge.stage.pages].filter(([tabId]) => tabId !== view.tabId).map(([, page]) => page.title);

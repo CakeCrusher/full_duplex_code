@@ -162,7 +162,7 @@
       const title = text(h).slice(0, 90), name = short(h), top = level(h) <= sectionLevel();
       if (!name && seen[title.toLowerCase()] > 1) continue;
       const what = shows(h), also = what.length ? `; it shows ${what.join('; ')}` : '';
-      commands.push({ id: unique(`goto_${slug(name || title)}`), say: (name ? `Go to the ${top ? 'section' : 'part'} "${name}" (headed "${title}")` : `Go to the ${top ? 'section' : 'heading'} "${title}"`) + also, anchor: anchorOf(h), name: name || (title.length <= 40 ? title : ''), top, run: () => go(h, 'start') });
+      commands.push({ id: unique(`goto_${slug(name || title)}`), say: (name ? `Go to the ${top ? 'section' : 'part'} "${name}" (headed "${title}")` : `Go to the ${top ? 'section' : 'heading'} "${title}"`) + also, anchor: anchorOf(h), name: name || (title.length <= 60 ? title : ''), top, run: () => go(h, 'start') });
     }
     // A deck without a controller: sibling sections with ids, only one shown at a time. Each slide is
     // offered by its title and shown through its address (#id), as such decks do.
