@@ -20,14 +20,19 @@ function voiced(frame: Float32Array, rate: number) {
   return best >= VOICED;
 }
 
+// What a wake replays: the stretch of sound before it, back to a quiet this long (the gate closes 0.3 s after sound, so
+// shorter pauses inside a sentence never count), held for at most WAKE_LOOKBACK_S. Tune both against real wakes.
+const WAKE_SPAN_GAP_S = 1.5, WAKE_LOOKBACK_S = 12;
+
 class DuplexAudio extends AudioWorkletProcessor {
   muted = false; ticks = 0;
   inputPower = 0; outputPower = 0; levelSamples = 0;
   auditSession: string | null = null; auditOffset = 0;
   gateThreshold = .008; gateHoldSamples = 0; rawInputPower = 0;
   inputGain = 4;
-  // On Standby, the gated microphone is held instead of sent: its last 3 seconds, then, once voice is
-  // waking, everything. When the new connection is up, the held audio goes out first and the live
+  // On Standby, the gated microphone is held instead of sent: its last seconds, then, once voice is waking,
+  // everything from where the operator started talking (the stretch of sound the wake heard, back to the last
+  // quiet of WAKE_SPAN_GAP_S). When the new connection is up, the held audio goes out first and the live
   // microphone follows behind it; silence in the backlog is skipped, so it catches up at the first pause.
   holding = false; keepAll = false; replaying = false;
   held: Float32Array[] = []; heldSamples = 0;
@@ -38,7 +43,7 @@ class DuplexAudio extends AudioWorkletProcessor {
     super();
     this.port.onmessage = ({ data }) => {
       if (data.type === 'hold') { this.holding = true; this.keepAll = false; this.replaying = false; this.held = []; this.heldSamples = 0; this.auditSession = null; }
-      if (data.type === 'wake') this.keepAll = true;
+      if (data.type === 'wake') { this.keepAll = true; this.fromSpan(); }
       if (data.type === 'replay') { this.holding = false; this.replaying = this.held.length > 0; }
       if (data.type === 'mute') { this.muted = data.muted; if (this.muted) this.gateHoldSamples = 0; }
       if (data.type === 'audit_start') { this.auditSession = data.sessionId; this.auditOffset = 0; }
@@ -46,6 +51,16 @@ class DuplexAudio extends AudioWorkletProcessor {
         this.gateThreshold = data.threshold; this.gateHoldSamples = 0;
       }
     };
+  }
+  /** Waking: the held audio starts where the operator's stretch of sound began, not where the wake heard a voice. */
+  fromSpan() {
+    let quiet = 0, start = 0;
+    for (let i = this.held.length - 1; i >= 0; i--) {
+      if (this.held[i].some(x => x !== 0)) { quiet = 0; continue; }
+      quiet += this.held[i].length;
+      if (quiet >= sampleRate * WAKE_SPAN_GAP_S) { start = i; break; }
+    }
+    for (const frame of this.held.splice(0, start)) this.heldSamples -= frame.length;
   }
   process(inputs: Float32Array[][], outputs: Float32Array[][]) {
     const input = inputs[0]?.[0]; const output = outputs[1][0];
@@ -84,7 +99,7 @@ class DuplexAudio extends AudioWorkletProcessor {
     if (this.holding || this.replaying) {
       this.held.push(Float32Array.from(microphoneOutput)); this.heldSamples += microphoneOutput.length;
       if (this.holding) {
-        const limit = sampleRate * (this.keepAll ? 120 : 3);
+        const limit = sampleRate * (this.keepAll ? 120 : WAKE_LOOKBACK_S);
         while (this.heldSamples - this.held[0].length >= limit) this.heldSamples -= this.held.shift()!.length;
         microphoneOutput.fill(0);
       } else {

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { CueMatcher, cueWords } from '../src/core/speech-cues.ts';
 import { Stage, type StageView } from '../src/core/stage.ts';
 
-const view: StageView = { tabId: 1, title: 'Deck', url: 'http://localhost/d.html', about: null, where: '', outline: '',
+const view: StageView = { tabId: 1, title: 'Deck', url: 'http://localhost/d.html', about: null, where: '', parts: [],
   commands: [
     { id: 'goto_sessions', say: 'Go to the section "sessions"', name: 'sessions', top: true },
     { id: 'goto_system_map', say: 'Go to the section "system map"', name: 'system map', top: true },
@@ -80,7 +80,7 @@ test('the gate moves nothing again for words the voice moved the page for; only 
   h.stage = { describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; }, view, observe() {}, close() {} } as any;
   h.handOffAudit = { judge: async () => ({ needsAgent: .2, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page }) } as any;
   const only = await h.sessionSwitch.gate('take me to the sessions', 'r1', undefined, undefined, true);
-  assert.equal(only.page, true); assert.match(only.handled!, /the page already shows what the operator asked for/);
+  assert.equal(only.page, true); assert.match(only.handled!, /already moved the page for them/);
   page = { steps: ['goto_sessions'], only: .1, work: .9, count: 1 };
   const more = await h.sessionSwitch.gate('show me the sessions and fix the typo', 'r2', undefined, undefined, true);
   assert.equal(more.handled, undefined); assert.equal(more.note, undefined, 'the request already carries the cue note');
@@ -143,15 +143,49 @@ test("the operator's words are judged once when they finish, and the page moves 
   h.presenter.operatorQuietMs = 30;
   h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: "Okay, let's continue.", start_ms: 0, end_ms: 900 });
   await until(() => runs.length === 1);
-  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /The page moved as the operator asked.*Slide 25/.test(text)));
+  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /The voice tool moved the page for the operator's words.*Slide 25/.test(text)));
   // The voice then answers, naming the slide it wrongly thinks comes next, and passes the words on too.
   h.voiceSessions.live!.emit('event', { type: 'session.output_transcript.delta', delta: " Let's look at one highlight at a time. " });
   const gated = await h.sessionSwitch.gate("Okay, let's continue.", 'r1');
   assert.deepEqual(runs, [['page_next']], "one move, once: not again for the gate, nor for the voice's words in that answer");
-  assert.match(gated.handled!, /the page already shows what the operator asked for/);
+  assert.match(gated.handled!, /already moved the page for them/);
   assert.equal(judged.filter(said => /continue/.test(said)).length, 2, 'judged once by the presenter, once by the gate for routing');
   // Words that ask nothing of the page move nothing.
   h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: 'Fix the parser.', start_ms: 5000, end_ms: 6000 });
   await until(() => judged.includes('Fix the parser.'));
   assert.equal(runs.length, 1);
+});
+
+test("the operator's words come first: a part's last step goes on to the next section, a backchannel doesn't end their turn, and a complaint the page can't answer reaches the agent", async t => {
+  const { harness, page, until } = await import('./live-fake.ts');
+  const wait = <T>(label: string, check: () => T) => until(check).catch(error => { throw new Error(`${label}: ${error.message}`); });
+  const { h, lives } = await harness(t);
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  const runs: string[][] = [], judged: string[] = [];
+  const box: StageView = { ...view, where: 'Step 3 of 3', commands: [{ id: 'page_next_step', say: 'Next step in the box' }, { id: 'next_section', say: 'Go to the next section' }] };
+  const { StageNothing } = await import('../src/core/stage.ts');
+  h.stage = { tabId: 1, view: box, describe: async () => box, run: async (ids: string[]) => {
+    runs.push(ids);
+    if (ids[0] === 'page_next_step') throw new StageNothing('Already on the last step', [], '', { id: 'page_next_step', say: 'Next step in the box' });
+    return { done: [{ id: ids[0], say: 'Go to the next section' }], onScreen: 'Section 4. Your code owns the workflow' };
+  }, follow: async () => null, observe() {}, close() {} } as any;
+  const step = { needsAgent: .3, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 };
+  h.handOffAudit = { judge: async (said: string) => { judged.push(said); return { ...step, page: /next/i.test(said) ? { steps: ['page_next_step'], only: .8, work: .1, count: 1, walk: .1, unhappy: .1 } : /wrong/.test(said) ? { steps: [], only: .2, work: .3, count: 0, walk: 0, unhappy: .8 } : { steps: [], only: .1, work: .9, count: 0, walk: 0, unhappy: 0 } }; } } as any;
+  h.presenter.operatorQuietMs = 60000;
+  const live = h.voiceSessions.live!;
+  live.emit('event', { type: 'session.input_transcript.delta', delta: "We're continuing, next", start_ms: 0, end_ms: 900 });
+  // GPT Live's "Mm-hmm" while they pause isn't an answer: nothing is judged yet.
+  live.emit('event', { type: 'session.output_transcript.delta', delta: ' Mm-hmm.' });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.deepEqual(judged, [], 'a backchannel is not the end of their turn');
+  live.emit('event', { type: 'session.output_transcript.delta', delta: ' Sure, moving on. ' });
+  await wait('the move', () => runs.length === 2);
+  assert.deepEqual(runs, [['page_next_step'], ['next_section']], 'the last step of a part goes on to the next section');
+  // Told quietly, or aloud when it was already answering as the page moved.
+  await wait('the note', () => lives[0].appended.some(([kind, text]) => (kind === 'thinking' && /moved the page for the operator's words.*Section 4/.test(text)) || (kind === 'commentary' && /The page now shows: Section 4/.test(text))));
+  // A complaint no command answers: their words reach the agent, and GPT Live hears so.
+  await new Promise(resolve => setTimeout(resolve, 1600));
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'You keep going to the wrong section.', start_ms: 5000, end_ms: 6000 });
+  live.emit('event', { type: 'session.output_transcript.delta', delta: " I'm sorry about that. " });
+  await wait('the complaint', () => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /went to Claude, to fix how the page responds/.test(text)));
 });

@@ -18,7 +18,8 @@ const STEP_DWELL_MS = 1000;
 const SHOWS = /chrome[\w-]*__(navigate|set_tab_focus|tabs_create_mcp|execute_code)$/;
 
 export interface StageCommand { id: string; say: string; /** The element id it lands on, when it has one. */ anchor?: string; /** What people call its target, for speech cues. */ name?: string; /** A whole section. */ top?: boolean }
-export interface StageView { tabId: number; title: string; url: string; about: string | null; where: string; commands: StageCommand[]; /** What the page holds, for the voice to present from. */ outline?: string }
+export interface StageView { tabId: number; title: string; url: string; about: string | null; where: string; commands: StageCommand[]; /** What the page says, part by part, in its own words: what the voice knows of it. */ parts: StagePart[] }
+export interface StagePart { name: string; text: string }
 export interface StageRun { done: StageCommand[]; onScreen: string }
 /** A page command threw: the page's controller is broken, or was asked something it can't do. */
 export class StageError extends Error {
@@ -83,7 +84,8 @@ export class Stage {
     // A page's own controller can return anything: keep only well-formed commands.
     const str = (v: unknown, n = 300) => typeof v === 'string' ? v.slice(0, n) : typeof v === 'number' ? String(v) : '';
     const commands = (Array.isArray(view?.commands) ? view.commands : []).filter((c: any) => c && str(c.id) && str(c.say)).map((c: any) => ({ id: str(c.id, 60), say: str(c.say), ...str(c.anchor) ? { anchor: str(c.anchor) } : {}, ...str(c.name, 80) ? { name: str(c.name, 80) } : {}, ...c.top ? { top: true } : {} }));
-    this.view = { title: str(view?.title, 200), url: str(view?.url, 500), about: str(view?.about) || null, where: str(view?.where, 600), commands, ...str((view as any)?.outline, 4000) ? { outline: str((view as any).outline, 4000) } : {}, tabId } as StageView; this.viewAt = Date.now();
+    const parts = (Array.isArray((view as any)?.parts) ? (view as any).parts : []).slice(0, 60).filter((p: any) => p && str(p.text)).map((p: any) => ({ name: str(p.name, 100) || 'Untitled part', text: str(p.text, 6001) }));
+    this.view = { title: str(view?.title, 200), url: str(view?.url, 500), about: str(view?.about) || null, where: str(view?.where, 600), commands, parts, tabId }; this.viewAt = Date.now();
     this.pages.delete(tabId); this.pages.set(tabId, { title: this.view.title, url: this.view.url, about: this.view.about });
     // The other pages the agent showed are commands too, named by title, file and the page's own description, since people
     // name pages by what they are ("the diagram"); the page left last comes first.
@@ -100,13 +102,14 @@ export class Stage {
     if (!tabId) throw new Error('No page is on the stage');
     const started = Date.now();
     // Steps run in order; one that throws stops the rest, and what ran before it is still reported.
-    const { said, error, nothing } = await this.browser.evaluate<{ said: string[]; error?: string; nothing?: boolean }>(tabId, `${SCRIPT}\n;(async () => { const said = []; for (const [i, id] of ${JSON.stringify(ids)}.entries()) { if (i) await new Promise(r => setTimeout(r, ${STEP_DWELL_MS})); let out; try { out = await window.__fdcStage.run(id); } catch (e) { return { said, error: String(e && e.message || e) }; } if (out == null) return { said, nothing: true }; said.push(out); } return { said }; })()`, 15000);
+    const { said, error, nothing, limit } = await this.browser.evaluate<{ said: string[]; error?: string; nothing?: boolean; limit?: string }>(tabId, `${SCRIPT}\n;(async () => { const said = []; for (const [i, id] of ${JSON.stringify(ids)}.entries()) { if (i) await new Promise(r => setTimeout(r, ${STEP_DWELL_MS})); let out; try { out = await window.__fdcStage.run(id); } catch (e) { return { said, error: String(e && e.message || e) }; } if (out == null) return { said, nothing: true }; if (window.__fdcStage.limit) return { said, limit: String(out) }; said.push(out); } return { said }; })()`, 15000);
     this.viewAt = 0;
     const command = (id: string) => view?.commands.find(c => c.id === id) ?? { id, say: id };
     const done = ids.slice(0, said.length).map(command);
-    this.log({ type: error ? 'stage.failed' : nothing ? 'stage.nothing' : 'stage.ran', tabId, ids, ran: said.length, error, ms: Date.now() - started });
+    this.log({ type: error ? 'stage.failed' : nothing || limit ? 'stage.nothing' : 'stage.ran', tabId, ids, ran: said.length, error, limit, ms: Date.now() - started });
     if (error) throw new StageError(error, done, said.at(-1) ?? '', command(ids[said.length]));
-    if (nothing) throw new StageNothing('nothing to do there', done, said.at(-1) ?? '', command(ids[said.length]));
+    // Nothing to do there, or the page's answer that it had nothing to do ("Already on the last step"): not a move.
+    if (nothing || limit) throw new StageNothing(limit ?? 'nothing to do there', done, said.at(-1) ?? '', command(ids[said.length]));
     return { done, onScreen: said.at(-1) ?? '' };
   }
   /** Brings another page the agent showed to the front, as the stage; steps before and after it run on their own page. */

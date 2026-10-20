@@ -9,8 +9,8 @@ export interface ContextSink {
   ws?: { bufferedAmount: number };
   append(kind: AppendKind, content: string, delegationId?: string | null): Promise<unknown>;
 }
-/** One append: `since` is when the oldest agent work it carries arrived. */
-interface Fragment { kind: AppendKind; content: string; delegationId: string | null; source: string; queuedAt: number; since: number }
+/** One append: `since` is when the oldest agent work it carries arrived; `urgent` never waits for the floor. */
+interface Fragment { kind: AppendKind; content: string; delegationId: string | null; source: string; queuedAt: number; since: number; urgent?: boolean }
 
 export class ContextQueue {
   live: ContextSink;
@@ -27,7 +27,7 @@ export class ContextQueue {
   constructor(live: ContextSink, onError: (error: Error) => void, agent: { profile: AgentProfile }, { floor, holdMs = 10000 }: { floor?: Floor; holdMs?: number } = {}) {
     this.live = live; this.onError = onError; this.agent = agent; this.floor = floor; this.holdMs = holdMs;
   }
-  add(kind: AppendKind, text: string, delegationId: string | null = null, source = '', since = Date.now()) {
+  add(kind: AppendKind, text: string, delegationId: string | null = null, source = '', since = Date.now(), urgent = false) {
     if (this.stopped || !text) return;
     // Preserve the prepared representation. Chunking is an API transport
     // requirement; overload decisions belong in the feed, before this queue.
@@ -36,9 +36,11 @@ export class ContextQueue {
     const prefix = source ? `[${source}; part 999999/999999]\n` : '';
     const parts = textFragments(text, prefix);
     const queuedAt = Date.now();
-    for (const [index, content] of parts.entries()) this.queue.push({ kind, content, delegationId, source: source ? `[${source}; part ${index + 1}/${parts.length}]\n` : '', queuedAt, since });
+    for (const [index, content] of parts.entries()) this.queue.push({ kind, content, delegationId, source: source ? `[${source}; part ${index + 1}/${parts.length}]\n` : '', queuedAt, since, urgent });
     this.pump();
   }
+  /** fdc's own word on what it just did for the operator (what the page now shows): it answers them, so it doesn't wait for them to finish. */
+  now(kind: AppendKind, text: string) { this.add(kind, text, null, '', Date.now(), true); }
   pump() {
     if (this.writeTimer) clearTimeout(this.writeTimer); this.writeTimer = null;
     // WebSocket writes preserve order. Track API acknowledgments independently:
@@ -52,7 +54,7 @@ export class ContextQueue {
       // Agent context, including the rest of a batch already going in, waits for the
       // operator to finish. Answers about a delegation do not.
       const next = this.queue[0];
-      if (next.kind === 'thinking' && next.delegationId === null && this.floor?.held() && Date.now() < next.queuedAt + this.holdMs) {
+      if (next.kind === 'thinking' && next.delegationId === null && !next.urgent && this.floor?.held() && Date.now() < next.queuedAt + this.holdMs) {
         this.writeTimer = setTimeout(() => this.pump(), 100);
         return;
       }

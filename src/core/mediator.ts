@@ -119,7 +119,7 @@ export class Mediator {
     this.consider(requestId, request, said);
     if (this.audit) void this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId }, judged).then(needsAgent => this.publish({
       type: 'jev_check', requestId, at: Date.now(), kind: 'handoff', words: said, scores: { needsAgent, handOff },
-      outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${handOff === 'passed' ? 'GPT Live passed it on' : 'GPT Live kept it; sent when voice ended'}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})`,
+      outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${{ passed: 'GPT Live passed it on', answered: 'GPT Live kept it; sent when voice ended', escalated: "The voice tool passed it on: the page couldn't do what they meant" }[handOff]}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})`,
     }));
   }
   // Whether the words hold a standing instruction for the companion (Jev's learner), and Jev's tuning from them.
@@ -192,10 +192,23 @@ export class Mediator {
     if (gated.companion) this.consider(id, request, said); else this.previousUtterance = said;
     if (this.live.state === 'active') this.context.add('thinking', gated.handled, delegationId);
   }
-  send(id: string, request: SpokenRequest, content: string, delegationId: string, judged?: number | null) {
+  /**
+   * fdc passes the operator's latest words on itself, with a note on why: the page can't do what they mean (they were
+   * unhappy with it, or its controls failed). A delegation GPT Live makes for them afterwards finds them taken. False
+   * when nothing is unsent.
+   */
+  escalate(note: string) {
+    const request = this.live.state === 'active' ? this.history.request(Infinity) : undefined;
+    if (!request) return false;
+    const id = randomUUID();
+    this.history.claim(request, id);
+    this.inTurn(() => this.send(id, request, this.clean(voiceRequest(request.utterances, [...request.notes ?? [], note])), null, undefined, 'escalated'));
+    return true;
+  }
+  send(id: string, request: SpokenRequest, content: string, delegationId: string | null, judged?: number | null, handOff: HandOff = 'passed') {
     try {
       this.deliver({ id, content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now() });
-      this.check(id, request, 'passed', delegationId, judged);
+      this.check(id, request, handOff, delegationId, judged);
     } catch (error) {
       this.history.release(id);
       this.fault(error as Error);

@@ -205,15 +205,35 @@
     for (const el of [...document.querySelectorAll('[data-fdc]')].slice(0, 30)) if (visible(el) && !offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), name: el.dataset.fdc, run: () => go(el) });
     return commands;
   };
-  // What the page holds, section by section, for the voice to present from: each section's name and its opening words.
-  const outline = () => (!window.fdcController && deckSlides().length) ? deckSlides().slice(0, 30).map(el => {
-    const heading = el.querySelector(UNITS.heading), body = (el.textContent || '').replace(/\s+/g, ' ').trim();
-    return `${text(heading ?? el).slice(0, 80)} — ${body.slice(0, 200)}`;
-  }).join('\n') : units('heading').filter(h => level(h) <= sectionLevel()).slice(0, 24).map(h => {
-    let next = h.nextElementSibling; while (next && !text(next)) next = next.nextElementSibling;
-    const name = short(h) || text(h).slice(0, 40);
-    return `${name} — ${text(h).slice(0, 100)}: ${next ? text(next).slice(0, 180) : ''}`;
-  }).join('\n');
+  // What the page says, part by part, from its own text, hidden slides and tabs included: what the voice knows of it. The
+  // controller only moves the page; what the voice can say comes from what the page says.
+  const PART_CHARS = 6000, PAGE_CHARS = 20000;
+  const parts = () => {
+    const top = sectionLevel(), out = [{ name: 'Top of the page', text: '' }];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let heading = null, block = null;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const el = node.parentElement;
+      if (!el || el.closest('script, style, noscript, template, #__fdc_ring') || !(node.textContent || '').trim()) continue;
+      const h = el.closest(UNITS.heading);
+      if (h) {
+        if (h === heading) continue;
+        heading = h; block = null;
+        if (level(h) <= top) out.push({ name: text(h).slice(0, 100) || (h.textContent || '').trim().slice(0, 100), text: '' });
+        else out.at(-1).text += `\n${(h.textContent || '').replace(/\s+/g, ' ').trim()}:`;
+        continue;
+      }
+      const own = el.closest('p, li, td, th, dd, dt, figcaption, caption, blockquote, pre, button, label, summary, div, section');
+      out.at(-1).text += (own !== block ? '\n' : '') + (node.textContent || '').replace(/\s+/g, ' ');
+      block = own;
+    }
+    // Every part gets its share of the room: the short ones whole, the long ones cut to what is left.
+    const list = out.map(p => ({ name: p.name, text: p.text.replace(/[ \t]+/g, ' ').replace(/ *\n[\s\n]*/g, '\n').trim() })).filter(p => p.text);
+    const allow = [];
+    let room = PAGE_CHARS, left = list.length;
+    for (const i of list.map((_, i) => i).sort((a, b) => list[a].text.length - list[b].text.length)) { allow[i] = Math.min(list[i].text.length, PART_CHARS, Math.floor(room / left)); room -= allow[i]; left--; }
+    return list.map((p, i) => ({ name: p.name, text: allow[i] < p.text.length ? `${p.text.slice(0, allow[i])}…` : p.text }));
+  };
   // What a limit says, at its start ("Already on the first slide", "You can't go back", "This is the last slide"), or
   // "the deck has 6" ("No slide 7; the deck has 6"). Not a fault, which goes to the agent to fix, even one mentioning a
   // first slide or an end ("Cannot find the first slide element", "Unexpected token at the end of input").
@@ -225,7 +245,10 @@
     // A command's name is what people call its target, only as the controller gives it: a name guessed from a quote in
     // what it says ("a one-off finding the word \"certificate\"") let the voice move the page by words it never meant to.
     // camelCase ids read as words ("nextSlide" is next_slide), so a relative move is known as one.
-    return c.commands().slice(0, 80).map(cmd => ({ id: `page_${slug(String(cmd.id).replace(/([a-z0-9])([A-Z])/g, '$1_$2'))}`, say: cmd.say, name: typeof cmd.name === 'string' ? cmd.name : undefined, run: async () => {
+    // A part's own controls (its steps, its demo's buttons: `part` is the id of its element) are offered only while that
+    // part is on screen: the list stays short, and "next" there is the part's own next step.
+    const shown = cmd => { if (!cmd.part) return true; const el = document.getElementById(String(cmd.part)); return !!el && visible(el) && inView(el); };
+    return c.commands().filter(shown).slice(0, 80).map(cmd => ({ id: `page_${slug(String(cmd.id).replace(/([a-z0-9])([A-Z])/g, '$1_$2'))}`, say: cmd.say, name: typeof cmd.name === 'string' ? cmd.name : undefined, run: async () => {
       let out;
       // A limit thrown ("Already on the first slide") is an answer, as the guide asks controllers to return it; not a broken control.
       try { out = await c.run(cmd.id); } catch (error) { if (!LIMIT.test(String(error?.message ?? ''))) throw error; stage.limited = true; return String(error.message); }
@@ -355,7 +378,7 @@
         about: c?.about ?? null,
         where: c?.where?.() ?? describe(current('paragraph')),
         commands: stage.commands().map(({ id, say, anchor, name, top }) => ({ id, say, ...anchor ? { anchor } : {}, ...name ? { name } : {}, ...top ? { top } : {} })),
-        outline: c?.outline?.() ?? outline(),
+        parts: parts(),
       };
     },
     async run(id, { again = false } = {}) {
@@ -368,6 +391,8 @@
       // Nothing to do (no earlier place to go back to, no next item): null, and fdc sends the request on.
       stage.limited = false; stage.leftFrom = stage.landedAt = undefined;
       const steps = stage.history.length, out = (await command.run()) ?? null;
+      // A limit is the page's answer that it had nothing to do: fdc doesn't count it as a move.
+      stage.limit = out !== null && (stage.limited || LIMIT.test(String(out)));
       // A move to a named place joins the trail that back follows, and so does a relative move ("next slide") that
       // lands on one the page names; any other relative move is only remembered as the last move, with whether it
       // stepped from an element back can return to.

@@ -12,7 +12,7 @@ import { Mediator, type Gated } from '../src/core/mediator.ts';
 import { harness, until } from './live-fake.ts';
 
 const view: StageView = { tabId: 7, title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"',
-  commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'goto_options', say: 'Go to the section "Options"' }, { id: 'show_the_recommendation', say: 'Show and highlight: the recommendation' }] };
+  commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'goto_options', say: 'Go to the section "Options"' }, { id: 'show_the_recommendation', say: 'Show and highlight: the recommendation' }], parts: [] };
 const posted = (tool_name: string, tool_input: Record<string, unknown>, tool_response: unknown = '') => ({ raw: { hook_event_name: 'PostToolUse', tool_name, tool_input, tool_response } });
 
 test('the stage script parses (it only ever runs inside a page)', () => {
@@ -41,7 +41,7 @@ test('a closed stage tab ends the stage', async () => {
 
 test('the stage runs the script and its commands in the stage tab, in order', async () => {
   const calls: string[] = [];
-  const browser = { evaluate: async (tabId: number, expression: string) => { calls.push(`${tabId}:${expression.slice(-360)}`); return expression.endsWith('window.__fdcStage.describe()') ? { ...view, tabId: undefined } : expression.includes('"next_section"') ? { said: ['one'], error: 'Already broken' } : expression.includes('"back"') ? { said: [], nothing: true } : { said: ['one', 'two'] }; }, close() {} } as any;
+  const browser = { evaluate: async (tabId: number, expression: string) => { calls.push(`${tabId}:${expression.slice(-480)}`); return expression.endsWith('window.__fdcStage.describe()') ? { ...view, tabId: undefined } : expression.includes('"next_section"') ? { said: ['one'], error: 'Already broken' } : expression.includes('"back"') ? { said: [], nothing: true } : { said: ['one', 'two'] }; }, close() {} } as any;
   const stage = new Stage({ log: () => {}, browser });
   assert.equal(await stage.describe(), undefined, 'no stage, no page');
   stage.tabId = 7;
@@ -208,12 +208,13 @@ test("a request whose gate's outcome fails isn't lost: its words go with the nex
 });
 
 test('a page controller returning anything is kept to well-formed commands', async () => {
-  const odd = { title: 7, url: 'http://localhost/x.html', about: { not: 'text' }, where: null, outline: ['no'], commands: [{ id: 'slide_3', say: 'Go to slide 3', name: 3 }, { id: 4 }, null, 'x', { id: 'ok', say: 'Fine' }], cues: { say: 'next' } };
+  const odd = { title: 7, url: 'http://localhost/x.html', about: { not: 'text' }, where: null, parts: [{ name: 'Intro', text: 7 }, 'x', { name: 'Fine', text: 'It says this.' }], commands: [{ id: 'slide_3', say: 'Go to slide 3', name: 3 }, { id: 4 }, null, 'x', { id: 'ok', say: 'Fine' }], cues: { say: 'next' } };
   const stage = new Stage({ log: () => {}, browser: { evaluate: async () => odd, close() {} } as any });
   stage.tabId = 1;
   const view = (await stage.describe(0))!;
   assert.deepEqual(view.commands, [{ id: 'slide_3', say: 'Go to slide 3', name: '3' }, { id: 'ok', say: 'Fine' }]);
-  assert.equal(view.about, null); assert.equal((view as any).outline, undefined); assert.equal(view.title, '7');
+  assert.equal(view.about, null); assert.equal(view.title, '7');
+  assert.deepEqual(view.parts, [{ name: 'Intro', text: '7' }, { name: 'Fine', text: 'It says this.' }]);
 });
 
 test('the page on stage is remembered across restarts of fdc, and forgotten once its tab is gone', async () => {

@@ -45,6 +45,8 @@ window.fdcController = {
       { id: 'previous_slide', say: 'Go to the previous slide' },
       ...slides.map((s, i) => ({ id: `slide_${i + 1}`, say: `Go to slide ${i + 1}: "${s.title}"`, name: s.title })),
       { id: 'show_revenue_chart', say: 'Open the revenue chart full screen' },
+      // A part's own controls name the part's element: offered only while it is on screen.
+      { id: 'next_quarter', say: 'Show the next quarter in the revenue chart', part: 'revenue' },
     ];
   },
   // Do it, and resolve once the view has settled. Throw only if the controller is broken.
@@ -52,13 +54,13 @@ window.fdcController = {
     // …
     return 'Slide 4 of 12: "Margins". Gross margin is 41%, up 3 points.';
   },
-  // Optional: where the user is now, in words.
+  // Optional: where the user is now, in words (only where: not what to say or do next).
   where() { return `Slide ${current + 1} of 12: "${slides[current].title}"`; },
-  // Optional: what the whole page says, part by part, starting each line with the part's name, so the
-  // voice can present all of it (including slides or tabs not on screen) without asking you.
-  outline() { return slides.map(s => `${s.title} — ${s.summary}`).join('\n'); },
 };
 ```
+
+The controller only moves the page. What the voice knows of the page is the page's own text, all of it,
+hidden slides and tabs included: to let it explain something, put it on the page, never in the controller.
 
 Rules that make it work well:
 
@@ -72,6 +74,10 @@ Rules that make it work well:
 - **Next and previous.** If the page steps (slides, stages, steps), give it commands whose ids say
   so (`next_slide`, `previous_slide`): the voice says "let's go to the next one" or "let's go back
   one" and the page takes your step.
+- **A part's own controls go with the part.** Steps inside one part (a step-through box, a demo's
+  buttons, a chart's views) get `part`: the id of that part's element. They are offered only while it
+  is on screen, so the list stays short and "next" there is the part's next step. When its steps run
+  out, return a limit ("Already on the last step"): the voice tool goes on to the next section.
 - **Show what you do.** Your commands show their own result (the slide, a lit stage, a highlighted
   row): the voice tool's ring steps aside when one of your commands runs, so one highlight shows.
 - **Hidden things are yours to show.** Annotations on slides or tabs that aren't on screen can't be

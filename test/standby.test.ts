@@ -57,8 +57,10 @@ test('speech wakes it, priced like everything else; the new session is seeded, n
   assert.equal(lives[1].options.fork, undefined, 'never a slow fork');
   assert.ok(lives[1].options.input.some((item: any) => item.role === 'user' && /dark mode/.test(item.content[0].text)), 'seeded with the conversation');
   assert.equal(lives[1].greeting, undefined, 'no greeting');
-  await until(() => lives[1].appended.some(([kind, text]) => kind === 'thinking' && /The conversation continues.*Don't greet.*Sound from the operator woke it.*If no words of theirs arrive, say nothing/s.test(text)));
-  assert.ok(!lives[1].appended.some(([kind]) => kind === 'commentary'), 'the operator speaking is the cue: nothing else is said first');
+  // Told at the start, not by an append: appends right after a wake took GPT Live's timeline from the operator's words.
+  assert.ok(lives[1].options.input.some((item: any) => item.role === 'developer' && /The conversation continues.*Don't greet.*Sound from the operator woke it.*If no words of theirs arrive, say nothing/s.test(item.content[0].text)), 'told why in its startup input');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.deepEqual(lives[1].appended, [], 'the operator speaking is the cue: nothing is added or said first');
 });
 
 test("chewing, typing and knocks don't wake it: only a voice that lasts does", async t => {
@@ -191,18 +193,19 @@ function worklet() {
   return { send: (data: any) => processor.port.onmessage({ data }), run, sent };
 }
 
-test('on Standby the microphone is held, its last 3 s kept; on waking all of it; once connected it goes out first, then the live microphone, skipping silence', () => {
+test('on Standby the microphone is held; waking, it goes back to where the operator started talking; once connected it goes out first, then the live microphone, skipping silence', () => {
   const w = worklet(), second = 24000 / 128;
   w.send({ type: 'gate', threshold: .008 });
   w.send({ type: 'hold' });
-  w.run(.1, Math.round(5 * second));
+  // Earlier sound, a quiet of 2 s, then the operator talking for 5 s before the wake heard them.
+  w.run(.05, Math.round(3 * second)); w.run(0, Math.round(2 * second)); w.run(.1, Math.round(5 * second));
   assert.ok(w.sent.every(x => x === 0), 'nothing goes out on Standby');
   w.send({ type: 'wake' }); w.run(.2, Math.round(2 * second));
   w.send({ type: 'replay' }); w.sent.length = 0;
-  w.run(0, Math.round(6 * second)); w.run(.3, 10);
+  w.run(0, Math.round(8 * second)); w.run(.3, 10);
   const levels = [...new Set(w.sent.map(x => Math.round(x * 100) / 100))];
-  assert.deepEqual(levels.filter(x => x > 0).slice(0, 2), [.4, .8], 'held speech first (boosted by the gain), then what was said while waking');
+  assert.deepEqual(levels.filter(x => x > 0).slice(0, 2), [.4, .8], 'held speech first (boosted by the gain), then what was said while waking; nothing from before the quiet');
   const held = w.sent.filter(x => Math.abs(x - .4) < .01).length;
-  assert.ok(Math.abs(held - 3 * 24000) < 1000, `about the last 3 s before the wake (${held})`);
+  assert.ok(Math.abs(held - 5 * 24000) < 1000, `all 5 s the operator spoke before the wake (${held})`);
   assert.ok(w.sent.slice(-128).every(x => x > .5), 'the live microphone follows, the silence between skipped');
 });
