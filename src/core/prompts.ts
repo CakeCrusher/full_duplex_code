@@ -140,6 +140,8 @@ export const walkStarted = ({ profile: { product } }: Agent, onScreen: string) =
   `Nothing was sent to ${product}: the operator asked to be walked through the page, and the voice tool paces it. On screen now: ${onScreen.slice(0, 700)} Present this part in a few sentences, then stop: when you finish, the page moves on to the next part and you are told what to present next. Don't ask whether to go on.`;
 export const operatorMoved = (onScreen: string) =>
   `The page moved as the operator asked; on screen now: ${onScreen.slice(0, 700)} Say in a sentence or two what is there; there is nothing to pass on or move for it.`;
+// Said aloud (commentary is paraphrased as speech): only what the page shows.
+export const pageNow = (onScreen: string) => `The page now shows: ${onScreen.slice(0, 700)}`;
 export const walkNext = (onScreen: string) =>
   `The page moved on to the next part as you finished; on screen now: ${onScreen.slice(0, 700)} Present it in a few sentences, then stop; don't ask whether to go on.`;
 export const cueShown = (onScreen: string) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}`;

@@ -14,7 +14,7 @@ import { Stage, StageError, StageNothing, type StageView } from './stage.ts';
 import { FastAction, type PageAction } from './fast-action.ts';
 import { PAGE_ONLY, PAGE_OTHER, PAGE_UNHAPPY, PAGE_WALK, PAGE_WORK, WALK_WORK, type PageJudgment } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
-import { controllerNote, cueHandled, cueMovedNote, cueShown, improvisedFailedNote, lookingNote, oneOffDone, oneOffNote, operatorMoved, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, walkNext, walkStarted } from './prompts.ts';
+import { controllerNote, cueHandled, cueMovedNote, cueShown, improvisedFailedNote, lookingNote, oneOffDone, oneOffNote, operatorMoved, pageAlongside, pageNow, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, walkNext, walkStarted } from './prompts.ts';
 
 /** The same words, however much of them each side caught. */
 const same = (a: string, b: string) => { const x = a.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(), y = b.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); return !!x && !!y && (x.includes(y) || y.includes(x)); };
@@ -39,7 +39,9 @@ export class Presenter {
   /** GPT Live's latest words, for Jev to read a short reply against ("continue" after it presented a part). */
   voiceSaid = '';
   /** The operator's latest words the presenter judged, and whether the page moved for them; the wait for them to finish. */
-  turn?: { said: string; moved: Promise<boolean> }; listening?: ReturnType<typeof setTimeout>; operatorQuietMs = 700;
+  // GPT Live answering is the operator's end of turn; quiet alone counts only after a while (a pause mid-sentence isn't
+  // one: "Take me to … tonight" was judged as "Take me to").
+  turn?: { said: string; moved: Promise<boolean> }; listening?: ReturnType<typeof setTimeout>; operatorQuietMs = 2500;
   /** When the page last moved for the operator's words: GPT Live's own move words in that answer are not taken too. */
   movedForOperatorAt = 0;
   constructor(bridge: Harness, apiKey?: string) { this.bridge = bridge; if (apiKey && apiKey !== 'unused') this.fastAction = new FastAction({ apiKey }); }
@@ -141,8 +143,10 @@ export class Presenter {
       const moving = Date.now(), { done, onScreen } = await bridge.stage.run(page.steps);
       this.presentedAt = Date.now();
       bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });
-      // Already answering before the page moved, GPT Live can't have known what it shows: it is told to say it.
-      bridge.mediator?.context.add(this.spokeAt >= moving ? 'commentary' : 'thinking', operatorMoved(onScreen), null);
+      // Already answering before the page moved, GPT Live can't have known what it shows: it hears it to say (only what is
+      // on screen: commentary is paraphrased aloud, instructions and all).
+      if (this.spokeAt >= moving) bridge.mediator?.context.add('commentary', pageNow(onScreen), null);
+      else bridge.mediator?.context.add('thinking', operatorMoved(onScreen), null);
       return true;
     } catch (error) { bridge.log({ type: 'stage.turn_failed', said: said.slice(-200), message: (error as Error).message }); return false; }
   }
