@@ -11,6 +11,7 @@ import { startupHistory } from './startup-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
 import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, reconnectGreeting, resumeGreeting, stageBrief, stageOutline, standbyNews, standbyWake } from './prompts.ts';
 import { Stage } from './stage.ts';
+import { textFragments } from './text-fragments.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
 import { operatorVoice, type MicrophoneLevel } from './floor.ts';
@@ -445,8 +446,11 @@ export class VoiceSessions {
     run.briefed = signature;
     this.bridge.log({ type: 'stage.briefed', url: view.url, names });
     // The outline goes with the brief, as instructions: sent as news, a woken voice read it out ("What the page says…")
-    // and started the page over.
-    await live.append('instructions', stageBrief(view.title, names, others, view.where) + (view.outline ? `\n\n${stageOutline(view.title, view.outline)}` : '')).catch(error => this.bridge.log({ type: 'stage.error', message: (error as Error).message }));
+    // and started the page over. GPT Live takes at most 500 tokens an append: in one, a page with many parts was refused
+    // whole, so the voice never had the brief.
+    const brief = stageBrief(view.title, names, others, view.where) + (view.outline ? `\n\n${stageOutline(view.title, view.outline)}` : '');
+    try { for (const part of textFragments(brief)) await live.append('instructions', part); }
+    catch (error) { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); }
   }
   liveEvent(run: Run, event: any) {
     const { live, page } = run;
