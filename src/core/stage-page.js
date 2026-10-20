@@ -81,6 +81,21 @@
     const body = el.matches(UNITS.heading) ? text(el) + (el.nextElementSibling ? ' — ' + text(el.nextElementSibling) : '') : text(el);
     return `${kind} ${section && section !== el ? `in "${text(section).slice(0, 80)}"` : ''}: ${body.slice(0, 600)}`.replace(/\s+/g, ' ');
   };
+  // The words a one-off found are marked themselves (CSS custom highlights), not only ringed with their block; the next
+  // command or one-off clears them.
+  const unmark = () => window.CSS?.highlights?.delete('fdc-find');
+  const mark = (el, want) => {
+    if (!window.CSS?.highlights || !window.Highlight || !want) return;
+    if (!document.getElementById('__fdc_mark')) { const style = document.createElement('style'); style.id = '__fdc_mark'; style.textContent = '::highlight(fdc-find) { background-color: rgba(255, 170, 0, .45); }'; document.head.appendChild(style); }
+    const ranges = [], walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      // Lowercasing can change a text's length (rare letters): such a node is skipped, so no range lands off its words.
+      const said = (node.textContent || '').toLowerCase();
+      if (said.length !== (node.textContent || '').length) continue;
+      for (let at = said.indexOf(want); at >= 0; at = said.indexOf(want, at + want.length)) { const range = new Range(); range.setStart(node, at); range.setEnd(node, at + want.length); ranges.push(range); }
+    }
+    if (ranges.length) CSS.highlights.set('fdc-find', new Highlight(...ranges));
+  };
   const go = async (el, block = 'center') => {
     if (!el) return null;
     // Where the viewer was, even before any move (the paragraph at the top of the view): back returns there.
@@ -274,6 +289,7 @@
     now: () => describe(stage.at?.isConnected ? stage.at : current('paragraph')),
     /** A one-off's steps (fast-action.ts), carried out here: only these, and never a link to another site. */
     async perform(actions) {
+      unmark();
       for (const a of actions) {
         if (a.do === 'click') {
           const el = stage.el(a.n), link = el.closest('a[href]');
@@ -318,7 +334,9 @@
             await go(block ?? label);
           } else {
             const named = kind ? near(hits.map(el => el.closest(kind)).filter(Boolean)) : [], first = near(hits)[0];
-            await go(named[0] ?? first.closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? first);
+            const target = named[0] ?? first.closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? first;
+            await go(target);
+            mark(target, want);
           }
         } else if (a.do === 'scroll') {
           if (a.to === 'top' || a.to === 'bottom') scrollTo({ top: a.to === 'top' ? 0 : document.documentElement.scrollHeight, behavior: 'smooth' });
@@ -343,6 +361,7 @@
     async run(id, { again = false } = {}) {
       const command = stage.commands().find(c => c.id === id);
       if (!command) throw new Error(`No command "${id}" on this page`);
+      unmark();
       stage.quiet = id === 'clear_highlight';
       // Where the viewer starts, when the page names it, is the first place back can return to.
       if (!stage.trail.length && id !== 'back') { let start; try { start = landed(window.fdcController?.where?.()); } catch {} if (start) stage.trail.push(start); }
