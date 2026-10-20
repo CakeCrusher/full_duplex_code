@@ -121,7 +121,7 @@ test('channel delivery ends at sent and does not depend on Claude calling a tool
   assert.equal(item.text, content);
 });
 
-test('spoken delivery confirmation follows channel success once, independently of hook context', async t => {
+test('the delivery confirmation follows channel success once, independently of hook context', async t => {
   const h = await fixture(t), appends: { kind: string; content: string; delegationId?: string | null }[] = [];
   h.live = { id: 'voice-one', state: 'active', append: async (kind: string, content: string, delegationId?: string | null) => appends.push({ kind, content, delegationId }), close: async () => { h.live!.state = 'closed'; } } as any;
   const ws = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/channel', { headers: { Authorization: `Bearer ${h.agentToken}` } });
@@ -137,7 +137,7 @@ test('spoken delivery confirmation follows channel success once, independently o
   assert.equal(h.outbox.get('request-one')!.state, 'dispatching');
   assert.equal(appends.length, 0, 'writing to the channel socket is not channel success');
   await event({ type: 'channel.sent', id: 'request-one' });
-  assert.deepEqual(appends, [{ kind: 'commentary', content: 'Your request has been sent to Claude Code.', delegationId: 'delegation-one' }]);
+  assert.deepEqual(appends, [{ kind: 'thinking', content: 'The request has been delivered to Claude Code. Confirm it briefly, unless the operator asked you not to.', delegationId: 'delegation-one' }], 'quietly: GPT Live confirms as its instructions say');
   await event({ type: 'channel.sent', id: 'request-one' });
   assert.equal(appends.length, 1, 'a duplicate receipt cannot repeat the spoken confirmation');
   h.deliver({ id: 'old-request', content: 'Earlier request.', voiceSessionId: 'old-voice', delegationId: 'old-delegation' });
@@ -150,7 +150,7 @@ test('spoken delivery confirmation follows channel success once, independently o
   assert.ok(h.uiEvents.some(e => e.type === 'fault' && /request was sent.*voice confirmation failed/i.test(e.message)));
 });
 
-test('every delivered request is confirmed aloud once', async t => {
+test('every delivered request is confirmed once', async t => {
   const h = await fixture(t), appends: { kind: string; content: string }[] = [];
   h.live = { id: 'voice-one', state: 'active', append: async (kind: string, content: string) => appends.push({ kind, content }), close: async () => { h.live!.state = 'closed'; } } as any;
   const channel = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/channel', { headers: { Authorization: `Bearer ${h.agentToken}` } });
@@ -161,7 +161,7 @@ test('every delivered request is confirmed aloud once', async t => {
   h.deliver({ id: 'build', content: 'Build.', voiceSessionId: 'voice-one' });
   channel.send(JSON.stringify({ type: 'channel.sent', id: 'build' })); await settle();
   channel.send(JSON.stringify({ type: 'channel.sent', id: 'build' })); await settle();
-  assert.deepEqual(appends.map(a => a.content), ['Your request has been sent to Claude Code.']);
+  assert.deepEqual(appends.map(a => a.content), ['The request has been delivered to Claude Code. Confirm it briefly, unless the operator asked you not to.']);
 });
 
 test('the actual command hook relays a typed prompt into observer history and browser activity', async t => {

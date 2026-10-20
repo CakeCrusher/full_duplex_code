@@ -581,7 +581,9 @@ export class VoiceSessions {
     // Delivery is an operator-facing fact, independent of the observation
     // backlog. The adapter confirms its own write; this does not claim that the
     // agent has started or completed the work. Never replay it in a new voice session.
-    live.append('commentary', deliveryConfirmation(this.bridge.agent), task.delegationId ?? null).catch(error => {
+    // GPT Live hears it quietly and confirms as its instructions say: sent as speech (commentary), it was said aloud
+    // even with the operator's own instruction not to (Oct 18, again every request on Oct 19).
+    live.append('thinking', deliveryConfirmation(this.bridge.agent), task.delegationId ?? null).catch(error => {
       if (this.live === live && live.state === 'active') this.bridge.fault(new Error(`The request was sent, but its voice confirmation failed: ${error.message}`));
     });
   }

@@ -106,7 +106,7 @@ export const nothingToSend = ({ profile: { name } }: Agent) =>
   `No new operator speech is available to send. Answer from the observed ${name} session; already submitted requests must not be resent.`;
 export const queueFailed = ({ profile: { name } }: Agent) =>
   `The voice bridge failed to queue the user’s request for ${name}. The request was not delivered; the terminal connection needs attention.`;
-export const deliveryConfirmation = ({ profile: { product } }: Agent) => `Your request has been sent to ${product}.`;
+export const deliveryConfirmation = ({ profile: { product } }: Agent) => `The request has been delivered to ${product}. Confirm it briefly, unless the operator asked you not to.`;
 
 // A delegated request as the agent receives it: a note on how to read it, then
 // the conversation since the previous request, one utterance per line.
