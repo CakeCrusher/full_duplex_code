@@ -200,7 +200,7 @@ function measured(data: WorkletMessage) {
     $<HTMLMeterElement>('level').value = Math.min(1, (data.rawRms ?? data.rms) * 5);
     $('gate-state').textContent = standby ? muted ? 'Muted' : data.rms > 0 ? 'Standby · speech wakes voice' : 'Standby · listening here' : !active ? 'Waiting for Live' : muted ? 'Muted' : data.rms > 0 ? 'Passing audio to Live' : 'Gate closed · sending silence';
     // On Standby too: the bridge hears the operator start speaking from these.
-    if (bridge.open && (active || standby)) bridge.send({ type: 'audio_level', at: audio.audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, outputRms: data.outputRms });
+    if (bridge.open && (active || standby)) bridge.send({ type: 'audio_level', at: audio.audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, voiced: data.voiced, outputRms: data.outputRms });
   }
 }
 async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false, asked = false, fromStandby = false) {

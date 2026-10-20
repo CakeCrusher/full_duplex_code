@@ -4,6 +4,22 @@ declare function registerProcessor(name: string, processor: new () => AudioWorkl
 declare const sampleRate: number;
 declare const currentTime: number;
 
+// Voice, not noise: a stretch of sound (30 ms) is voiced when it repeats itself at a pitch people speak at (70-400 Hz),
+// as vowels do; chewing, typing and a slapped table don't. Standby wakes on voice only.
+const VOICED = .6;
+function voiced(frame: Float32Array, rate: number) {
+  let mean = 0; for (const x of frame) mean += x; mean /= frame.length;
+  let energy = 0; for (const x of frame) energy += (x - mean) ** 2;
+  if (energy / frame.length < 1e-6) return false;
+  let best = 0;
+  for (let lag = Math.floor(rate / 400), last = Math.min(frame.length >> 1, Math.ceil(rate / 70)); lag <= last; lag++) {
+    let xy = 0, xx = 0, yy = 0;
+    for (let i = 0; i + lag < frame.length; i++) { const a = frame[i] - mean, b = frame[i + lag] - mean; xy += a * b; xx += a * a; yy += b * b; }
+    best = Math.max(best, xy / (Math.sqrt(xx * yy) || 1));
+  }
+  return best >= VOICED;
+}
+
 class DuplexAudio extends AudioWorkletProcessor {
   muted = false; ticks = 0;
   inputPower = 0; outputPower = 0; levelSamples = 0;
@@ -15,6 +31,9 @@ class DuplexAudio extends AudioWorkletProcessor {
   // microphone follows behind it; silence in the backlog is skipped, so it catches up at the first pause.
   holding = false; keepAll = false; replaying = false;
   held: Float32Array[] = []; heldSamples = 0;
+  // The raw microphone at about 12 kHz, in 30 ms windows, and how many of each level's windows were voiced.
+  step = Math.max(1, Math.round(sampleRate / 12000)); sum = 0; summed = 0;
+  window = new Float32Array(Math.round(.03 * sampleRate / this.step)); filled = 0; windows = 0; voicedWindows = 0;
   constructor() {
     super();
     this.port.onmessage = ({ data }) => {
@@ -36,6 +55,12 @@ class DuplexAudio extends AudioWorkletProcessor {
     for (let i = 0; i < output.length; i++) {
       const sample = this.muted ? 0 : (input?.[i] ?? 0);
       rawPower += sample ** 2; peak = Math.max(peak, Math.abs(sample));
+      this.sum += sample;
+      if (++this.summed < this.step) continue;
+      this.window[this.filled++] = this.sum / this.step; this.sum = 0; this.summed = 0;
+      if (this.filled < this.window.length) continue;
+      this.filled = 0; this.windows++;
+      if (voiced(this.window, sampleRate / this.step)) this.voicedWindows++;
     }
     const rawRms = Math.sqrt(rawPower / output.length);
     if (rawRms >= this.gateThreshold) this.gateHoldSamples = sampleRate * .3;
@@ -83,9 +108,9 @@ class DuplexAudio extends AudioWorkletProcessor {
     }
     if (++this.ticks % 20 === 0) {
       this.port.postMessage({ type: 'level', rms: Math.sqrt(this.inputPower / this.levelSamples), outputRms: Math.sqrt(this.outputPower / this.levelSamples),
-        rawRms: Math.sqrt(this.rawInputPower / this.levelSamples), gateThreshold: this.gateThreshold,
+        rawRms: Math.sqrt(this.rawInputPower / this.levelSamples), gateThreshold: this.gateThreshold, voiced: this.windows ? this.voicedWindows / this.windows : 0,
         durationMs: this.levelSamples / sampleRate * 1000, endTime: currentTime + output.length / sampleRate });
-      this.inputPower = 0; this.outputPower = 0; this.rawInputPower = 0; this.levelSamples = 0;
+      this.inputPower = 0; this.outputPower = 0; this.rawInputPower = 0; this.levelSamples = 0; this.windows = 0; this.voicedWindows = 0;
     }
     return true;
   }

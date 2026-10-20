@@ -1,9 +1,9 @@
 // GPT Live's own words move the page. It is told to say "let's look at" and a part's name as it
-// turns to that part (or a page's own cue phrases, such as "next slide"); the moment those words
+// turns to that part, or "let's go to the next one" and "let's go back one"; the moment those words
 // appear in its transcript, the stage runs the matching command, so the page keeps time with speech.
 
-/** A cue: the words that run a stage command. A name cue matches after a turning phrase. */
-export interface SpeechCue { run: string; label: string; words: string[]; name?: boolean }
+/** A cue: the words that run a stage command, after a turning phrase. Listed: a name GPT Live is told. */
+export interface SpeechCue { run: string; label: string; words: string[]; listed?: boolean }
 
 // Numbers said as words match names written with digits ("stage two" is "stage 2").
 const NUMBERS: Record<string, string> = { one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12' };
@@ -16,7 +16,8 @@ export const cueWords = (text: string) => { const words = normalize(text).split(
 /** What GPT Live says just before a part's name to move there ("let's look at", "now to"). */
 // Also "let's look the flow", as GPT Live said after a wake. Not "now" or "next": narrating the agent's work
 // ("now the options parser is fixed") would move the page.
-const TURNS = [['look', 'at'], ['go', 'to'], ['turn', 'to'], ['move', 'to'], ['jump', 'to'], ['head', 'to'], ['on', 'to'], ['onto'], ['over', 'to'], ['back', 'to'], ['look']];
+// "let's go back one" and "let's go to the next one" step through the page.
+const TURNS = [['look', 'at'], ['go', 'to'], ['turn', 'to'], ['move', 'to'], ['jump', 'to'], ['head', 'to'], ['on', 'to'], ['onto'], ['over', 'to'], ['back', 'to'], ['look'], ['go']];
 
 // A part's number said before its name ("let's look at stage one, the browser reads the address").
 const NUMBERING = /^(stage|step|slide|box|number|\d+)$/;
@@ -39,22 +40,18 @@ export class CueMatcher {
       for (let start = 0; start + cue.words.length <= complete; start++) {
         const end = start + cue.words.length;
         if (end <= this.fired || !cue.words.every((w, i) => words[start + i] === w)) continue;
-        // A page's own phrase ("next slide") needs "let's" within a few words before it too: GPT Live talked
-        // about decks' next slides 16 times in the operator's past sessions, never meaning to move one.
-        if (!cue.name) { const lead = words.slice(Math.max(0, start - 4), start); if (!lead.includes('lets') && !(lead.includes('let') && lead.includes('us'))) continue; }
-        if (cue.name) {
-          // Up to two filler words ("the", "section") between the turning phrase and the name, and "let's"
-          // before it: presenting, GPT Live says "let's look at"; relaying the agent's work ("Claude will look
-          // at the options parser") it doesn't.
-          const before = words.slice(Math.max(0, start - 9), start).filter(w => !LEADING.has(w) && w !== 'part' && w !== 'section' && !NUMBERING.test(w));
-          // Saying where the operator now is ("you're now at the request") moves the page there too, so it is true.
-          const placed = ['at', 'on'].includes(before.at(-1)!) && before.at(-2) === 'now' && ['youre', 'were'].includes(before.at(-3)!);
-          if (!placed) {
-            const turn = TURNS.find(t => t.every((w, i) => before[before.length - t.length + i] === w));
-            if (!turn) continue;
-            const lead = before.slice(Math.max(0, before.length - turn.length - 3), before.length - turn.length);
-            if (!lead.includes('lets') && !(lead.includes('let') && lead.includes('us'))) continue;
-          }
+        // Up to two filler words ("the", "section") between the turning phrase and the name, and "let's"
+        // before it: presenting, GPT Live says "let's look at"; relaying the agent's work ("Claude will look
+        // at the options parser") it doesn't, nor talking about a deck's next slide.
+        const before = words.slice(Math.max(0, start - 9), start).filter(w => !LEADING.has(w) && w !== 'part' && w !== 'section' && !NUMBERING.test(w));
+        // Saying where the operator now is ("you're now at the request", "now we're on the request") moves the page
+        // there too, so it is true.
+        const now = ['at', 'on'].includes(before.at(-1)!) && (before.at(-2) === 'now' ? ['youre', 'were'].includes(before.at(-3)!) : before.at(-3) === 'now' && ['youre', 'were'].includes(before.at(-2)!));
+        if (!now) {
+          const turn = TURNS.find(t => t.every((w, i) => before[before.length - t.length + i] === w));
+          if (!turn) continue;
+          const lead = before.slice(Math.max(0, before.length - turn.length - 3), before.length - turn.length);
+          if (!lead.includes('lets') && !(lead.includes('let') && lead.includes('us'))) continue;
         }
         found.push({ cue, end });
       }

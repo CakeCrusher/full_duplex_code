@@ -17,8 +17,7 @@ const STEP_DWELL_MS = 1000;
 const SHOWS = /chrome[\w-]*__(navigate|set_tab_focus|tabs_create_mcp|execute_code)$/;
 
 export interface StageCommand { id: string; say: string; /** The element id it lands on, when it has one. */ anchor?: string; /** What people call its target, for speech cues. */ name?: string; /** A whole section. */ top?: boolean }
-export interface StageCue { say: string; run: string }
-export interface StageView { tabId: number; title: string; url: string; about: string | null; where: string; commands: StageCommand[]; cues: StageCue[]; /** What the page holds, for the voice to present from. */ outline?: string }
+export interface StageView { tabId: number; title: string; url: string; about: string | null; where: string; commands: StageCommand[]; /** What the page holds, for the voice to present from. */ outline?: string }
 export interface StageRun { done: StageCommand[]; onScreen: string }
 /** A page command threw: the page's controller is broken, or was asked something it can't do. */
 export class StageError extends Error {
@@ -67,17 +66,16 @@ export class Stage {
       if (/not in the MCP group|No tab with id|tab.*(closed|not found)/i.test((error as Error).message) && this.tabId === tabId) { this.log({ type: 'stage.gone', tabId }); this.tabId = undefined; this.view = undefined; this.pages.delete(tabId); }
       throw error;
     }
-    // A page's own controller can return anything: keep only well-formed commands and cues.
+    // A page's own controller can return anything: keep only well-formed commands.
     const str = (v: unknown, n = 300) => typeof v === 'string' ? v.slice(0, n) : typeof v === 'number' ? String(v) : '';
     const commands = (Array.isArray(view?.commands) ? view.commands : []).filter((c: any) => c && str(c.id) && str(c.say)).map((c: any) => ({ id: str(c.id, 60), say: str(c.say), ...str(c.anchor) ? { anchor: str(c.anchor) } : {}, ...str(c.name, 80) ? { name: str(c.name, 80) } : {}, ...c.top ? { top: true } : {} }));
-    const cues = (Array.isArray(view?.cues) ? view.cues : []).filter((c: any) => c && str(c.say) && str(c.run)).map((c: any) => ({ say: str(c.say, 80), run: str(c.run, 60) }));
-    this.view = { title: str(view?.title, 200), url: str(view?.url, 500), about: str(view?.about) || null, where: str(view?.where, 600), commands, cues, ...str((view as any)?.outline, 4000) ? { outline: str((view as any).outline, 4000) } : {}, tabId } as StageView; this.viewAt = Date.now();
+    this.view = { title: str(view?.title, 200), url: str(view?.url, 500), about: str(view?.about) || null, where: str(view?.where, 600), commands, ...str((view as any)?.outline, 4000) ? { outline: str((view as any).outline, 4000) } : {}, tabId } as StageView; this.viewAt = Date.now();
     this.pages.delete(tabId); this.pages.set(tabId, { title: this.view.title, url: this.view.url, about: this.view.about });
     // The other pages the agent showed are commands too, named by title, file and the page's own description, since people
     // name pages by what they are ("the diagram"); the page left last comes first.
     const others = [...this.pages].filter(([id]) => id !== tabId).reverse();
     others.forEach(([id, page], index) => commands.push({ id: `tab_${id}`, say: `Switch to the other page "${page.title.slice(0, 80)}" (${[page.url.replace(/[?#].*$/, '').split('/').filter(Boolean).at(-1) ?? page.url, page.about?.slice(0, 80)].filter(Boolean).join('; ')}), in another tab${index ? '' : ': the page shown before this one'}` }));
-    this.log({ type: 'stage.described', tabId, url: this.view.url, commands: commands.length, cues: cues.length, ms: Date.now() - started });
+    this.log({ type: 'stage.described', tabId, url: this.view.url, commands: commands.length, ms: Date.now() - started });
     return this.view;
   }
   /** Runs commands in order, each finished before the next; resolves to what is on screen after. */
@@ -110,19 +108,26 @@ export class Stage {
     return { done: [...before.done, step, ...rest?.done ?? []], onScreen: rest?.onScreen ?? `The page "${view?.title ?? page?.title}" is in front${view?.where ? `, at: ${view.where}` : ''}.` };
   }
   /**
-   * What GPT Live can say to move the page as it talks: "let's look at" a part's name (sections and
-   * annotated parts), and the page's own cue phrases.
+   * What GPT Live can say to move the page as it talks, after "let's look at" or another turning phrase: a part's name
+   * (the page's own named places, sections, annotated parts), a long name's title alone ("after a move" for
+   * "Highlighting: after a move"), and the next or previous one, which take the page's own step when it has one.
    */
   static cues(view: StageView): SpeechCue[] {
     const cues: SpeechCue[] = [];
-    // The page's own named places first (its slides, views), then its annotations and headings: the voice is told them in this order.
+    // The page's own named places first, then its annotations and headings: the voice is told them in this order.
     const named = view.commands.filter(c => c.name && (c.top || /^(show|page|slide)_/.test(c.id)));
-    for (const command of [...named.filter(c => c.id.startsWith('page_')), ...named.filter(c => !c.id.startsWith('page_'))]) cues.push({ run: command.id, label: command.name!, words: cueWords(command.name!), name: true });
-    for (const cue of view.cues ?? []) {
-      // As the stage script names the page's commands: camelCase read as words ("nextSlide" is page_next_slide).
-      const id = `page_${String(cue.run).replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}`;
-      if (view.commands.some(c => c.id === id)) cues.push({ run: id, label: cue.say, words: cueWords(cue.say) });
+    for (const command of [...named.filter(c => c.id.startsWith('page_')), ...named.filter(c => !c.id.startsWith('page_'))]) {
+      cues.push({ run: command.id, label: command.name!, words: cueWords(command.name!), listed: true });
+      const title = command.name!.split(/\s*[:—–]\s+|\s+-\s+/).at(-1)!;
+      if (title !== command.name && cueWords(title).length >= 2) cues.push({ run: command.id, label: title, words: cueWords(title) });
     }
+    const find = (test: RegExp, ...fallbacks: string[]) => view.commands.find(c => c.id.startsWith('page_') && test.test(c.id))?.id ?? fallbacks.find(id => view.commands.some(c => c.id === id));
+    const next = find(/(^|_)(next|forward)(_|$)/, 'next_slide', 'next_section'), previous = find(/(^|_)(previous|prev|back)(_|$)/, 'previous_slide', 'previous_section');
+    for (const noun of ['one', 'slide', 'part', 'section', 'stage']) {
+      if (next) cues.push({ run: next, label: `next ${noun}`, words: cueWords(`next ${noun}`) });
+      if (previous) cues.push({ run: previous, label: `previous ${noun}`, words: cueWords(`previous ${noun}`) });
+    }
+    if (previous) cues.push({ run: previous, label: 'back one', words: cueWords('back one') });
     return cues;
   }
   /** What the viewer can act on, numbered, and what is on screen: for a one-off action. */

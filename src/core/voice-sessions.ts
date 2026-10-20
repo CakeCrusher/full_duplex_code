@@ -13,7 +13,7 @@ import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeti
 import { Stage } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
-import { operatorSpeaking, type MicrophoneLevel } from './floor.ts';
+import { operatorVoice, type MicrophoneLevel } from './floor.ts';
 
 export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean; /** Set for an instruction Jev learned: its short ID, such as I3, and the agent session it was learned in. */ learned?: string; learnedIn?: string }
 /** The latest voice session's span and GPT Live's usage reports, for the page's meters. */
@@ -99,9 +99,17 @@ export class VoiceSessions {
   }
   /** Whether this page's microphone is the one voice listens to: the page running voice, or the one on Standby. */
   listensTo(page: Page) { return page === this.page || page === this.standby?.page; }
-  /** The listening page's microphone and speaker levels (about 0.1 s each), priced: the operator's sound and GPT Live's. */
+  /** When the microphone last heard the operator's voice. */
+  voiceAt = -Infinity;
+  /**
+   * The listening page's microphone and speaker levels (about 0.1 s each), priced: the operator's voice and GPT Live's.
+   * A voice holds for more than a moment: a knock rings through one window, a word through several. On the operator's
+   * recordings of Oct 19, a voice was heard in 70% of loud windows; on chewing, typing and knocks, nothing woke Standby.
+   */
   heard(level: MicrophoneLevel & { outputRms?: number }) {
-    if (operatorSpeaking(level)) this.activity.add('operator');
+    const voice = operatorVoice(level), held = voice && level.at - this.voiceAt < 250;
+    if (voice) this.voiceAt = level.at;
+    if (held) this.activity.add('operator');
     if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS) this.activity.add('live');
   }
   /**
@@ -426,15 +434,15 @@ export class VoiceSessions {
     if (!view) return false;
     if (live.state !== 'active') return;
     // Every part the voice can name, up to the stage script's own cap on a page's commands (80).
-    const cues = Stage.cues(view), names = cues.filter(c => c.name).map(c => c.label).slice(0, 80), phrases = cues.filter(c => !c.name).map(c => c.label).slice(0, 40);
+    const cues = Stage.cues(view), names = cues.filter(c => c.listed).map(c => c.label).slice(0, 80), steps = cues.some(c => /^(next|previous) /.test(c.label));
     this.bridge.presenter.speechCues.set(cues);
     // A reload (often with a new query to bust the cache) is the same page unless its parts changed.
     const others = [...this.bridge.stage.pages].filter(([tabId]) => tabId !== view.tabId).map(([, page]) => page.title);
-    const signature = JSON.stringify([view.url.replace(/[?#].*$/, ''), names, phrases, others]);
+    const signature = JSON.stringify([view.url.replace(/[?#].*$/, ''), names, steps, others]);
     if (run.briefed === signature) return;
     run.briefed = signature;
-    this.bridge.log({ type: 'stage.briefed', url: view.url, names, phrases });
-    await live.append('instructions', stageBrief(view.title, names, phrases, others, view.where)).catch(error => this.bridge.log({ type: 'stage.error', message: (error as Error).message }));
+    this.bridge.log({ type: 'stage.briefed', url: view.url, names, steps });
+    await live.append('instructions', stageBrief(view.title, names, steps, others, view.where)).catch(error => this.bridge.log({ type: 'stage.error', message: (error as Error).message }));
     if (view.outline) run.mediator.context.add('thinking', stageOutline(view.title, view.outline), null);
   }
   liveEvent(run: Run, event: any) {

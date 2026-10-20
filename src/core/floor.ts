@@ -13,8 +13,10 @@ export class Floor {
 }
 
 /** The microphone level the page reports: speech when the gate passes audio louder than its threshold. */
-export interface MicrophoneLevel { at: number; inputRms: number; rawInputRms?: number; gateThreshold?: number }
+export interface MicrophoneLevel { at: number; inputRms: number; rawInputRms?: number; gateThreshold?: number; /** The share of the window that sounded like a voice (pages from Oct 19 on). */ voiced?: number }
 // With the gate off, every window passes audio; the default gate threshold still separates speech from room noise.
 const SPEECH_RMS = .008;
 export const operatorSpeaking = ({ inputRms, rawInputRms = inputRms, gateThreshold = 0 }: MicrophoneLevel) =>
   inputRms > 0 && rawInputRms >= Math.max(gateThreshold, SPEECH_RMS);
+/** Loud enough and, when the page says, a voice: chewing, typing or a slapped table is loud but no voice. */
+export const operatorVoice = (level: MicrophoneLevel) => operatorSpeaking(level) && !(Number.isFinite(level.voiced) && level.voiced! < .5);

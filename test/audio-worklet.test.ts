@@ -132,3 +132,21 @@ test('native media gates the outgoing track and passes incoming speech unchanged
   assert.deepEqual([...new Int16Array(messages.at(-1).pcm)].slice(0,4), [-32768,-32768,32767,32767], 'audit peaks saturate instead of wrapping to the opposite sign');
   assert.deepEqual(speaker,incoming, 'audit encoding never changes speaker samples');
 });
+
+test('levels say how much of the sound was a voice: a pitched vowel is, noise and clicks are not', () => {
+  let Processor: any; const messages: any[] = [];
+  const context = vm.createContext({ AudioWorkletProcessor: class { port: any; constructor() { this.port = { postMessage: (e: any) => messages.push(e) }; } },
+    registerProcessor: (_name: string, type: any) => { Processor = type; }, sampleRate: 24000, currentTime: 0 });
+  vm.runInContext(worklet(), context);
+  const voicedShare = (sample: (i: number) => number) => {
+    const processor = new Processor(); messages.length = 0;
+    for (let at = 0; at < 24000; at += 128) processor.process([[Float32Array.from({ length: 128 }, (_, i) => sample(at + i))], [new Float32Array(128)]], [[new Float32Array(128)], [new Float32Array(128)]]);
+    const levels = messages.filter(e => e.type === 'level');
+    return levels.reduce((sum, e) => sum + e.voiced, 0) / levels.length;
+  };
+  let seed = 7; const noise = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647 * 2 - 1; };
+  const vowel = (i: number) => [1, 2, 3, 4, 5].reduce((sum, h) => sum + Math.sin(2 * Math.PI * 140 * h * i / 24000) / h, 0) * .1;
+  assert.ok(voicedShare(vowel) > .9, 'a vowel at 140 Hz');
+  assert.equal(voicedShare(() => noise() * .1), 0, 'noise');
+  assert.equal(voicedShare(i => i % 3000 < 200 ? noise() * .4 * Math.exp(-(i % 3000) / 40) : 0), 0, 'clicks');
+});

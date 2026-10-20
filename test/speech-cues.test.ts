@@ -14,13 +14,15 @@ const view: StageView = { tabId: 1, title: 'Deck', url: 'http://localhost/d.html
     { id: 'page_next_slide', say: 'Go to the next slide' },
     { id: 'page_previous_slide', say: 'Go to the previous slide' },
     { id: 'page_slide_2', say: 'Go to slide 2: "Margins"', name: 'Margins' },
-  ],
-  cues: [{ say: 'Next slide', run: 'next_slide' }, { say: 'Previous slide', run: 'previousSlide' }, { say: 'Missing', run: 'not_a_command' }] };
+    { id: 'page_slide_3', say: 'Go to slide 3', name: 'Highlighting: after a move' },
+  ] };
 
-test('cues: the page\'s own names first, then section and annotation names, and the page\'s own phrases', () => {
+test("cues: the page's own names first, then section and annotation names, a titled name's title, and next and back", () => {
   const cues = Stage.cues(view);
-  assert.deepEqual(cues.map(c => `${c.run}:${c.words.join(' ')}:${c.name ?? false}`), [
-    'page_slide_2:margins:true', 'goto_sessions:sessions:true', 'goto_system_map:system map:true', 'goto_map:map:true', 'show_my_recommendation:recommendation:true', 'page_next_slide:next slide:false', 'page_previous_slide:previous slide:false'], "a controller's camelCase cue finds its command");
+  assert.deepEqual(cues.filter(c => c.listed).map(c => `${c.run}:${c.words.join(' ')}`), [
+    'page_slide_2:margins', 'page_slide_3:highlighting after a move', 'goto_sessions:sessions', 'goto_system_map:system map', 'goto_map:map', 'show_my_recommendation:recommendation'], 'the names the voice is told');
+  assert.deepEqual(cues.filter(c => !c.listed && !/^(next|previous|back) /.test(c.label)).map(c => `${c.run}:${c.label}`), ['page_slide_3:after a move'], 'the title alone, not told');
+  assert.ok(cues.some(c => c.run === 'page_next_slide' && c.label === 'next one') && cues.some(c => c.run === 'page_previous_slide' && c.label === 'back one'), "next and back take the page's own steps");
   assert.deepEqual(cueWords("The Options!"), ['options']);
 });
 
@@ -33,7 +35,11 @@ test('a name moves the page only after a turning phrase, once, as soon as its la
   assert.deepEqual(spoken(m, [' and', ' the', ' sessions', ' again.']), [], 'the same cue does not fire again for later words');
   assert.deepEqual(spoken(m, [" Let's", ' go', ' back', ' to', ' the', ' system', ' map.']), ['goto_system_map'], 'the longer name wins');
   assert.deepEqual(spoken(m, [' Claude', ' will', ' look', ' at', ' the', ' sessions', ' code', ' next.']), [], "relaying the agent's work moves nothing");
-  assert.deepEqual(spoken(m, [" Let's", ' go', ' to', ' the', ' next', ' slide.']), ['page_next_slide'], "the page's own phrase, after let's");
+  assert.deepEqual(spoken(m, [" Let's", ' go', ' to', ' the', ' next', ' slide.']), ['page_next_slide'], "the next slide, after let's go to");
+  assert.deepEqual(spoken(m, [' Sure,', " let's", ' go', ' back', ' one.']), ['page_previous_slide'], 'back one');
+  assert.deepEqual(spoken(m, [" Let's", ' look', ' at', ' after', ' a', ' move.']), ['page_slide_3'], "a titled name's title alone");
+  assert.deepEqual(spoken(m, [' Okay,', ' now', " we're", ' on', ' the', ' system', ' map.']), ['goto_system_map'], "now we're on");
+  assert.deepEqual(spoken(m, [" Let's", ' figure', ' out', ' the', ' next', ' one.']), [], 'the next one without a turn to it moves nothing');
   assert.deepEqual(spoken(m, [' Claude', ' is', ' adding', ' a', ' next', ' slide', ' button.']), [], 'talking about a next slide moves nothing');
   assert.deepEqual(spoken(m, [" Let's", ' look', ' at', ' your', ' recommendation', ' here.']), ['show_my_recommendation'], 'my and your are the same name');
   assert.deepEqual(spoken(m, [" Let's", ' look', ' the', ' sessions', ' part.']), ['goto_sessions'], 'loosely said');

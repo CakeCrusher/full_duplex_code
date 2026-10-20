@@ -20,7 +20,8 @@
     for (let a = el; a && a !== document.documentElement; a = a.parentElement) { const st = getComputedStyle(a); if (st.visibility === 'hidden' || Number(st.opacity) < 0.05) return false; }
     return true;
   };
-  const text = el => (el.getAttribute?.('aria-label') || el.innerText || el.textContent || el.getAttribute?.('alt') || '').replace(/\s+/g, ' ').trim();
+  // Invisible characters (a docs site starts every heading with a zero-width space) are no part of a name.
+  const text = el => (el.getAttribute?.('aria-label') || el.innerText || el.textContent || el.getAttribute?.('alt') || '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
   const slug = s => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'x';
   const units = kind => [...document.querySelectorAll(UNITS[kind])].filter(el => visible(el) && !el.closest('#__fdc_ring') && (kind !== 'paragraph' || text(el).length > 20) && !(kind === 'figure' && el.closest('figure') && el.tagName !== 'FIGURE'));
   const level = el => Number(el.tagName[1]) || 9;
@@ -109,8 +110,10 @@
     const above = h.previousElementSibling && text(h.previousElementSibling).length < 40 ? text(h.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') : '';
     // A label several headings share ("changed" over four of them) is a category, not a name.
     const shared = above && units('heading').filter(x => x !== h && x.previousElementSibling && text(x.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') === above).length > 0;
-    const label = (above.match(/[a-z]/gi) ?? []).length >= 3 && !shared ? above : '';
-    return [/^[a-z][\w-]{2,30}$/i.test(id) && !/^h\d|^section\d/i.test(id) ? id.replace(/[-_]/g, ' ') : '', label.toLowerCase()].filter(Boolean)[0] ?? '';
+    // Nor is a kicker that counts or files it ("Highlighting · 1 of 6", "Fix · identity"), or says next or back.
+    const label = (above.match(/[a-z]/gi) ?? []).length >= 3 && !shared && !/\d|[·|/]/.test(above) && !/^(next|previous|back|up|top|more)$/i.test(above) ? above : '';
+    // An id with a number in it is generated ("hs2", "s3"), not what anyone calls the part.
+    return [/^[a-z][a-z_-]{2,30}$/i.test(id) ? id.replace(/[-_]/g, ' ') : '', label.toLowerCase()].filter(Boolean)[0] ?? '';
   };
   // A deck's slides: sibling sections with ids, only one shown at a time.
   const deckSlides = () => {
@@ -204,14 +207,16 @@
   const page = () => {
     const c = window.fdcController;
     if (!c?.commands) return [];
-    // A command's name is what people call its target: given, or the quoted title in what it says ('Go to slide 3: "Margins"').
-    const quoted = say => [...String(say ?? '').matchAll(/["“]([^"”]{2,60})["”]/g)].at(-1)?.[1];
+    // A command's name is what people call its target, only as the controller gives it: a name guessed from a quote in
+    // what it says ("a one-off finding the word \"certificate\"") let the voice move the page by words it never meant to.
     // camelCase ids read as words ("nextSlide" is next_slide), so a relative move is known as one.
-    return c.commands().slice(0, 80).map(cmd => ({ id: `page_${slug(String(cmd.id).replace(/([a-z0-9])([A-Z])/g, '$1_$2'))}`, say: cmd.say, name: cmd.name ?? quoted(cmd.say), run: async () => {
+    return c.commands().slice(0, 80).map(cmd => ({ id: `page_${slug(String(cmd.id).replace(/([a-z0-9])([A-Z])/g, '$1_$2'))}`, say: cmd.say, name: typeof cmd.name === 'string' ? cmd.name : undefined, run: async () => {
       let out;
       // A limit thrown ("Already on the first slide") is an answer, as the guide asks controllers to return it; not a broken control.
       try { out = await c.run(cmd.id); } catch (error) { if (!LIMIT.test(String(error?.message ?? ''))) throw error; stage.limited = true; return String(error.message); }
-      return typeof out === 'string' ? out : describe(stage.at);
+      // The page shows what its own command did (a slide, a lit stage): fdc's ring steps aside, so one highlight shows.
+      stage.at = null; stage.ringOn = false; place();
+      return typeof out === 'string' ? out : describe(current('paragraph'));
     } }));
   };
   // For a one-off action (fdc's fallback when no command fits): what the viewer can act on, numbered,
@@ -232,19 +237,25 @@
   const words = s => new Set((String(s).toLowerCase().match(/[a-z0-9][a-z0-9'’-]{2,}/g) ?? []).filter(w => !STOP.has(w)).map(stem));
   const inView = el => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight; };
   const followSpeech = sentence => {
-    // A highlight the viewer asked off stays off while GPT Live talks on; their next move brings it back.
-    if (stage.quiet) return null;
+    // A highlight the viewer asked off stays off while GPT Live talks on; their next move brings it back. The ring
+    // follows only inside the part fdc's ring is on (after a page's own command the page highlights itself), and only
+    // on clear evidence: a sentence about something else shares a word or two with some block (on Oct 19, "separate
+    // from the controller's commands" ringed "the build-out grew the controller by 5 commands").
+    if (stage.quiet || !stage.ringOn || !stage.at?.isConnected) return null;
     const said = words(sentence);
     if (said.size < 2) return null;
+    const head = stage.at.matches(UNITS.heading) ? stage.at : stage.at.querySelector(UNITS.heading) ?? sectionOf(stage.at);
+    const end = head && units('heading').find(h => level(h) <= level(head) && before(head, h) && !stage.at.contains(h));
+    const inPart = el => !head || ((el === head || before(head, el) || head.contains(el)) && (!end || before(el, end)));
     let best = null, bestScore = 0;
     for (const el of document.querySelectorAll('p, li, tr, dd, blockquote, figcaption, h2, h3, h4')) {
-      if (!visible(el) || !inView(el) || el.closest('#__fdc_ring')) continue;
+      if (!visible(el) || !inView(el) || !inPart(el) || el.closest('#__fdc_ring')) continue;
       const own = words(text(el)); if (own.size < 2) continue;
       let shared = 0; for (const w of said) if (own.has(w)) shared++;
       const score = shared / Math.min(said.size, own.size);
-      if (shared >= 2 && score > bestScore) { best = el; bestScore = score; }
+      if ((shared >= 3 || (shared >= 2 && score >= 0.6)) && score > bestScore) { best = el; bestScore = score; }
     }
-    if (!best || bestScore < 0.3) return null;
+    if (!best) return null;
     if (best !== stage.at) { stage.at = best; stage.ringOn = true; best.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); place(); }
     return { on: text(best).slice(0, 100), score: Math.round(bestScore * 100) / 100 };
   };
@@ -326,7 +337,6 @@
         about: c?.about ?? null,
         where: c?.where?.() ?? describe(current('paragraph')),
         commands: stage.commands().map(({ id, say, anchor, name, top }) => ({ id, say, ...anchor ? { anchor } : {}, ...name ? { name } : {}, ...top ? { top } : {} })),
-        cues: c?.cues?.() ?? [],
         outline: c?.outline?.() ?? outline(),
       };
     },

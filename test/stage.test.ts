@@ -9,7 +9,7 @@ import { DelegationAudit } from '../src/core/delegation-audit.ts';
 import { Mediator, type Gated } from '../src/core/mediator.ts';
 import { harness, until } from './live-fake.ts';
 
-const view: StageView = { tabId: 7, title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"', cues: [],
+const view: StageView = { tabId: 7, title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"',
   commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'goto_options', say: 'Go to the section "Options"' }, { id: 'show_the_recommendation', say: 'Show and highlight: the recommendation' }] };
 const posted = (tool_name: string, tool_input: Record<string, unknown>, tool_response: unknown = '') => ({ raw: { hook_event_name: 'PostToolUse', tool_name, tool_input, tool_response } });
 
@@ -78,6 +78,19 @@ test('Jev picks whole page commands in order; the count ends the list, unlikely 
   answers = { needs_agent: { noul: .9 } };
   assert.equal((await audit.judge('fix the parser', undefined, 3000)).page, undefined, 'no page, no page questions');
   assert.equal(sent.questions.page_steps, undefined);
+});
+
+test("commands that do the same count as one choice, even below none: the page's own runs", async () => {
+  let answers: Record<string, unknown> = {};
+  const audit = new DelegationAudit({ apiKey: 'k', file: '/dev/null', log: () => {}, fetch: async () => ({ ok: true, status: 200, json: async () => ({ answers }) }) as any });
+  const deck: StageView = { ...view, commands: [{ id: 'back', say: 'Go back to wherever the viewer was' }, { id: 'next_section', say: 'Go to the next section' }, { id: 'page_back', say: 'Go back to the previous slide' }, { id: 'page_next', say: 'Go to the next slide' }] };
+  const step = (probabilities: Record<string, number>) => ({ choice: Object.entries(probabilities).sort((a, b) => b[1] - a[1])[0][0], probabilities });
+  answers = { needs_agent: { noul: .5 }, page_steps: { choice: '1' }, page_step_1: step({ none: .3, back: .26, page_back: .25, next_section: .19 }), page_only: { noul: .8 }, page_work: { noul: .1 } };
+  assert.deepEqual((await audit.judge('go back', undefined, 3000, deck)).page!.steps, ['page_back'], "fdc's back and the page's back together beat none");
+  answers = { ...answers, page_step_1: step({ none: .4, back: .26, page_back: .11, next_section: .23 }) };
+  assert.deepEqual((await audit.judge("I don't see it", undefined, 3000, deck)).page!.steps, [], 'together still unlikely: nothing runs');
+  answers = { ...answers, page_step_1: step({ next_section: .5, page_next: .1, none: .4 }) };
+  assert.deepEqual((await audit.judge('next section', undefined, 3000, deck)).page!.steps, ['next_section'], "a unit's own step is not the page's next");
 });
 
 function gated(t: any, page: { steps: string[]; only: number }, run: (ids: string[]) => Promise<any>) {
@@ -192,11 +205,11 @@ test("a request whose gate's outcome fails isn't lost: its words go with the nex
   assert.equal(m.history.request(Infinity)?.fresh, 'Fix the parser.');
 });
 
-test('a page controller returning anything is kept to well-formed commands and cues', async () => {
+test('a page controller returning anything is kept to well-formed commands', async () => {
   const odd = { title: 7, url: 'http://localhost/x.html', about: { not: 'text' }, where: null, outline: ['no'], commands: [{ id: 'slide_3', say: 'Go to slide 3', name: 3 }, { id: 4 }, null, 'x', { id: 'ok', say: 'Fine' }], cues: { say: 'next' } };
   const stage = new Stage({ log: () => {}, browser: { evaluate: async () => odd, close() {} } as any });
   stage.tabId = 1;
   const view = (await stage.describe(0))!;
   assert.deepEqual(view.commands, [{ id: 'slide_3', say: 'Go to slide 3', name: '3' }, { id: 'ok', say: 'Fine' }]);
-  assert.deepEqual(view.cues, []); assert.equal(view.about, null); assert.equal((view as any).outline, undefined); assert.equal(view.title, '7');
+  assert.equal(view.about, null); assert.equal((view as any).outline, undefined); assert.equal(view.title, '7');
 });

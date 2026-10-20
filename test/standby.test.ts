@@ -14,7 +14,7 @@ import { harness, page, settle, until } from './live-fake.ts';
 
 const WINDOW = 2000;
 // The operator speaking for about this long, as the page's level reports (0.1 s each) say.
-const speak = (h: any, reports: number) => { for (let i = 0; i < reports; i++) h.voiceSessions.heard({ at: Date.now(), inputRms: .05, rawInputRms: .05, gateThreshold: .008 }); };
+const speak = (h: any, reports: number, voiced?: number, at = Date.now()) => { for (let i = 0; i < reports; i++) h.voiceSessions.heard({ at, inputRms: .05, rawInputRms: .05, gateThreshold: .008, voiced }); };
 const agent = (h: any, data: Record<string, unknown>) => h.adapter.observations.observe({ session_id: h.sessionId, ...data });
 const later = (ms: number) => Date.now() + ms;
 
@@ -47,8 +47,8 @@ test('a quiet conversation goes on Standby: GPT Live closes, voice stays on, and
 test('speech wakes it, priced like everything else; the new session is seeded, not greeted, and told why', async t => {
   const { h, lives, sent, goQuiet } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30 } });
   await goQuiet();
-  speak(h, 1); h.voiceSessions.checkStandby();
-  assert.equal(sent('voice_wake').length, 0, `a tenth of a second of sound is worth ${DEFAULT_TUNING.speechPrice}, under a threshold of 30`);
+  speak(h, 2); h.voiceSessions.checkStandby();
+  assert.equal(sent('voice_wake').length, 0, `a voice's first tenth of a second only starts it; the next is worth ${DEFAULT_TUNING.speechPrice}, under a threshold of 30`);
   speak(h, 1); h.voiceSessions.checkStandby();
   assert.deepEqual(sent('voice_wake').map(e => e.reason), ['operator']);
   // The page reconnects on the same microphone.
@@ -59,6 +59,18 @@ test('speech wakes it, priced like everything else; the new session is seeded, n
   assert.equal(lives[1].greeting, undefined, 'no greeting');
   await until(() => lives[1].appended.some(([kind, text]) => kind === 'thinking' && /The conversation continues.*Don't greet.*The operator has started speaking/s.test(text)));
   assert.ok(!lives[1].appended.some(([kind]) => kind === 'commentary'), 'the operator speaking is the cue: nothing else is said first');
+});
+
+test("chewing, typing and knocks don't wake it: only a voice that lasts does", async t => {
+  const { h, sent, goQuiet } = await quiet(t);
+  await goQuiet();
+  speak(h, 30, 0); h.voiceSessions.checkStandby();
+  assert.equal(sent('voice_wake').length, 0, 'loud, but no voice in it (chewing, typing)');
+  for (let i = 0; i < 10; i++) speak(h, 1, 1, Date.now() - 10000 + i * 700);
+  h.voiceSessions.checkStandby();
+  assert.equal(sent('voice_wake').length, 0, 'a knock rings through one window at a time');
+  speak(h, 4, 1); h.voiceSessions.checkStandby();
+  assert.deepEqual(sent('voice_wake').map(e => e.reason), ['operator'], 'a voice that lasts wakes it');
 });
 
 test("the agent's news wakes it, a few tool calls don't, and what it did meanwhile arrives as it would have live", async t => {

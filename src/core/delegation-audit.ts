@@ -63,7 +63,7 @@ const pageQuestions = (page: StageView) => {
   return {
     page_steps: { type: 'choice', instructions: 'How many page commands should run, counting each repetition ("forward three sections" is 3, "go to the options and highlight the recommendation" is 2)? Work for the coding agent (making, adding, changing or fixing anything), questions and talk are not page commands.', criteria: { '0': 'No page command.', '1': 'One.', '2': 'Two.', '3': 'Three.', '4': 'Four.', '5': 'Five or more.' } },
     page_step_1: step(1), page_step_2: step(2), page_step_3: step(3),
-    page_only: { type: 'noul', instructions: 'Is moving, showing or highlighting things on the page all the operator asks, with nothing for the coding agent to do, change, research or answer?', criteria: { true: 'Only page commands, with at most filler or thanks.', false: 'Also asks for work, a change, research, an answer or anything else beyond the page. When in doubt, false.' } },
+    page_only: { type: 'noul', instructions: 'Is moving, showing or highlighting things on the page all the operator asks, with nothing for the coding agent to do, change, research or answer?', criteria: { true: 'Only page commands, with at most filler or thanks. Judge `utterance` alone, not `earlier`.', false: 'Also asks for work, a change, research, an answer or anything else beyond the page. When in doubt, false.' } },
     page_unhappy: { type: 'noul', instructions: 'Is the operator unhappy with what the page just did or can\'t do: it didn\'t move, went to the wrong place or page, highlighted the wrong thing, or can\'t show what they mean?', criteria: { true: 'A complaint or correction about the page\'s moves or what it shows ("the page isn\'t moving", "that\'s not where I asked", "you didn\'t highlight it", "no, the other page").', false: 'Anything else: a plain request to go somewhere or show something, a question, work for the coding agent, or a complaint about how the voice companion talks.' } },
     // The same question from the other side: independent answers, so a request is page-only only when both agree.
     page_work: { type: 'noul', instructions: 'Besides moving, showing or highlighting things on the page, does the operator ask the coding agent to make, add, change, fix, explain or look into anything?', criteria: { true: 'Some work, change, research or answer is asked of the coding agent in `utterance`, even alongside a page command: changing how the page looks (bigger, bolder, colours, wording) is work.', false: 'Only page commands, or naming, describing, finding or pointing at a part of the page to go to, with at most filler or thanks. Judge `utterance` alone, not `earlier`.' } },
@@ -71,6 +71,13 @@ const pageQuestions = (page: StageView) => {
 };
 /** The part a command goes to, by its name without a number before it ("stage 3: DNS lookup" is "dns lookup"). */
 const partOf = (command: StageCommand) => (command.name ?? '').toLowerCase().replace(/^(stage|slide|step|part|section)\s*\d+\s*[:.\-–]?\s*/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+/** What a command does, for counting commands that do the same as one: its part, or going back (fdc's own, the page's back or previous), or the page's next. */
+const sameAs = (command: StageCommand) => {
+  const page = command.id.startsWith('page_');
+  if (command.id === 'back' || (page && /(^|_)(previous|prev|back)(_|$)/.test(command.id))) return 'back';
+  if (page && /(^|_)(next|forward)(_|$)/.test(command.id)) return 'next';
+  return partOf(command) ? `part ${partOf(command)}` : command.id;
+};
 /** The step choice for "another action on the page". */
 export const OTHER = 'other_action';
 const pageLine = (page: StageView) => `${page.title} (${page.url})${page.about ? `: ${page.about}` : ''}. The viewer is at: ${page.where}`.slice(0, 900);
@@ -145,16 +152,21 @@ export class DelegationAudit {
       judgment.companionOnly = p('companion_only');
     }
     if (page) {
-      // Commands for one part (its heading, the page's own command, an annotation on it) split Jev's confidence between
-      // them ("connecting to the server": .43, .38 and .11): they count together, and the page's own command runs.
+      // Commands that do the same thing split Jev's confidence between them, even below "none": one part's (its
+      // heading, the page's own command, an annotation on it: "connecting to the server" .43, .38 and .11), or going
+      // back (fdc's own and the page's: "go back… I don't see it" .26 and .11, with none at .40). They count as one
+      // choice, and the page's own command runs.
       const step = (name: string) => {
-        const answer = answers?.[name], id = answer?.choice, chosen = page.commands.find(c => c.id === id);
-        if (!chosen) return;
-        const likely: Record<string, number> = answer.probabilities ?? { [chosen.id]: Number(answer.confidence ?? 1) };
-        const group = partOf(chosen) ? page.commands.filter(c => partOf(c) === partOf(chosen)) : [chosen];
-        if (group.reduce((sum, c) => sum + Number(likely[c.id] ?? 0), 0) < PAGE_STEP) return;
-        const ranked = group.sort((a, b) => Number(likely[b.id] ?? 0) - Number(likely[a.id] ?? 0));
-        return (ranked.find(c => c.id.startsWith('page_') && likely[c.id] !== undefined) ?? chosen).id;
+        const answer = answers?.[name];
+        if (!answer) return;
+        const likely: Record<string, number> = answer.probabilities ?? { [answer.choice]: Number(answer.confidence ?? 1) };
+        const groups = new Map<string, StageCommand[]>();
+        for (const command of page.commands) if (likely[command.id] !== undefined) groups.set(sameAs(command), [...groups.get(sameAs(command)) ?? [], command]);
+        const sum = (group: StageCommand[]) => group.reduce((total, c) => total + Number(likely[c.id] ?? 0), 0);
+        const best = [...groups.values()].sort((a, b) => sum(b) - sum(a))[0];
+        if (!best || sum(best) < PAGE_STEP || sum(best) < Number(likely.none ?? 0)) return;
+        const ranked = best.sort((a, b) => Number(likely[b.id] ?? 0) - Number(likely[a.id] ?? 0));
+        return (ranked.find(c => c.id.startsWith('page_')) ?? ranked[0]).id;
       };
       // Another action at any step: the whole request goes to a one-off action, which can do the rest too.
       const other = Math.max(0, ...['page_step_1', 'page_step_2', 'page_step_3'].map(name => answers?.[name]?.choice === OTHER ? Number(answers[name].probabilities?.[OTHER] ?? answers[name].confidence ?? 1) : 0));
