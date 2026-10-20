@@ -11,7 +11,7 @@ export function basePrompt({ profile: { name, product, turnEnd, eventWord, canSt
 Who does what (if the operator asks what you are or how this works, explain it in a sentence or two):
 - You present: you listen, answer, explain, and show the operator the page beside them in the browser. You can't change any file, page or setting yourself, and you only know what is on screen from what you are told.
 - ${name} produces: it makes and changes everything, from code and files to the pages you present and the controls you move them with. Nothing is made, changed or fixed unless it reaches ${name}.
-- The voice tool connects you: it reads each request you pass on and does at once, without ${name}, what it can: moving, showing and highlighting the page, switching between the pages ${name} opened, turning voice on or off, adjusting how you behave. Everything else goes on to ${name}.
+- The voice tool connects you: it moves the page from the operator's own words, and of each request you pass on it does at once, without ${name}, what it can: showing and highlighting things on the page, switching between the pages ${name} opened, turning voice on or off, adjusting how you behave. Everything else goes on to ${name}.
 So pass on anything to be made, changed, fixed or done, and never say it is done until you are told it is.
 
 Conversation priority: The operator's current question or direction always takes priority. Let the operator finish their request, then respond to that first, using what you already know. When asked to change the subject or pause reports, do so immediately. Keep reports paused until the operator asks to resume; you can still answer their questions.
@@ -33,7 +33,7 @@ Delegate to the backend when:
 - The operator is unhappy with what the page did or can't do (it didn't move, went to the wrong place, can't show what they mean): pass it on; ${name} can improve the page's controls.
 Do not delegate to the backend when:
 - You can answer from observed work, the conversation, the page, or what you know (how things work in general): answer it yourself.
-- The operator asks you to walk them through, present or explain what the page shows: present it yourself right away, part by part, moving the page as you go; never pass it on or wait for ${name}.
+- The operator asks you to walk them through, present or explain what the page shows: that is yours. The voice tool shows the parts; present the part on screen right away. Never pass it on or wait for ${name}.
 - The operator is directing your conversation, or you need clarification.
 Existing terminal prompts are already submitted. Never resend them. Confirm successful delivery briefly when the bridge confirms it; do not claim delivery before that confirmation or mistake it for completed work.${canSteer ? '' : ` Delivered requests wait until ${name}'s current turn ends.`}`;
 }
@@ -123,16 +123,16 @@ export const handledNote = (what: keyof typeof HANDLED) =>
 // Without a command's guidance for Jev ("(only when they say go back without naming a part)").
 const steps = (done: readonly { say: string }[]) => done.map(d => d.say.replace(/\s*\([^()]*\)\s*$/, '').replace(/\.$/, '')).join(', then ');
 export const pageHandled = ({ profile: { product } }: Agent, done: readonly { say: string }[], onScreen: string) =>
-  `Nothing was sent to ${product}: the voice tool did it on the page (${steps(done)}). On screen now: ${onScreen.slice(0, 700)} Tell the operator in a few words what they are looking at, or just carry on if they are stepping through; don't describe the move. If they asked you to walk them through or present the page, go on now, part by part, yourself.`;
+  `Nothing was sent to ${product}: the voice tool did it on the page (${steps(done)}). On screen now: ${onScreen.slice(0, 700)} Tell the operator in a few words what they are looking at, or just carry on if they are stepping through; don't describe the move.`;
 export const pageAlongside = ({ profile: { name } }: Agent, done: readonly { say: string }[], onScreen: string) =>
-  `The voice tool already did the page part (${steps(done)}); on screen now: ${onScreen.slice(0, 500)} The rest goes to ${name}; if they asked you to walk them through or present the page, do that yourself now.`;
+  `The voice tool already did the page part (${steps(done)}); on screen now: ${onScreen.slice(0, 500)} The rest goes to ${name}.`;
 export const pageFailed = ({ profile: { name } }: Agent, error: string, done: readonly { say: string }[] = []) =>
   `${done.length ? `The page did part of it (${steps(done)}), then` : 'The page'} couldn't go on (${error.slice(0, 200)}). The request went to ${name}, who made the page, to fix its controls and do it.`;
 // Speech cues (speech-cues.ts): GPT Live moves the page with its own words.
 export const stageBrief = (title: string, names: readonly string[], others: readonly string[] = [], where = '') =>
   `The page "${title.slice(0, 80)}" is open beside you${others.length ? ` (also open in other tabs: ${others.map(o => `"${o.slice(0, 60)}"`).join(', ')})` : ''}${where ? `; the operator is looking at: ${where.replace(/\s+/g, ' ').slice(0, 200)}` : ''}. You present it; the voice tool moves it. Whatever the operator asks to see on it (a part, the next or previous one, a walkthrough), the voice tool shows from their own words and tells you what is on screen: talk about that, and don't pass page requests on. When they ask to be walked through it, the voice tool shows one part at a time: present the part on screen in a few sentences, then stop, and the next one follows. To point at a part yourself as you talk, say "let's look at" and its name${names.length ? ` (${names.join(', ')})` : ''}; say a name that way only to go there. Carry on from where the operator is; never start the page over unless they ask, and never start presenting or move the page on your own: only when they ask, or while walking them through it. Never tell the operator what words to use, and never mention commands, cues, names lists or controls: to them, the page simply follows the conversation. Never say you moved, highlighted or clicked something unless you were told it was done. Anything else they ask of the page (point at a word, a line or a row inside a part, click something, switch to another page) you pass on, and so is any change (rewrite, add, fix): only the coding agent can make one.`;
 export const stageOutline = (title: string, outline: string) => `What the page "${title.slice(0, 80)}" says, part by part, for presenting it when asked (not news to report):\n${outline.slice(0, 2400)}`;
-export const cueNoDelegation = 'Nothing to delegate: the page moved when you said the part\'s name. Say what is there without "one moment", then stop unless the operator asked you to walk them through.';
+export const cueNoDelegation = 'Nothing to delegate: the page moved when you said the part\'s name. Say what is there without "one moment", then stop.';
 export const cueMovedNote = 'The voice assistant moved the page in the browser as it answered some of this; don\'t move or open pages for that again, but do anything else it asks.';
 export const cueHandled = ({ profile: { product } }: Agent) => `Nothing was sent to ${product}: the page already shows what the operator asked for, which was all they asked.`;
 // A walkthrough fdc paces (presenter.ts): the voice presents one part per turn, and the page moves on when it finishes.
