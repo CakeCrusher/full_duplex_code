@@ -117,6 +117,12 @@ export class VoiceHistory {
     const earlier = utterances(mine.filter(f => !f.cued && !latest.includes(f))).map(u => u.text.replace(/\s+/g, ' ').trim()).join(' ');
     return { utterances: spoken, through: all.at(-1)!.seq, seqs: all.map(f => f.seq), fresh, ...earlier ? { earlier } : {}, ...cued ? { cued } : {}, ...notes.length ? { notes } : {}, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
   }
+  /** The operator's latest words that no request took yet and nothing moved the page for. */
+  latestOperator(): string {
+    const pending = this.fragments.filter(f => f.role === 'operator' && !f.sent && !f.claim && !f.note && !f.cued), latest: typeof pending = [];
+    for (let i = pending.length - 1; i >= 0 && (i === pending.length - 1 || pending[i + 1].startMs - pending[i].endMs <= 2000); i--) latest.unshift(pending[i]);
+    return latest.map(f => f.text).join('').replace(/\s+/g, ' ').trim();
+  }
   /** Marks the operator's latest words that no request took yet: the voice moved the page for them. */
   cueLatest(note: string) {
     const pending = this.fragments.filter(f => f.role === 'operator' && !f.sent && !f.claim && !f.note);

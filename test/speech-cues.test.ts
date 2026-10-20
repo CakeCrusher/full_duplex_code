@@ -151,3 +151,22 @@ test('a walkthrough asked for: the first part shows, and each time the voice fin
   h.voiceSessions.mediator!.history.lastInputAt = Date.now() + 10000;
   await until(() => !h.presenter.walking);
 });
+
+test("the operator's own step: fdc takes it as the voice starts answering, once, whatever the voice says", async t => {
+  const { stepAsked } = await import('../src/core/presenter.ts');
+  for (const said of ['Okay, next.', "Let's continue", "Okay, Let's move on to the let's continue", 'next one please', 'Keep going.', "Let's move on to the next step"]) assert.equal(stepAsked(said), 'next', said);
+  for (const said of ['Go back.', 'No, no, go back', 'Wait, previous slide']) assert.equal(stepAsked(said), 'back', said);
+  for (const said of ['Go back to the diagram', 'Move on to the controller as a document', 'What comes next?', "Don't go back", 'Next time make it shorter', '']) assert.equal(stepAsked(said), undefined, said);
+  const { harness, page, until } = await import('./live-fake.ts');
+  const { h, lives } = await harness(t);
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  const runs: string[][] = [];
+  const deck: StageView = { ...view, where: 'Slide 24', commands: [{ id: 'page_next', say: 'Go to the next slide' }, { id: 'page_back', say: 'Go back a slide' }, { id: 'page_slide_27', say: 'Go to slide 27', name: 'One highlight at a time' }] };
+  h.stage = { tabId: 1, view: deck, describe: async () => deck, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: 'Slide 25: Moving the page by voice' }; }, follow: async () => null, observe() {}, close() {} } as any;
+  h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: "Okay, let's continue.", start_ms: 0, end_ms: 900 });
+  // The voice answers, naming the slide it wrongly thinks comes next, then says the step too.
+  h.voiceSessions.live!.emit('event', { type: 'session.output_transcript.delta', delta: ' One highlight at a time. ' });
+  h.voiceSessions.live!.emit('event', { type: 'session.output_transcript.delta', delta: "Let's go to the next one. " });
+  await until(() => lives[0].appended.some(([kind, text]) => kind === 'commentary' && /The page moved as the operator asked.*Slide 25/.test(text)));
+  assert.deepEqual(runs, [['page_next']], 'one step, and none of the voice\'s own move words in that answer');
+});

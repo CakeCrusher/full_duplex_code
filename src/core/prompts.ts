@@ -136,6 +136,8 @@ export const cueHandled = ({ profile: { product } }: Agent) => `Nothing was sent
 // A walkthrough fdc paces (presenter.ts): the voice presents one part per turn, and the page moves on when it finishes.
 export const walkStarted = ({ profile: { product } }: Agent, onScreen: string) =>
   `Nothing was sent to ${product}: the operator asked to be walked through the page, and the voice tool paces it. On screen now: ${onScreen.slice(0, 700)} Present this part in a few sentences, then stop: when you finish, the page moves on to the next part and you are told what to present next. Don't ask whether to go on.`;
+export const stepTaken = (onScreen: string) =>
+  `The page moved as the operator asked; on screen now: ${onScreen.slice(0, 700)} Talk about what is there, in a few sentences; don't move the page again for it.`;
 export const walkNext = (onScreen: string) =>
   `The page moved on to the next part as you finished; on screen now: ${onScreen.slice(0, 700)} Present it in a few sentences, then stop; don't ask whether to go on.`;
 export const cueShown = (onScreen: string) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}`;

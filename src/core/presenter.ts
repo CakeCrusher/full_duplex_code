@@ -8,7 +8,18 @@ import { Stage, StageError, StageNothing, type StageView } from './stage.ts';
 import { FastAction, type PageAction } from './fast-action.ts';
 import { PAGE_ONLY, PAGE_OTHER, PAGE_UNHAPPY, PAGE_WALK, PAGE_WORK, WALK_WORK, type PageJudgment } from './delegation-audit.ts';
 import type { Gated } from './mediator.ts';
-import { controllerNote, cueHandled, cueMovedNote, cueShown, improvisedFailedNote, lookingNote, oneOffDone, oneOffNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, walkNext, walkStarted } from './prompts.ts';
+import { stepTaken, controllerNote, cueHandled, cueMovedNote, cueShown, improvisedFailedNote, lookingNote, oneOffDone, oneOffNote, pageAlongside, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, walkNext, walkStarted } from './prompts.ts';
+
+// The operator asking only for a step: every word a filler or part of "next", "continue", "move on", "go back".
+const FILLER = new Set('okay ok alright all right so and yes yeah sure um uh great cool good then now please wait no hey lets let us go move on to the a one slide step part section page please'.split(' '));
+const FORWARD = /\b(next|continue|keep going|go on|carry on|move on|ahead|forward)\b/, BACK = /\b(back|previous)\b/;
+export function stepAsked(said: string): 'next' | 'back' | undefined {
+  const words = said.toLowerCase().replace(/[’']/g, '').replace(/[^a-z ]+/g, ' ').split(/\s+/).filter(Boolean);
+  if (!words.length || words.length > 10) return;
+  const text = words.join(' '), back = BACK.test(text), forward = FORWARD.test(text);
+  if (back === forward || !words.every(w => FILLER.has(w) || ['next', 'continue', 'keep', 'going', 'carry', 'ahead', 'forward', 'back', 'previous'].includes(w))) return;
+  return forward ? 'next' : 'back';
+}
 
 export class Presenter {
   bridge: Harness;
@@ -27,11 +38,17 @@ export class Presenter {
    */
   walking?: { startedAt: number; movedAt: number; parts: number; timer: ReturnType<typeof setInterval> };
   pacing = false; spokeAt = 0; walkQuietMs = 2500;
+  /** When fdc last took a step the operator asked for: the voice's own move words in that answer are not taken too. */
+  steppedAt = 0;
   constructor(bridge: Harness, apiKey?: string) { this.bridge = bridge; if (apiKey && apiKey !== 'unused') this.fastAction = new FastAction({ apiKey }); }
   /** GPT Live said more: a cue in it moves the page now, and GPT Live quietly hears what is on screen. */
   heard(delta: string) {
     const bridge = this.bridge;
+    // The voice starts answering: the operator has finished, and if all they said was a step ("next", "let's continue",
+    // "go back"), fdc takes it now, whatever the voice says or passes on (it named the wrong slide, or none).
+    if (Date.now() - this.spokeAt > 1500) this.operatorStep();
     this.spokeAt = Date.now();
+    if (Date.now() - this.steppedAt < 8000) { this.sentence = (this.sentence + delta).slice(-600); return; }
     this.sentence = (this.sentence + delta).slice(-600);
     for (const cue of this.speechCues.hear(delta)) {
       this.presentedAt = Date.now(); this.sentence = ''; this.cuedInSentence = true;
@@ -84,6 +101,24 @@ export class Presenter {
     if ((page.walk ?? 0) >= PAGE_WALK && (page.work ?? 1) < WALK_WORK) return this.walk(page, needsAgent, cued);
     if (page.steps.length) return cued ? this.cued(page, needsAgent) : this.present(page, needsAgent);
     if ((page.other ?? 0) >= PAGE_OTHER && this.fastAction) return cued ? this.cued(page, needsAgent) : this.improvise(said, needsAgent, !(page.only >= PAGE_ONLY && (page.work ?? 1) < PAGE_WORK));
+  }
+  /**
+   * The operator's latest words, when they are only a step forward or back: fdc takes it and tells the voice what is on
+   * screen. Decided at once, before the voice's answer or a request for the same words can move the page again.
+   */
+  operatorStep() {
+    const bridge = this.bridge, history = bridge.mediator?.history, said = history?.latestOperator() ?? '', direction = stepAsked(said);
+    const view = direction && bridge.stage.tabId ? bridge.stage.view : undefined;
+    const step = view && Stage.cues(view).find(c => c.step && c.label.startsWith(direction === 'next' ? 'next' : 'previous'))?.run;
+    if (!history || !step) return;
+    this.steppedAt = this.presentedAt = Date.now();
+    history.cueLatest(cueMovedNote);
+    if (this.walking) this.walking.movedAt = Date.now();
+    void bridge.stage.run([step]).then(({ onScreen }) => {
+      bridge.log({ type: 'stage.step', run: step, said });
+      bridge.publish({ type: 'stage', done: [direction === 'next' ? 'The next part' : 'The previous part'], onScreen });
+      bridge.mediator?.context.add('commentary', stepTaken(onScreen));
+    }, error => bridge.log({ type: 'stage.step_failed', run: step, message: (error as Error).message }));
   }
   /** A walkthrough asked for: its first part shows (unless the voice already moved there), and fdc paces the rest. */
   async walk({ steps }: PageJudgment, needsAgent: number | null, cued?: boolean): Promise<Gated> {
