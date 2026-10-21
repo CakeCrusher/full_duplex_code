@@ -7,7 +7,7 @@ import type { Page } from './pages.ts';
 import { LiveSession, type CloseResult } from './live-session.ts';
 import { Mediator } from './mediator.ts';
 import { AudioAudit } from './audio-audit.ts';
-import { startupHistory } from './startup-history.ts';
+import { recentHistory } from './recent-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
 import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, standbyNews, standbyWake } from './prompts.ts';
 import { Stage, type StageView } from './stage.ts';
@@ -401,7 +401,7 @@ export class VoiceSessions {
     // Waking from Standby, the work from before it is history; the work during it arrives as it would have live (below).
     const wake = attempt.wake;
     const observations = plan === 'fork' ? bridge.adapter.history().filter(o => o.at > since) : wake ? bridge.adapter.history().filter(o => o.at <= wake.since) : bridge.adapter.history();
-    const history = startupHistory(agent, observations, Math.max(0, 7600 - Buffer.byteLength(startup)));
+    const history = recentHistory(agent, observations, Math.max(0, 7600 - Buffer.byteLength(startup)));
     // A new session starts knowing the page on the stage, last in its startup input: appended once it had started, the page
     // took GPT Live's timeline from the operator (after a wake, their first words reached it 6-25 s late, their beginning
     // lost). A fork has what its source was told, and is told what changed since by an append (brief).
@@ -418,8 +418,8 @@ export class VoiceSessions {
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator: Mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
-      audit: bridge.handOffAudit, gate: bridge.jev ? (said, id, lines, cued) => bridge.sessionSwitch.gate(said, id, lines, cued) : undefined,
-      read: bridge.jev ? (trigger, lines) => bridge.read({ trigger, lines }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
+      audit: bridge.handOffAudit, gate: bridge.jev ? (said, id, spoken, cued) => bridge.sessionSwitch.gate(said, id, spoken, cued) : undefined,
+      read: bridge.jev ? (trigger, spoken) => bridge.read({ trigger, spoken }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake };
     // A fork knows the page state its source was told, and how full its context is; a new session, the page it starts with.

@@ -58,31 +58,46 @@ test('the stage runs the script and its commands in the stage tab, in order', as
 test('Jev is asked for one page command at a time, in the conversation; unlikely or unknown picks run nothing, another action is a one-off', async () => {
   let answers: Record<string, unknown> = {}, sent: any;
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers }) }; } });
-  const lines: Line[] = [{ role: 'intermediary', text: 'Want the options?' }, { role: 'operator', text: 'Yes, go to the options and highlight the recommendation.' }];
+  const moment = { history: 'voice assistant: Want the options?\n', latest: { role: 'operator', text: 'Yes, go to the options and highlight the recommendation.' } as Line };
   const choice = (id: string, p = .95) => ({ choice: id, probabilities: { [id]: p } });
   answers = { needs_agent: { noul: .2 }, page_command: choice('goto_options'), page_only: { noul: .8 } };
-  assert.deepEqual((await jev.read({ trigger: 'turn', lines, page: view })).page, { command: 'goto_options', only: .8, work: 1, other: 0, walk: 0, unhappy: 0 }, 'work unanswered counts as asked');
+  assert.deepEqual((await jev.read({ trigger: 'turn', ...moment, page: view })).page, { command: 'goto_options', only: .8, work: 1, other: 0, walk: 0, unhappy: 0 }, 'work unanswered counts as asked');
   assert.match(sent.state.page, /Briefing .*The viewer is at: section "Intro"/);
-  assert.deepEqual([sent.state.transcript, sent.state.latest], ['voice companion: Want the options?', 'operator: Yes, go to the options and highlight the recommendation.'], 'the latest words, and the conversation before them');
+  assert.deepEqual([sent.state.history, sent.state.latest], ['voice assistant: Want the options?', 'user: Yes, go to the options and highlight the recommendation.'], 'the latest words, and what happened before them');
   assert.match(sent.state.why, /stopped speaking/);
   assert.deepEqual(Object.keys(sent.questions.page_command.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation', 'other_action']);
   assert.ok(!Object.keys(sent.questions).some(name => /^page_step|^page_steps$/.test(name)), 'one command question, no count');
   answers = { page_command: choice('next_section', .35) };
-  assert.equal((await jev.read({ trigger: 'turn', lines, page: view })).page!.command, undefined, 'unlikely: nothing runs');
+  assert.equal((await jev.read({ trigger: 'turn', ...moment, page: view })).page!.command, undefined, 'unlikely: nothing runs');
   answers = { page_command: choice('made_up') };
-  assert.equal((await jev.read({ trigger: 'turn', lines, page: view })).page!.command, undefined, 'not a command of the page');
+  assert.equal((await jev.read({ trigger: 'turn', ...moment, page: view })).page!.command, undefined, 'not a command of the page');
   answers = { page_command: choice('other_action', .9) };
-  assert.deepEqual((await jev.read({ trigger: 'turn', lines, page: view })).page, { command: undefined, only: 0, work: 1, other: .9, walk: 0, unhappy: 0 }, 'another action: a one-off does it');
+  assert.deepEqual((await jev.read({ trigger: 'turn', ...moment, page: view })).page, { command: undefined, only: 0, work: 1, other: .9, walk: 0, unhappy: 0 }, 'another action: a one-off does it');
   // After a command ran, the page as it is now, and what ran: whether more is asked, and which command is next.
   answers = { page_command: choice('show_the_recommendation'), page_more: { noul: .8 } };
-  assert.equal((await jev.read({ trigger: 'step', lines, page: view, done: [view.commands[1]] })).page!.command, 'show_the_recommendation');
+  assert.equal((await jev.read({ trigger: 'step', ...moment, page: view, done: [view.commands[1]] })).page!.command, 'show_the_recommendation');
   assert.deepEqual(Object.keys(sent.questions), ['page_command', 'page_more']);
   assert.equal(sent.state.page_done, '1. Go to the section "Options"');
   answers = { page_command: choice('show_the_recommendation'), page_more: { noul: .3 } };
-  assert.equal((await jev.read({ trigger: 'step', lines, page: view, done: [view.commands[1]] })).page!.command, undefined, 'nothing more asked: done');
+  assert.equal((await jev.read({ trigger: 'step', ...moment, page: view, done: [view.commands[1]] })).page!.command, undefined, 'nothing more asked: done');
   answers = { needs_agent: { noul: .9 } };
-  assert.equal((await jev.read({ trigger: 'delegation', lines })).page, undefined, 'no page, no page questions');
+  assert.equal((await jev.read({ trigger: 'delegation', ...moment })).page, undefined, 'no page, no page questions');
   assert.equal(sent.questions.page_command, undefined);
+});
+
+test("Jev reads the latest words with what happened before them, as a new voice session starts from: the agent's events and the conversation, in order", async t => {
+  const { h, sessionId } = await harness(t);
+  const moments = fakeJev(h), hook = (command: string) => h.observer.hook({ session_id: sessionId, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command }, tool_response: { stdout: 'ok' } });
+  const said = Date.now();
+  hook('npm test');
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const latest = Date.now();
+  await new Promise(resolve => setTimeout(resolve, 5));
+  hook('git commit');
+  await h.read({ trigger: 'delegation', spoken: [{ role: 'intermediary', text: 'Tests are running.', at: said - 5000 }, { role: 'operator', text: 'Then commit it.', at: latest }] });
+  assert.equal(moments[0].latest!.text, 'Then commit it.');
+  assert.match(moments[0].history!, /^voice assistant: Tests are running\.\nClaude Code observation \(history\):\n[^\n]*npm test[^\n]*\n$/, 'in the order it happened, as the agent and a new voice session read it');
+  assert.doesNotMatch(moments[0].history!, /git commit/, 'nothing after the latest words');
 });
 
 test("commands that do the same count as one choice, even below none: the page's own runs", () => {

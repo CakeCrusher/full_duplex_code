@@ -140,9 +140,9 @@ test("the operator's words are read once when they finish, and the page moves fo
   const deck: StageView = { ...view, where: 'Slide 24', commands: [{ id: 'page_next', say: 'Go to the next slide' }, { id: 'page_slide_27', say: 'Go to slide 27', name: 'One highlight at a time' }] };
   h.stage = { tabId: 1, view: deck, describe: async () => deck, run: async (ids: string[]) => { runs.push(ids); return { done: [{ id: ids[0], say: 'Go to the next slide' }], onScreen: 'Slide 25: Moving the page by voice' }; }, follow: async () => null, observe() {}, close() {} } as any;
   const read = { needsAgent: .3, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 };
-  fakeJev(h, ({ trigger, lines }) => {
+  fakeJev(h, ({ trigger, latest }) => {
     if (trigger === 'step') return { page: pageReading() };
-    const said = lines.at(-1)!.text; judged.push(said);
+    const said = latest!.text; judged.push(said);
     return { ...read, page: /continue/i.test(said) ? pageReading({ command: 'page_next', only: .7, work: .1, walk: .2 }) : pageReading({ only: .1, work: .9 }) };
   });
   h.presenter.operatorQuietMs = 30;
@@ -151,7 +151,7 @@ test("the operator's words are read once when they finish, and the page moves fo
   await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /The voice tool moved the page for the operator's words.*Slide 25/.test(text)));
   // The voice then answers, naming the slide it wrongly thinks comes next, and passes the words on too.
   h.voiceSessions.live!.emit('event', { type: 'session.output_transcript.delta', delta: " Let's look at one highlight at a time. " });
-  const gated = await h.sessionSwitch.gate("Okay, let's continue.", 'r1', h.voiceSessions.mediator!.history.lines());
+  const gated = await h.sessionSwitch.gate("Okay, let's continue.", 'r1', h.voiceSessions.mediator!.history.spoken());
   assert.deepEqual(runs, [['page_next']], "one move, once: not again for the gate, nor for the voice's words in that answer");
   assert.match(gated.handled!, /already moved the page for them/);
   assert.equal(judged.filter(said => /continue/.test(said)).length, 1, 'read once: the gate routes the same words by the same reading');
@@ -175,9 +175,9 @@ test("the operator's words come first: a part's last step goes on to the next se
     return { done: [{ id: ids[0], say: 'Go to the next section' }], onScreen: 'Section 4. Your code owns the workflow' };
   }, follow: async () => null, observe() {}, close() {} } as any;
   const read = { needsAgent: .3, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 };
-  fakeJev(h, ({ trigger, lines }) => {
+  fakeJev(h, ({ trigger, latest }) => {
     if (trigger === 'step') return { page: pageReading() };
-    const said = lines.at(-1)!.text; judged.push(said);
+    const said = latest!.text; judged.push(said);
     return { ...read, page: /next/i.test(said) ? pageReading({ command: 'page_next_step', only: .8, work: .1, walk: .1, unhappy: .1 }) : /wrong/.test(said) ? pageReading({ only: .2, work: .3, unhappy: .8 }) : pageReading({ only: .1, work: .9 }) };
   });
   h.presenter.operatorQuietMs = 60000;

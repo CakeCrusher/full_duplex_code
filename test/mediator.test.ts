@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
 import { claude } from '../src/adapters/claude/index.ts';
-import { startupHistory } from '../src/core/startup-history.ts';
+import { recentHistory } from '../src/core/recent-history.ts';
 import { Mediator } from '../src/core/mediator.ts';
 import type { VoiceRequest } from '../src/core/adapter.ts';
 
@@ -45,7 +45,7 @@ test('voice startup and restart send only new observations; earlier work goes to
   const output = 'BEGIN\n' + 'File detail 世界\n'.repeat(25000) + 'END';
   observer.hook({ session_id: 'test', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: { stdout: output } });
   observer.hook({ session_id: 'test', hook_event_name: 'MessageDisplay', message_id: 'old', index: 0, delta: 'Earlier answer.' });
-  const history = startupHistory(claude, observer.observations);
+  const history = recentHistory(claude, observer.observations);
   assert.match(history.text, /BEGIN/); assert.match(history.text, /END/); assert.match(history.text, /Earlier answer/);
   assert.ok(Buffer.byteLength(history.text) <= 7000, 'a large log cannot overflow the startup input');
   const f = fixture(t, 'connecting', observer);
@@ -137,9 +137,9 @@ test('a restart after a long session starts with no burst of appends', async t =
   const f = fixture(t, 'active', observer);
   await flush(); f.mediator.feed.flush(); await flush();
   assert.equal(f.appends.length, 0);
-  const history = startupHistory(claude, observer.observations);
+  const history = recentHistory(claude, observer.observations);
   assert.match(history.text, /Answer 199/); assert.doesNotMatch(history.text, /Answer 0\./);
-  assert.match(history.text, /earlier observations from this Claude session are omitted/);
+  assert.match(history.text, /earlier records from this Claude session are omitted/);
   f.hook({ hook_event_name: 'UserPromptSubmit', prompt: 'next' });
   await flush();
   assert.match(content(f), /"prompt":"next"/);

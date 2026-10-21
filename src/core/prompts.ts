@@ -76,7 +76,7 @@ export const attachment = ({ profile: { product } }: Agent, cwd: string, state: 
 export const historyIntro = ({ profile: { name } }: Agent) => `Recorded ${name} context only. This is not a new user request:\n`;
 export const historyEntry = ({ profile: { product } }: Agent, record: string) => `${product} observation (history):\n${record}\n`;
 export const historyOmitted = ({ profile: { name } }: Agent, omitted: number) =>
-  `[${omitted} earlier observations from this ${name} session are omitted; only the most recent work follows.]\n`;
+  `[${omitted} earlier records from this ${name} session are omitted; only the most recent follow.]\n`;
 
 // Labels on context appends.
 export const feedLabel = ({ profile: { name, eventsWord } }: Agent) => `${name} ${eventsWord}`;
@@ -113,7 +113,9 @@ export const deliveryConfirmation = ({ profile: { product } }: Agent) => `The re
 // A delegated request as the agent receives it: a note on how to read it, then
 // the conversation since the previous request, one utterance per line.
 const SPEAKERS: Record<Utterance['role'], string> = { operator: 'user', intermediary: 'voice assistant' };
-const transcript = (utterances: readonly Pick<Utterance, 'role' | 'text'>[]) => utterances.map(u => `${SPEAKERS[u.role]}: ${u.text.replace(/\s+/g, ' ').trim()}`).join('\n');
+/** One utterance as everything fdc writes the conversation down: the speaker, then the words. */
+export const spokenLine = ({ role, text }: Pick<Utterance, 'role' | 'text'>) => `${SPEAKERS[role]}: ${text.replace(/\s+/g, ' ').trim()}`;
+const transcript = (utterances: readonly Pick<Utterance, 'role' | 'text'>[]) => utterances.map(spokenLine).join('\n');
 export const voiceRequest = (utterances: readonly Pick<Utterance, 'role' | 'text'>[], notes: readonly string[] = []) =>
   `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.${notesText(notes)}\n\n${transcript(utterances)}`;
 // Why speech an earlier request took is in this one: it never reached the agent.

@@ -102,6 +102,6 @@ export const pageReading = (page: Partial<PageJudgment> = {}): PageJudgment => (
 /** A stand-in for Jev (jev.ts): the test's reading of each moment; returns every moment it was asked about. */
 export function fakeJev(h: Harness, reading: (moment: Moment) => Partial<Reading> = () => ({})) {
   const moments: Moment[] = [];
-  h.jev = { read: async (moment: Moment) => { moments.push(moment); return { trigger: moment.trigger, said: moment.lines.at(-1)?.text ?? '', transcript: '', needsAgent: .3, ...reading(moment) }; } } as any;
+  h.jev = { read: async (moment: Moment) => { moments.push(moment); return { trigger: moment.trigger, said: moment.latest?.text ?? '', transcript: '', needsAgent: .3, ...reading(moment) }; } } as any;
   return moments;
 }

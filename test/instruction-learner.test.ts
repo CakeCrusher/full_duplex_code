@@ -19,12 +19,12 @@ const read = (said: string, behave: number, design: number, lasting: string, tra
 test("Jev reads the operator's latest words in the conversation; a lasting instruction is learned", async () => {
   const calls: any[] = [];
   const fetch = async (url: string, init: RequestInit) => { calls.push({ url, init, body: JSON.parse(String(init.body)) }); return { ok: true, status: 200, json: async () => ({ answers: { needs_agent: { noul: .2 }, behave: { noul: .8 }, design_talk: { noul: .2 }, lasting: { choice: 'always' } } }) }; };
-  const reading = await new Jev({ apiKey: 'key', fetch, log: () => {} }).read({ trigger: 'delegation', learn: true, lines: [
-    { role: 'operator', text: 'What did it change?', sent: true }, { role: 'intermediary', text: 'It edited src/core/feed.ts.' }, { role: 'operator', text: "  Don't read out file paths,\n just tell me what you need. " }] });
+  const reading = await new Jev({ apiKey: 'key', fetch, log: () => {} }).read({ trigger: 'delegation', learn: true, history: 'user: What did it change?\nvoice assistant: It edited src/core/feed.ts.\n',
+    latest: { role: 'operator', text: "  Don't read out file paths,\n just tell me what you need. " } });
   assert.equal(calls[0].url, 'https://api.typesafe.ai/v1/systemone');
   assert.equal((calls[0].init.headers as Record<string, string>).Authorization, 'Bearer key');
-  assert.equal(calls[0].body.state.transcript, 'operator (sent): What did it change?\nvoice companion: It edited src/core/feed.ts.');
-  assert.equal(calls[0].body.state.latest, "operator: Don't read out file paths, just tell me what you need.");
+  assert.equal(calls[0].body.state.history, 'user: What did it change?\nvoice assistant: It edited src/core/feed.ts.');
+  assert.equal(calls[0].body.state.latest, "user: Don't read out file paths, just tell me what you need.");
   assert.ok(['behave', 'design_talk', 'lasting'].every(name => calls[0].body.questions[name]), "the learner's questions, in the one call");
   const learned: LearnedInstruction[] = [];
   const instruction = new InstructionLearner({ log: () => {}, onLearn: i => learned.push(i) }).consider(reading);
@@ -90,7 +90,7 @@ test('Jev reads each request sent to the harness without a gate, in the conversa
   const live: any = new EventEmitter(); live.state = 'active'; live.close = () => {}; live.append = async () => {};
   const observer = new ClaudeObserver({ sessionId: 'test' }), asked: any[] = [], considered: any[] = [], delivered: any[] = [];
   const mediator = new Mediator({ live, observer, deliver: r => delivered.push(r), log: () => {}, publish: () => {}, clean: String, hold: null,
-    read: async (trigger, lines) => { asked.push({ trigger, lines }); return read(lines.at(-1)!.text, .9, .1, 'this_session'); }, consider: (reading, id) => considered.push([reading.said, id]) });
+    read: async (trigger, spoken) => { asked.push({ trigger, spoken }); return read(spoken.at(-1)!.text, .9, .1, 'this_session'); }, consider: (reading, id) => considered.push([reading.said, id]) });
   t.after(() => { mediator.stop(); observer.close(); });
   live.emit('event', { type: 'session.output_transcript.delta', delta: 'Claude finished the edit.', start_ms: 0, end_ms: 900 });
   live.emit('event', { type: 'session.input_transcript.delta', delta: "From now on, don't read paths out loud.", start_ms: 1000, end_ms: 2500 });
@@ -99,7 +99,7 @@ test('Jev reads each request sent to the harness without a gate, in the conversa
   mediator.delegate('d1', 3000);
   for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
   assert.equal(delivered.length, 1);
-  assert.deepEqual(asked, [{ trigger: 'unsent', lines: [{ role: 'intermediary', text: 'Claude finished the edit.' }, { role: 'operator', text: "From now on, don't read paths out loud." }] }]);
+  assert.deepEqual(asked.map(({ trigger, spoken }) => [trigger, spoken.map(({ role, text }: any) => [role, text])]), [['unsent', [['intermediary', 'Claude finished the edit.'], ['operator', "From now on, don't read paths out loud."]]]]);
   assert.deepEqual(considered, [["From now on, don't read paths out loud.", delivered[0].id]]);
 });
 

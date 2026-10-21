@@ -6,11 +6,13 @@
 // - The page on the stage: the next command to run, and whether moving the page is all they ask (presenter.ts).
 // - The learner: whether they give the companion a standing instruction (instruction-learner.ts).
 // - The tuner: the level of each setting that fits the operator's instructions (jev-tuner.ts, with FDC_JEV_TUNING=1).
-// Jev gets the conversation itself, the latest words marked, and why it is asked now; it judges from both, with no rule
+// Jev gets the latest words, what happened before them as fdc keeps it (the agent's events and the conversation, in order,
+// as far back as the recent history keeps: recent-history.ts), and why it is asked now; it judges from these, with no rule
 // about which words each question may use.
 import type { StageCommand, StageView } from './stage.ts';
 import type { Tuning } from './tuning.ts';
 import { tunerQuestions, TUNER_SETTING } from './jev-tuner.ts';
+import { spokenLine } from './prompts.ts';
 
 type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
 const URL = 'https://api.typesafe.ai/v1/systemone';
@@ -25,7 +27,7 @@ const WHY: Record<Trigger, string> = {
   step: 'The voice tool has run page commands for the latest words (`page_done`), and the page is now where `page` says.',
   settings: 'The operator\'s instructions to the companion have changed, or voice has started.',
 };
-const SETTING = 'An operator talks by voice (transcribed, may be imperfect) to a voice companion that presents a coding agent\'s work while the agent produces it. The companion answers what it can from what the agent already said, and passes the rest on. You are the voice tool between the companion and the agent: what the voice tool can do itself (the page beside the conversation, the companion\'s own behavior and settings, voice sessions) it does at once, without the agent; everything else must reach the agent. `latest` holds the latest words: judge those. `transcript` is the conversation just before them, oldest first, as context (what "it", "that one" or "yes, please" refers to); lines marked (sent) have reached the coding agent. `why` says why you are asked now.';
+const SETTING = 'An operator talks by voice (transcribed, may be imperfect) to a voice companion that presents a coding agent\'s work while the agent produces it. The companion answers what it can from what the agent already said, and passes the rest on. You are the voice tool between the companion and the agent: what the voice tool can do itself (the page beside the conversation, the companion\'s own behavior and settings, voice sessions) it does at once, without the agent; everything else must reach the agent. `latest` holds the latest words: judge those. `history` is what happened just before them, oldest first, as context (what "it", "that one" or "yes, please" refers to): the coding agent\'s events, as JSON records, and the conversation, where `user` is the operator and `voice assistant` the voice companion. `why` says why you are asked now.';
 const SESSIONS_SETTING = ' The operator may run several companions at once, each beside its own coding session in its own folder (`sessions`); each one\'s voice can be on or off, and several can be on together. fdc, the voice tool itself, turns them on or off; the coding agent does not. Every listed session is already running, so starting, opening or turning on a listed session (named by its folder or project) means turning its voice on, and stopping or closing one means turning its voice off.';
 const PAGE_SETTING = ' A page is open in the browser beside the conversation (`page`). The voice tool can move it, show and highlight its parts with the listed page commands, without the coding agent. Commands whose id starts with page_ are the page\'s own (slides, tabs, views): prefer them when they fit.';
 
@@ -60,8 +62,8 @@ export const PAGE_RELATIVE_ONLY = .3;
 // The learner's held-out thresholds from the offline test.
 export const BEHAVE = .6, DESIGN = .5;
 
-/** One line of the conversation as Jev reads it. */
-export interface Line { role: 'operator' | 'intermediary'; text: string; sent?: boolean }
+/** One utterance of the conversation. */
+export interface Line { role: 'operator' | 'intermediary'; text: string }
 /** A running companion, as Jev is told about it. */
 export interface Session { id: string; folder: string; agent: string; on: boolean; current: boolean; /** Why its voice can't start without the operator. */ blocked?: string | null }
 /** Jev's reading of the words for session orchestration. */
@@ -80,7 +82,7 @@ export interface InstructionJudgment { behave: number; design: number; lasting: 
 /** Everything Jev read in one moment. */
 export interface Reading {
   trigger: Trigger;
-  /** The latest words it judged, and the transcript it read them in. */
+  /** The latest words it judged, and what it read them in (their history, then the words, marked). */
   said: string; transcript: string;
   /** Whether those words must reach the coding agent; null when Jev couldn't be asked. */
   needsAgent: number | null;
@@ -91,9 +93,11 @@ export interface Reading {
   /** Acted on already (learner and tuner): a reading reused for the same words isn't acted on twice. */
   considered?: boolean;
 }
-/** What Jev is asked about: the moment, the conversation, and what the voice tool can act on now. */
+/** What Jev is asked about: the moment, the words, what happened before them, and what the voice tool can act on now. */
 export interface Moment {
-  trigger: Trigger; lines: Line[];
+  trigger: Trigger;
+  /** The latest words; what happened before them, oldest first (recent-history.ts). */
+  latest?: Line; history?: string;
   sessions?: Session[]; page?: StageView;
   /** Page commands already run for these words (trigger step). */
   done?: StageCommand[];
@@ -103,9 +107,6 @@ export interface Moment {
   tune?: { instructions: string[]; earlier: string[]; current: Tuning; pinned: (keyof Tuning)[] };
 }
 
-const line = ({ role, text, sent }: Line) => `${role === 'operator' ? 'operator' : 'voice companion'}${sent ? ' (sent)' : ''}: ${text.replace(/\s+/g, ' ').trim()}`;
-/** The conversation as one transcript, one line per utterance, the latest words marked. */
-export const transcript = (lines: readonly Line[]) => lines.map((l, i) => `${i === lines.length - 1 ? '► ' : ''}${line(l)}`).join('\n');
 
 const noul = (instructions: string, yes: string, no: string) => ({ type: 'noul', instructions, criteria: { true: yes, false: no } });
 const GATE = {
@@ -221,11 +222,11 @@ export class Jev {
   }
   /** One call: everything the voice tool asks about this moment. */
   async read(moment: Moment, timeoutMs = 3000): Promise<Reading> {
-    const { trigger, lines, sessions, page, done, learn, tune } = moment, started = Date.now();
-    const said = lines.at(-1)?.text.replace(/\s+/g, ' ').trim() ?? '', gate = trigger === 'turn' || trigger === 'delegation';
-    // The latest words on their own, the conversation before them as context: as one marked transcript, Jev read plain
-    // page moves as likelier work for the agent (page_work up by .1 on average, Oct 21).
-    const state: Record<string, string> = { setting: SETTING + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : '') + (tune ? ` ${TUNER_SETTING}` : ''), why: WHY[trigger], transcript: lines.slice(0, -1).map(line).join('\n') || '(none)', latest: lines.length ? line(lines.at(-1)!) : '(none)' };
+    const { trigger, latest, history = '', sessions, page, done, learn, tune } = moment, started = Date.now();
+    const said = latest?.text.replace(/\s+/g, ' ').trim() ?? '', gate = trigger === 'turn' || trigger === 'delegation';
+    // The latest words in their own field: marked inside the conversation instead, Jev read plain page moves as likelier
+    // work for the agent (page_work up by .1 on average, Oct 21).
+    const state: Record<string, string> = { setting: SETTING + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : '') + (tune ? ` ${TUNER_SETTING}` : ''), why: WHY[trigger], history: history.trim() || '(none)', latest: latest ? spokenLine(latest) : '(none)' };
     if (sessions) state.sessions = sessionLines(sessions);
     if (page) state.page = pageLine(page);
     if (done?.length) state.page_done = done.map((c, i) => `${i + 1}. ${c.say}`).join('\n');
@@ -241,7 +242,7 @@ export class Jev {
     if (!response.ok) throw new Error(`Jev returned HTTP ${response.status}`);
     const { answers } = await response.json();
     const p = (name: string, missing = 0) => { const value = Number(answers?.[name]?.noul); return Number.isFinite(value) ? value : missing; };
-    const reading: Reading = { trigger, said, transcript: transcript(lines), needsAgent: 'needs_agent' in questions ? p('needs_agent') : null };
+    const reading: Reading = { trigger, said, transcript: `${history}${latest ? `► ${spokenLine(latest)}` : ''}`, needsAgent: 'needs_agent' in questions ? p('needs_agent') : null };
     if (gate) reading.companionOnly = p('companion_only');
     if (gate && sessions) {
       const chosen = (choice: string) => sessions.filter((_, index) => answers?.[`session_${index + 1}`]?.choice === choice).map(s => s.id);

@@ -10,6 +10,8 @@ import { DelegationAudit } from './delegation-audit.ts';
 import { askAgent, distillPrompt, parseDistilled } from './instruction-distiller.ts';
 import { tuningFrom, type TuningChange } from './jev-tuner.ts';
 import { Jev, type Moment, type Reading } from './jev.ts';
+import { recentHistory } from './recent-history.ts';
+import type { Spoken } from './voice-history.ts';
 import { Stage } from './stage.ts';
 import { Presenter } from './presenter.ts';
 import { UsageLedger } from './usage-ledger.ts';
@@ -183,14 +185,18 @@ export class Harness {
     this.log({ type: 'tuning.changed', tuning: next, changes }); this.publish({ type: 'tuning', tuning: next, changes }); this.publish(this.status());
   }
   /**
-   * Jev's reading of a moment (jev.ts). Of the operator's words it also asks whether they give a standing instruction
-   * (the learner) and, with Jev's tuning on, which settings fit (the tuner), with the instructions in force.
+   * Jev's reading of a moment (jev.ts): the latest words (the last of `spoken`), with what happened before them as fdc
+   * keeps it, the agent's events and the conversation in order, as far back as the recent history keeps (the same as a new
+   * voice session starts from). Of the operator's words it also asks whether they give a standing instruction (the
+   * learner) and, with Jev's tuning on, which settings fit (the tuner), with the instructions in force.
    */
-  read(moment: Moment, timeoutMs?: number): Promise<Reading> {
+  read({ spoken = [], ...moment }: Omit<Moment, 'latest' | 'history' | 'learn' | 'tune'> & { spoken?: Spoken[] }, timeoutMs?: number): Promise<Reading> {
     if (!this.jev) return Promise.reject(new Error('Jev is not configured'));
     const words = ['turn', 'delegation', 'unsent'].includes(moment.trigger), tune = this.jevTuning && (words || moment.trigger === 'settings');
-    const ask = tune ? ++this.tuneAsks : 0;
-    return this.jev.read({ ...moment, learn: words || undefined, tune: tune ? { instructions: this.voiceSessions.additionalInstructions.map(item => item.text), earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined }, timeoutMs)
+    const ask = tune ? ++this.tuneAsks : 0, latest = spoken.at(-1);
+    const before = latest ? [...this.adapter.history().filter(o => o.at <= latest.at), ...spoken.slice(0, -1)].sort((a, b) => a.at - b.at) : [];
+    return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(recentHistory(this.agent, before).text) },
+      learn: words || undefined, tune: tune ? { instructions: this.voiceSessions.additionalInstructions.map(item => item.text), earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined }, timeoutMs)
       .then(reading => Object.assign(reading, ask ? { tuneAsk: ask } : {}));
   }
   /** What Jev read in the operator's words, acted on once: a standing instruction to learn, and the settings that fit (only the latest ask's: an older answer arriving late would undo it). */
@@ -207,7 +213,7 @@ export class Harness {
   tuneFromInstructions() {
     if (!this.jevTuning) return;
     clearTimeout(this.tuneTimer);
-    this.tuneTimer = setTimeout(() => this.read({ trigger: 'settings', lines: [] }, 8000).then(reading => this.consider(reading), error => this.log({ type: 'tuning.error', message: (error as Error).message })), 1000);
+    this.tuneTimer = setTimeout(() => this.read({ trigger: 'settings' }, 8000).then(reading => this.consider(reading), error => this.log({ type: 'tuning.error', message: (error as Error).message })), 1000);
   }
   /** The operator removes an instruction Jev learned, by its ID. */
   removeInstruction(id: unknown) { return this.voiceSessions.removeLearned(id); }

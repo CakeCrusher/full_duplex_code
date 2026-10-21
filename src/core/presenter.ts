@@ -12,7 +12,8 @@ import type { Harness } from './bridge.ts';
 import { CueMatcher, unglue, type SpeechCue } from './speech-cues.ts';
 import { Stage, StageError, StageNothing, STEP_DWELL_MS, type StageCommand, type StageRun, type StageView } from './stage.ts';
 import { FastAction, type PageAction } from './fast-action.ts';
-import { PAGE_ONLY, PAGE_OTHER, PAGE_RELATIVE_ONLY, PAGE_UNHAPPY, PAGE_WALK, PAGE_WORK, WALK_WORK, type Line, type PageJudgment, type Reading } from './jev.ts';
+import { PAGE_ONLY, PAGE_OTHER, PAGE_RELATIVE_ONLY, PAGE_UNHAPPY, PAGE_WALK, PAGE_WORK, WALK_WORK, type PageJudgment, type Reading } from './jev.ts';
+import type { Spoken } from './voice-history.ts';
 import type { Gated } from './mediator.ts';
 import { controllerNote, cueHandled, cueMovedNote, cueShown, improvisedFailedNote, lookingNote, oneOffDone, oneOffNote, operatorMoved, pageAlongside, pageAtEnd, pageMoving, pageNow, pageDoneNote, pageFailed, pageFailedNote, pageHandled, pageNothing, pageNothingNote, unhappySent, walkNext, walkStarted } from './prompts.ts';
 
@@ -122,8 +123,8 @@ export class Presenter {
     try {
       const view = await bridge.stage.describe();
       if (!view) return;
-      const lines: Line[] = [...bridge.mediator?.history.lines() ?? [], { role: 'intermediary', text: sentence }];
-      const command = (await bridge.read({ trigger: 'cue', lines, page: view })).page?.command;
+      const spoken: Spoken[] = [...bridge.mediator?.history.spoken() ?? [], { role: 'intermediary', text: sentence, at: Date.now() }];
+      const command = (await bridge.read({ trigger: 'cue', spoken, page: view })).page?.command;
       if (!command) { bridge.log({ type: 'stage.cue_missed', meant }); return; }
       const { onScreen } = await bridge.stage.run([command]);
       this.presentedAt = Date.now();
@@ -138,10 +139,10 @@ export class Presenter {
    * moved the page for), or a one-off action when no command does it. Undefined when the page has nothing to do.
    * With work in the request too, it still goes to the agent, noting the page part is done.
    */
-  async request(reading: Reading, said: string, lines: Line[], cued?: boolean): Promise<Gated | undefined> {
+  async request(reading: Reading, said: string, spoken: Spoken[], cued?: boolean): Promise<Gated | undefined> {
     const page = reading.page!, command = taken(page);
     if (walked(page)) return this.walk(reading, command, cued);
-    if (command) return cued ? this.cued(reading) : this.present(reading, command, lines);
+    if (command) return cued ? this.cued(reading) : this.present(reading, command, spoken);
     if (page.other >= PAGE_OTHER && this.fastAction) return cued ? this.cued(reading) : this.improvise(said, reading, !(page.only >= PAGE_ONLY && page.work < PAGE_WORK));
   }
   /**
@@ -149,7 +150,7 @@ export class Presenter {
    * wants none: "forward three sections" is three steps, "go to the options and highlight the recommendation" two. Each
    * step shows for a moment before the next.
    */
-  async steps(first: string, lines: Line[]): Promise<StageRun> {
+  async steps(first: string, spoken: Spoken[]): Promise<StageRun> {
     const bridge = this.bridge, done: StageCommand[] = [];
     let next: string | undefined = first, onScreen = '';
     for (let n = 0; next && n < MOST_STEPS; n++) {
@@ -157,7 +158,7 @@ export class Presenter {
       done.push(...ran.done); onScreen = ran.onScreen;
       if (n + 1 === MOST_STEPS) break;
       const shown = Date.now(), view = await bridge.stage.describe(0).catch(() => undefined);
-      next = view && await bridge.read({ trigger: 'step', lines, page: view, done: [...done] }).then(reading => reading.page?.command, () => undefined);
+      next = view && await bridge.read({ trigger: 'step', spoken, page: view, done: [...done] }).then(reading => reading.page?.command, () => undefined);
       // Only a step forward or back repeats: a part reached again is no further on (two tabs taken in turns, five times, on
       // the synthetic set).
       if (next && !RELATIVE.test(next) && done.some(c => c.id === next)) next = undefined;
@@ -192,11 +193,11 @@ export class Presenter {
     return turn && same(turn.said, said) ? turn.read : undefined;
   }
   async judgeTurn(said: string, history: NonNullable<Harness['mediator']>['history']): Promise<TurnRead> {
-    const bridge = this.bridge, started = Date.now(), context = bridge.mediator?.context, lines = history.lines();
+    const bridge = this.bridge, started = Date.now(), context = bridge.mediator?.context, spoken = history.spoken();
     let reading: Reading | undefined;
     try {
       const [view, sessions] = await Promise.all([bridge.stage.describe(), bridge.sessionSwitch.sessions(300)]);
-      reading = view && await bridge.read({ trigger: 'turn', lines, sessions, page: view });
+      reading = view && await bridge.read({ trigger: 'turn', spoken, sessions, page: view });
       if (!reading?.page) return { said, reading, moved: false };
       // A standing instruction or a setting in their words counts whatever happens to the page.
       bridge.consider(reading);
@@ -216,7 +217,7 @@ export class Presenter {
       const moving = Date.now();
       context?.now('thinking', pageMoving([view!.commands.find(c => c.id === command) ?? { say: command! }]));
       let ran: StageRun | undefined;
-      try { ran = await this.steps(command!, lines); }
+      try { ran = await this.steps(command!, spoken); }
       catch (error) {
         // The page's controls failed: their words go to the agent with the error, to fix them, and GPT Live hears so.
         if (!(error instanceof StageNothing)) {
@@ -307,10 +308,10 @@ export class Presenter {
    * With more in it: the request goes on, noting the page part is done. If the page's controls
    * fail, the request goes to the harness with the error, to fix them.
    */
-  async present(reading: Reading, command: string, lines: Line[]): Promise<Gated> {
+  async present(reading: Reading, command: string, spoken: Spoken[]): Promise<Gated> {
     const bridge = this.bridge, { agent } = bridge, { only, work } = reading.page!;
     try {
-      const { done, onScreen } = await this.steps(command, lines);
+      const { done, onScreen } = await this.steps(command, spoken);
       this.presentedAt = Date.now();
       bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });
       if (only >= PAGE_ONLY && work < PAGE_WORK) return { reading, handled: pageHandled(agent, done, onScreen), page: true };

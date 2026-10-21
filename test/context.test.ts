@@ -6,7 +6,7 @@ import { Floor } from '../src/core/floor.ts';
 import { LineReader } from '../src/core/line-reader.ts';
 import { VoiceHistory, type SpokenRequest } from '../src/core/voice-history.ts';
 import { redact } from '../src/core/redact.ts';
-import { startupHistory } from '../src/core/startup-history.ts';
+import { recentHistory } from '../src/core/recent-history.ts';
 import { contextData } from '../src/core/context-rules.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { pi } from '../src/adapters/pi/index.ts';
@@ -28,7 +28,7 @@ test('base64 is omitted wherever it appears, for any agent; ordinary text of any
   assert.equal(data.tool_response[0].text, 'Score 20'); assert.equal(data.code, 'const data = "ABCxyz";'); assert.equal(data.prose, prose);
   assert.equal(data.printed, 'Script completed\nOutput:\n{"content":[{"type":"text","text":"Captured"},{"type":"image","data":"[omitted: 8,002 chars]"}]}', 'base64 printed inside text');
   assert.equal(JSON.parse(raw).tool_response[1].source.data.length, 40000, 'the original stays intact for the local log');
-  assert.ok(startupHistory(claude, [{ name: 'PostToolUse', text: JSON.stringify({ tool_response: [screenshot] }) }]).text.length < 1000, 'resuming voice also omits the bytes');
+  assert.ok(recentHistory(claude, [{ name: 'PostToolUse', text: JSON.stringify({ tool_response: [screenshot] }) }]).text.length < 1000, 'resuming voice also omits the bytes');
 });
 
 test('startup context is filtered as live context is', () => {
@@ -37,7 +37,7 @@ test('startup context is filtered as live context is', () => {
     { name: 'MessageDisplay', text: JSON.stringify({ hook_event_name: 'MessageDisplay', session_id: 's', delta: 'The page is ready.' }) },
     { name: 'Stop', text: JSON.stringify({ hook_event_name: 'Stop', last_assistant_message: 'The page is ready.' }) },
   ];
-  const history = startupHistory(claude, observations);
+  const history = recentHistory(claude, observations);
   assert.equal(history.count, 2);
   assert.match(history.text, /\[voice request 3f1e2d4c: the voice command you already have; Claude has received it\]/);
   assert.match(history.text, /"delta":"The page is ready\."/);
@@ -206,19 +206,22 @@ test('a request is the conversation since the previous delegation, one utterance
 
 test('startup context keeps the most recent observations in order and notes what it omitted', () => {
   const observations = Array.from({ length: 10 }, (_, i) => ({ name: 'PostToolUse', text: JSON.stringify({ result: `observation ${i} ` + 'x'.repeat(100) }) }));
-  const history = startupHistory(claude, observations, 700);
+  const history = recentHistory(claude, observations, 700);
   assert.ok(history.count > 0 && history.count < 10);
   assert.equal(history.omitted, 10 - history.count);
   assert.match(history.text, /observation 9/); assert.doesNotMatch(history.text, /observation 0 /);
   assert.ok(history.text.indexOf('observation 8') < history.text.indexOf('observation 9'), 'chronological order');
-  assert.match(history.text, new RegExp(`${history.omitted} earlier observations`));
+  assert.match(history.text, new RegExp(`${history.omitted} earlier records`));
   assert.ok(Buffer.byteLength(history.text) <= 700);
-  assert.equal(startupHistory(claude, observations, 0).count, 0);
-  assert.equal(startupHistory(claude, [], 700).text, '');
+  assert.equal(recentHistory(claude, observations, 0).count, 0);
+  assert.equal(recentHistory(claude, [], 700).text, '');
+  // The conversation among the agent's events, in the order they happened, as the agent reads requests (Jev's history).
+  const mixed = recentHistory(claude, [observations[0], { role: 'operator', text: 'Add a dark  mode toggle.' }, observations[1], { role: 'intermediary', text: 'On it.' }]);
+  assert.match(mixed.text, /observation 0 [^]*\nuser: Add a dark mode toggle\.\nClaude Code observation \(history\):\n[^\n]*observation 1 [^]*\nvoice assistant: On it\.\n$/);
 });
 
 test('an oversized newest observation is excerpted rather than hiding all recent work', () => {
-  const history = startupHistory(claude, [{ name: 'PostToolUse', text: '{"result":"older"}' }, { name: 'PostToolUse', text: JSON.stringify({ result: 'START' + '世界'.repeat(4000) + 'FINISH' }) }], 3000);
+  const history = recentHistory(claude, [{ name: 'PostToolUse', text: '{"result":"older"}' }, { name: 'PostToolUse', text: JSON.stringify({ result: 'START' + '世界'.repeat(4000) + 'FINISH' }) }], 3000);
   assert.equal(history.count, 2);
   assert.match(history.text, /START/); assert.match(history.text, /FINISH/); assert.match(history.text, /full record in the local hook log/);
   assert.ok(Buffer.byteLength(history.text) <= 3000);
