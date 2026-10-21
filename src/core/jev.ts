@@ -156,7 +156,8 @@ const pageQuestions = (page: StageView, trigger: Trigger) => {
   const criteria = { none: 'No page command: nothing (more) is to be shown, moved or highlighted on the page.', ...Object.fromEntries(page.commands.map(c => [c.id, c.say])), [OTHER]: 'Another action on the page that none of these commands does: find, point at or highlight a specific thing inside a part (a row, a word, a number), click or open a control, switch a view, zoom. Not going to a section, slide or part that a listed command goes to, even when the operator describes it by what it says.' };
   const command = { page_command: { type: 'choice', instructions: `${first} ${rules}`, criteria } };
   // After each command: should another run? A plain yes or no, beside which one.
-  if (trigger === 'step') return { ...command, page_more: noul('Do the latest words ask more of the page than the commands already run for them (`page_done`, in order) have done?', 'Something they asked for is not done yet: a further part, highlight or switch, or a move repeated more times than it has run ("forward two slides" needs the next slide twice).', 'The commands run have done everything the latest words ask of the page.') };
+  // "Okay, continue" ran the next slide five times (Oct 21, live deck): a move with no number asks for one.
+  if (trigger === 'step') return { ...command, page_more: noul('Do the latest words ask more of the page than the commands already run for them (`page_done`, in order) have done?', 'Something they named is not done yet: a further part, highlight or switch, or a move they asked for a number of times ("forward two slides", "next, next") that has run fewer times.', 'The commands run have done everything the latest words name. A move asked for without a number ("next", "continue", "go on", "keep going", "go back") is one move, done once it has run.') };
   if (trigger === 'cue') return command;
   return {
     ...command,
