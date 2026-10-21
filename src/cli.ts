@@ -117,9 +117,10 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
   const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId?.slice(0, 8) ?? (session.resume ? 'resumed' : agent.profile.id)}`);
   let harness: Harness;
   try { harness = await new Harness({ agent, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe, agentArgs, jevKey: process.env.TYPESAFE_API_KEY, tuning: tuningOverrides(), jevTuning: process.env.FDC_JEV_TUNING === '1', store: !values['no-store'],
-    // The page being presented, per folder and agent session (its id, or how it is resumed: "--resume main"): a restart
-    // picks it up again.
-    stageFile: path.join(root, '.runs', 'stage', `${createHash('sha1').update(`${cwd}|${sessionId ?? agentArgs.join(' ')}`).digest('hex').slice(0, 12)}.json`) }).start(); }
+    // The page being presented, per folder: a restart picks it up again, however the agent session is resumed (keyed by
+    // session too, "--resume" with the session picked in Claude's list lost it on Oct 21, and every page move went to
+    // the agent until it showed the page again).
+    stageFile: path.join(root, '.runs', 'stage', `${createHash('sha1').update(cwd).digest('hex').slice(0, 12)}.json`) }).start(); }
   catch (error) { console.error(loud(`fdc: ${(error as Error).message}`)); process.exit(1); }
   if (harness.portFellBack) console.log(`\nPort ${DEFAULT_PORT} is in use, probably by another companion. This one uses ${new URL(harness.baseUrl).port}; Chrome may ask for microphone access again.`);
   let tunnel: Tunnel | undefined, child: ChildProcess | undefined, stopping = false;
