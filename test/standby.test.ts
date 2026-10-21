@@ -61,6 +61,16 @@ test('speech wakes it, priced like everything else, and the paused session resum
   assert.deepEqual(lives[1].appended, [], 'the operator speaking is the cue: nothing is added or said first');
 });
 
+test("GPT Live's last words still playing when it goes on Standby don't wake it: its session is closed", async t => {
+  const { h, sent, goQuiet } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30 } });
+  await goQuiet();
+  for (let i = 0; i < 10; i++) h.voiceSessions.heard({ at: Date.now(), inputRms: 0, outputRms: .05 });
+  h.voiceSessions.checkStandby();
+  assert.equal(sent('voice_wake').length, 0, 'its own tail is no activity');
+  speak(h, 3); h.voiceSessions.checkStandby();
+  assert.deepEqual(sent('voice_wake').map(e => e.reason), ['operator'], 'the operator still wakes it');
+});
+
 const PLAN = { tabId: 1, title: 'Plan', url: 'http://127.0.0.1:8765/plan.html', about: null, where: 'Goals', commands: [], parts: [{ name: 'Goals', text: 'Ship the dark mode toggle by Friday.' }] };
 const toldPage = (live: Live) => live.appended.filter(([kind, text]) => kind === 'thinking' && /The page open beside the operator now/.test(text)).map(([, text]) => text);
 

@@ -135,7 +135,9 @@ export class VoiceSessions {
     const voice = operatorVoice(level), held = voice && level.at - this.voiceAt < 250;
     if (voice) this.voiceAt = level.at;
     if (held) this.activity.add('operator');
-    if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS) { this.activity.add('live'); this.liveSpeechAt = level.at; }
+    // On Standby GPT Live is disconnected: its audio still playing is the closed session's last words, which once woke it
+    // again within a second (Oct 21, twice), for a new session billed at least 15 s.
+    if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS && !this.standby) { this.activity.add('live'); this.liveSpeechAt = level.at; }
   }
   /**
    * Every second: voice that has been quiet for the Standby window goes on Standby, and voice on
