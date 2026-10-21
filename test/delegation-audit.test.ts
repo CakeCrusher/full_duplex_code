@@ -46,13 +46,12 @@ test('a request GPT Live passed on is recorded as passed, and not again as answe
 test('the record keeps the words, what GPT Live did and Jev\'s judgment, owner-only', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-audit-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'delegation-audit.jsonl');
-  const fetch = async () => ({ ok: true, status: 200, json: async () => ({ answers: { needs_agent: { noul: 0.91 } } }) });
-  const audit = new DelegationAudit({ apiKey: 'k', file, log: () => {}, fetch });
-  await audit.record({ handOff: 'answered', said: 'Merge it.', voiceSessionId: 'live_1' });
+  const audit = new DelegationAudit({ file, log: () => {} });
+  audit.record({ handOff: 'answered', said: 'Merge it.', voiceSessionId: 'live_1' }, 0.91, '► operator: Merge it.');
   const [entry] = fs.readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.equal(entry.handOff, 'answered'); assert.equal(entry.said, 'Merge it.'); assert.equal(entry.needsAgent, 0.91);
+  assert.equal(entry.transcript, '► operator: Merge it.', 'with the conversation Jev read');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  const failing = new DelegationAudit({ apiKey: 'k', file, log: () => {}, fetch: async () => ({ ok: false, status: 500, json: async () => ({}) }) });
-  await failing.record({ handOff: 'passed', said: 'Fix it.' });
+  audit.record({ handOff: 'passed', said: 'Fix it.' }, null);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8').trim().split('\n')[1]).needsAgent, null, 'a failed judgment is still recorded');
 });

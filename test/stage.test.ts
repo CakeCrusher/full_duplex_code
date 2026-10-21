@@ -7,9 +7,9 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
 import { Stage, StageNothing, type StageView } from '../src/core/stage.ts';
-import { DelegationAudit } from '../src/core/delegation-audit.ts';
+import { chosenCommand, Jev, type Line } from '../src/core/jev.ts';
 import { Mediator, type Gated } from '../src/core/mediator.ts';
-import { harness, until } from './live-fake.ts';
+import { fakeJev, harness, pageReading, until } from './live-fake.ts';
 
 const view: StageView = { tabId: 7, title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"',
   commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'goto_options', say: 'Go to the section "Options"' }, { id: 'show_the_recommendation', say: 'Show and highlight: the recommendation' }], parts: [] };
@@ -55,76 +55,94 @@ test('the stage runs the script and its commands in the stage tab, in order', as
   await assert.rejects(stage.run(['back']), (error: any) => error instanceof StageNothing && error.failed.id === 'back', 'nothing to do is not done');
 });
 
-test('Jev picks whole page commands in order; the count ends the list, unlikely or unknown picks are dropped', async () => {
+test('Jev is asked for one page command at a time, in the conversation; unlikely or unknown picks run nothing, another action is a one-off', async () => {
   let answers: Record<string, unknown> = {}, sent: any;
-  const audit = new DelegationAudit({ apiKey: 'k', file: '/dev/null', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers }) }; } });
+  const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers }) }; } });
+  const lines: Line[] = [{ role: 'intermediary', text: 'Want the options?' }, { role: 'operator', text: 'Yes, go to the options and highlight the recommendation.' }];
   const choice = (id: string, p = .95) => ({ choice: id, probabilities: { [id]: p } });
-  answers = { needs_agent: { noul: .2 }, page_steps: { choice: '2' }, page_step_1: choice('goto_options'), page_step_2: choice('show_the_recommendation'), page_step_3: choice('show_the_recommendation'), page_only: { noul: .8 } };
-  assert.equal((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page!.work, 1, 'work unanswered counts as asked');
-  answers = { ...answers, page_work: { noul: 0 } };
-  assert.deepEqual((await audit.judge('go to the options and highlight the recommendation', undefined, 3000, view)).page, { steps: ['goto_options', 'show_the_recommendation'], only: .8, work: 0, other: 0, count: 2, unhappy: 0, walk: 0 });
+  answers = { needs_agent: { noul: .2 }, page_command: choice('goto_options'), page_only: { noul: .8 } };
+  assert.deepEqual((await jev.read({ trigger: 'turn', lines, page: view })).page, { command: 'goto_options', only: .8, work: 1, other: 0, walk: 0, unhappy: 0 }, 'work unanswered counts as asked');
   assert.match(sent.state.page, /Briefing .*The viewer is at: section "Intro"/);
-  assert.deepEqual(Object.keys(sent.questions.page_step_1.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation', 'other_action']);
-  answers = { ...answers, page_steps: { choice: '0' }, page_step_2: choice('none') };
-  assert.deepEqual((await audit.judge('options', undefined, 3000, view)).page!.steps, ['goto_options'], 'a confident first step runs without a count');
-  answers = { ...answers, page_steps: { choice: '3' }, page_step_1: choice('next_section', .35), page_step_2: choice('made_up'), page_step_3: choice('next_section') };
-  assert.deepEqual((await audit.judge('next', undefined, 3000, view)).page!.steps, ['next_section']);
-  answers = { ...answers, page_steps: { choice: '2' }, page_step_1: choice('next_section'), page_step_2: choice('none'), page_step_3: choice('none') };
-  assert.deepEqual((await audit.judge('next section and add a slide', undefined, 3000, view)).page!.steps, ['next_section'], 'a count that includes work is not a repetition');
-  answers = { ...answers, page_steps: { choice: '5' }, page_step_1: choice('next_section'), page_step_2: choice('next_section'), page_step_3: choice('none') };
-  assert.deepEqual((await audit.judge('down five sections', undefined, 3000, view)).page!.steps, Array(5).fill('next_section'), 'one command repeated runs as often as counted');
-  answers = { ...answers, page_steps: { choice: '2' }, page_step_1: choice('goto_options'), page_step_2: choice('other_action', .9), page_step_3: choice('none') };
-  assert.deepEqual((await audit.judge('go to the options and highlight the third row', undefined, 3000, view)).page!.steps, [], 'another action anywhere: the whole request is a one-off action');
-  answers = { ...answers, page_steps: { choice: '0' }, page_step_1: choice('goto_options'), page_step_2: choice('none'), page_work: { noul: .8 } };
-  assert.deepEqual((await audit.judge('make the options section bigger', undefined, 3000, view)).page!.steps, ['goto_options'], "a sure first step runs though Jev counted none: it shows the part being worked on");
+  assert.deepEqual([sent.state.transcript, sent.state.latest], ['voice companion: Want the options?', 'operator: Yes, go to the options and highlight the recommendation.'], 'the latest words, and the conversation before them');
+  assert.match(sent.state.why, /stopped speaking/);
+  assert.deepEqual(Object.keys(sent.questions.page_command.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation', 'other_action']);
+  assert.ok(!Object.keys(sent.questions).some(name => /^page_step|^page_steps$/.test(name)), 'one command question, no count');
+  answers = { page_command: choice('next_section', .35) };
+  assert.equal((await jev.read({ trigger: 'turn', lines, page: view })).page!.command, undefined, 'unlikely: nothing runs');
+  answers = { page_command: choice('made_up') };
+  assert.equal((await jev.read({ trigger: 'turn', lines, page: view })).page!.command, undefined, 'not a command of the page');
+  answers = { page_command: choice('other_action', .9) };
+  assert.deepEqual((await jev.read({ trigger: 'turn', lines, page: view })).page, { command: undefined, only: 0, work: 1, other: .9, walk: 0, unhappy: 0 }, 'another action: a one-off does it');
+  // After a command ran, the page as it is now, and what ran: whether more is asked, and which command is next.
+  answers = { page_command: choice('show_the_recommendation'), page_more: { noul: .8 } };
+  assert.equal((await jev.read({ trigger: 'step', lines, page: view, done: [view.commands[1]] })).page!.command, 'show_the_recommendation');
+  assert.deepEqual(Object.keys(sent.questions), ['page_command', 'page_more']);
+  assert.equal(sent.state.page_done, '1. Go to the section "Options"');
+  answers = { page_command: choice('show_the_recommendation'), page_more: { noul: .3 } };
+  assert.equal((await jev.read({ trigger: 'step', lines, page: view, done: [view.commands[1]] })).page!.command, undefined, 'nothing more asked: done');
   answers = { needs_agent: { noul: .9 } };
-  assert.equal((await audit.judge('fix the parser', undefined, 3000)).page, undefined, 'no page, no page questions');
-  assert.equal(sent.questions.page_steps, undefined);
+  assert.equal((await jev.read({ trigger: 'delegation', lines })).page, undefined, 'no page, no page questions');
+  assert.equal(sent.questions.page_command, undefined);
 });
 
-test("commands that do the same count as one choice, even below none: the page's own runs", async () => {
-  let answers: Record<string, unknown> = {};
-  const audit = new DelegationAudit({ apiKey: 'k', file: '/dev/null', log: () => {}, fetch: async () => ({ ok: true, status: 200, json: async () => ({ answers }) }) as any });
+test("commands that do the same count as one choice, even below none: the page's own runs", () => {
   const deck: StageView = { ...view, commands: [{ id: 'back', say: 'Go back to wherever the viewer was' }, { id: 'next_section', say: 'Go to the next section' }, { id: 'page_back', say: 'Go back to the previous slide' }, { id: 'page_next', say: 'Go to the next slide' }] };
   const step = (probabilities: Record<string, number>) => ({ choice: Object.entries(probabilities).sort((a, b) => b[1] - a[1])[0][0], probabilities });
-  answers = { needs_agent: { noul: .5 }, page_steps: { choice: '1' }, page_step_1: step({ none: .3, back: .26, page_back: .25, next_section: .19 }), page_only: { noul: .8 }, page_work: { noul: .1 } };
-  assert.deepEqual((await audit.judge('go back', undefined, 3000, deck)).page!.steps, ['page_back'], "fdc's back and the page's back together beat none");
-  answers = { ...answers, page_step_1: step({ none: .4, back: .26, page_back: .11, next_section: .23 }) };
-  assert.deepEqual((await audit.judge("I don't see it", undefined, 3000, deck)).page!.steps, [], 'together still unlikely: nothing runs');
-  answers = { ...answers, page_step_1: step({ next_section: .5, page_next: .1, none: .4 }) };
-  assert.deepEqual((await audit.judge('next section', undefined, 3000, deck)).page!.steps, ['next_section'], "a unit's own step is not the page's next");
+  assert.equal(chosenCommand(step({ none: .3, back: .26, page_back: .25, next_section: .19 }), deck), 'page_back', "fdc's back and the page's back together beat none");
+  assert.equal(chosenCommand(step({ none: .4, back: .26, page_back: .11, next_section: .23 }), deck), undefined, 'together still unlikely: nothing runs');
+  assert.equal(chosenCommand(step({ next_section: .5, page_next: .1, none: .4 }), deck), 'next_section', "a unit's own step is not the page's next");
 });
 
-function gated(t: any, page: { steps: string[]; only: number }, run: (ids: string[]) => Promise<any>) {
+test('the page moves one command at a time until Jev wants no more: a repeated move repeats, a part reached again ends it, five at most', async t => {
+  const { h } = await harness(t);
+  const runs: string[] = [];
+  h.stage = { describe: async () => view, run: async (ids: string[]) => { runs.push(...ids); return { done: ids.map(id => view.commands.find(c => c.id === id) ?? { id, say: id }), onScreen: `at ${ids[0]}` }; }, view, observe() {}, close() {} } as any;
+  h.presenter.stepDwellMs = 0;
+  let next: (string | undefined)[] = [];
+  const moments = fakeJev(h, moment => moment.trigger === 'step' ? { page: pageReading({ command: next.shift() }) } : {});
+  next = ['next_section', 'next_section', undefined];
+  assert.deepEqual(await h.presenter.steps('next_section', []), { done: Array(3).fill(view.commands[0]), onScreen: 'at next_section' });
+  assert.deepEqual(runs, ['next_section', 'next_section', 'next_section'], '"forward three sections"');
+  assert.deepEqual(moments.map(m => [m.trigger, m.done!.length]), [['step', 1], ['step', 2], ['step', 3]], 'asked again after each command, with what ran');
+  runs.length = 0; next = ['show_the_recommendation', 'goto_options'];
+  await h.presenter.steps('goto_options', []);
+  assert.deepEqual(runs, ['goto_options', 'show_the_recommendation'], 'a part reached again is no further on');
+  runs.length = 0; next = Array(10).fill('next_section');
+  await h.presenter.steps('next_section', []);
+  assert.equal(runs.length, 5, 'five at most');
+});
+
+function gated(t: any, page: { command?: string; only: number; work?: number }, run: (ids: string[]) => Promise<any>) {
   return harness(t).then(({ h }) => {
     h.stage = { describe: async () => view, run, view, observe() {}, close() {} } as any;
-    h.handOffAudit = { judge: async () => ({ needsAgent: .3, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: { ...page, count: page.steps.length } }) } as any;
+    // After the first command, Jev wants no other.
+    fakeJev(h, moment => moment.trigger === 'step' ? { page: pageReading() } : { needsAgent: .3, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: pageReading({ work: page.only > .5 ? .1 : .9, ...page }) });
     return h;
   });
 }
 
 test('the gate: page-only is done on the page; with more, the request goes on noting the page part is done; a failure goes to the harness', async t => {
   const runs: string[][] = [];
-  const only = await gated(t, { steps: ['goto_options'], only: .9 }, async ids => { runs.push(ids); return { done: [view.commands[1]], onScreen: 'heading: Options — eleven of them.' }; });
-  const handled = await only.sessionSwitch.gate('take me to the options', 'r1');
+  const only = await gated(t, { command: 'goto_options', only: .9 }, async ids => { runs.push(ids); return { done: [view.commands[1]], onScreen: 'heading: Options — eleven of them.' }; });
+  const handled = await only.sessionSwitch.gate('take me to the options', 'r1', []);
   assert.deepEqual(runs, [['goto_options']]);
   assert.equal(handled.page, true);
   assert.match(handled.handled!, /^Nothing was sent to Claude Code: the voice tool did it on the page \(Go to the section "Options"\)\. On screen now: heading: Options — eleven of them\./);
-  const mixed = await gated(t, { steps: ['goto_options'], only: .1 }, async () => ({ done: [view.commands[1]], onScreen: 'heading: Options' }));
-  const along = await mixed.sessionSwitch.gate('show me the options and fix the typo', 'r2');
+  const mixed = await gated(t, { command: 'goto_options', only: .1 }, async () => ({ done: [view.commands[1]], onScreen: 'heading: Options' }));
+  const along = await mixed.sessionSwitch.gate('show me the options and fix the typo', 'r2', []);
   assert.equal(along.handled, undefined);
   assert.match(along.note!, /already did the page part of this in the browser \(Go to the section "Options"\); don't do that again, do the rest/);
   assert.match(along.told!, /already did the page part .* The rest goes to Claude/);
-  const work = await gated(t, { steps: [], only: .1 }, async () => { throw new Error('not run'); });
-  const passed = await work.sessionSwitch.gate('make this title bigger', 'r5');
+  const work = await gated(t, { only: .1 }, async () => { throw new Error('not run'); });
+  const passed = await work.sessionSwitch.gate('make this title bigger', 'r5', []);
   assert.equal(passed.handled, undefined);
   assert.match(passed.note!, /^When they said it, the user was looking at "Briefing" \(http:\/\/localhost\/b\.html\) in the browser, at: section "Intro"\.$/);
-  const idle = await gated(t, { steps: ['next_section'], only: .9 }, async () => { throw new StageNothing('nothing to do there', [], '', view.commands[0]); });
-  const nothing = await idle.sessionSwitch.gate('go back', 'r4');
+  const idle = await gated(t, { command: 'next_section', only: .9 }, async () => { throw new StageNothing('nothing to do there', [], '', view.commands[0]); });
+  const nothing = await idle.sessionSwitch.gate('go back', 'r4', []);
   assert.equal(nothing.handled, undefined, 'nothing to do: the request goes on');
   assert.match(nothing.note!, /there was nothing to do there; do what the user asked/);
-    const broken = await gated(t, { steps: ['show_the_recommendation'], only: .9 }, async () => { throw new Error('fdcController.run: no element #rec'); });
-  const failed = await broken.sessionSwitch.gate('highlight the recommendation', 'r3');
+    const broken = await gated(t, { command: 'show_the_recommendation', only: .9 }, async () => { throw new Error('fdcController.run: no element #rec'); });
+  const failed = await broken.sessionSwitch.gate('highlight the recommendation', 'r3', []);
   assert.equal(failed.handled, undefined, 'a failure goes to the harness');
   assert.match(failed.note!, /page's controls failed: fdcController\.run: no element #rec\. Fix the page's controller/);
   assert.match(failed.told!, /^The page couldn't go on \(fdcController\.run: no element #rec\)/);
@@ -135,7 +153,7 @@ test('the mediator tells GPT Live what the page shows and sends the harness the 
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
   const appends: [string, string, string | null][] = []; live.append = async (kind: string, content: string, delegationId: string | null) => { appends.push([kind, content, delegationId]); };
   const deliveries: any[] = [];
-  const gate = async (): Promise<Gated> => ({ needsAgent: .6, note: 'The voice tool already did the page part.', told: 'On screen now: Options.' });
+  const gate = async (): Promise<Gated> => ({ note: 'The voice tool already did the page part.', told: 'On screen now: Options.' });
   const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Show me the options and fix the typo.', start_ms: 0, end_ms: 900 });
@@ -177,7 +195,7 @@ test('requests reach the agent in the order made, however long each one\'s gate 
   let release!: () => void;
   const slow = new Promise<void>(resolve => { release = resolve; });
   const started: string[] = [];
-  const gate = async (said: string): Promise<Gated> => { started.push(said); if (/bigger/.test(said)) await slow; return { needsAgent: .9 }; };
+  const gate = async (said: string): Promise<Gated> => { started.push(said); if (/bigger/.test(said)) await slow; return {}; };
   const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Go to the options and make its title bigger.', start_ms: 0, end_ms: 900 });
@@ -197,7 +215,7 @@ test("a request whose gate's outcome fails isn't lost: its words go with the nex
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
   live.append = async () => {};
   const faults: string[] = [];
-  const m = new Mediator({ live, observer, deliver: () => {}, log: e => { if (e.type === 'bridge.fault') faults.push(String(e.message)); }, publish: () => {}, clean: String, hold: null, gate: async () => ({ needsAgent: .9 }) });
+  const m = new Mediator({ live, observer, deliver: () => {}, log: e => { if (e.type === 'bridge.fault') faults.push(String(e.message)); }, publish: () => {}, clean: String, hold: null, gate: async () => ({}) });
   t.after(() => { m.stop(); observer.close(); });
   m.afterGate = () => { throw new Error('boom'); };
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Fix the parser.', start_ms: 0, end_ms: 900 });

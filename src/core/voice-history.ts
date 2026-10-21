@@ -1,3 +1,5 @@
+import type { Line } from './jev.ts';
+
 export interface TranscriptDelta { type: string; delta: string; start_ms: number; end_ms: number }
 export interface TranscriptFragment {
   seq: number; role: 'operator' | 'intermediary'; text: string; startMs: number; endMs: number; receivedAt: number; carried?: boolean;
@@ -149,6 +151,28 @@ export class VoiceHistory {
   }
   /** This connection's own conversation, for resuming it in a later one. */
   turns(): Turn[] { return utterances(this.fragments.filter(f => !f.carried && !this.unheard(f))).map(({ role, text }) => ({ role, text: text.replace(/\s+/g, ' ').trim() })); }
+  /**
+   * The conversation as Jev reads it (jev.ts), up to the operator's latest words (to fragment `through`): what was said
+   * since the last words that reached the agent, and a few utterances before them for reference, newest kept within
+   * `chars`. Each line says whether it reached the agent.
+   */
+  lines(through = Infinity, { before = 4, chars = 4000 } = {}): Line[] {
+    const joined: (Line & { endMs: number })[] = [];
+    for (const f of this.fragments) {
+      if (f.seq > through || this.unheard(f)) continue;
+      const last = joined.at(-1);
+      if (last?.role === f.role && f.startMs - last.endMs <= 2000) { last.text += f.text; last.endMs = f.endMs; last.sent &&= !!f.sent; }
+      else joined.push({ role: f.role, text: f.text, endMs: f.endMs, sent: !!f.sent });
+    }
+    const all = joined.map(({ role, text, sent }) => ({ role, text: text.replace(/\s+/g, ' ').trim(), ...sent ? { sent } : {} })).filter(line => line.text);
+    // GPT Live answering is not part of what the operator's latest words are.
+    while (all.length && all.at(-1)!.role !== 'operator') all.pop();
+    let start = all.length;
+    while (start > 0 && !all[start - 1].sent) start--;
+    let window = all.slice(Math.max(0, start - before));
+    while (window.length > 1 && window.reduce((n, line) => n + line.text.length + 20, 0) > chars) window = window.slice(1);
+    return window.map(line => line.text.length <= chars ? line : { ...line, text: `…${line.text.slice(-chars)}` });
+  }
   /** Speech a dropped connection had not passed on, placed before this one's so that its next request includes it. */
   carry(from: VoiceHistory) {
     const pending = from.fragments.filter(f => !f.sent && !f.claim && !from.unheard(f));

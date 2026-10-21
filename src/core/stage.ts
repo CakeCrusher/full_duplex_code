@@ -13,7 +13,7 @@ const RAW = fs.readFileSync(new URL('./stage-page.js', import.meta.url), 'utf8')
 // A page keeps the script it was given until the script changes: its version is its content's hash.
 const SCRIPT = RAW.replace('__FDC_STAGE_VERSION__', createHash('sha1').update(RAW).digest('hex').slice(0, 12));
 /** A pause between the steps of a sequence, so each one is seen ("the DNS lookup, then the response"). */
-const STEP_DWELL_MS = 1000;
+export const STEP_DWELL_MS = 1000;
 /** Browser tools that show a tab to the operator: the tab they act on becomes the stage. */
 const SHOWS = /chrome[\w-]*__(navigate|set_tab_focus|tabs_create_mcp|execute_code)$/;
 

@@ -85,7 +85,7 @@ Rules that make it work well:
   reached by structure alone: give them commands that show their slide or tab first.
 - **Sequences belong in one command.** If showing something takes several steps (open a tab,
   wait for it, scroll to a row, highlight it), make it one command and `await` each step in
-  `run()`. The voice tool can also run up to three commands in a row when the user asks for them.
+  `run()`. The voice tool can also run several commands in a row when the user asks for them, one at a time, reading the page again after each (`where()` helps it see how far it got).
 - **Return what is on screen.** A sentence or two about what the user now sees, not what comes next or how much
   else there is ("all 9 stages run" sent the voice through all nine): the voice talks about what you return.
 - **Limits are answers, bugs are errors.** When a command can't apply right now (already on the last

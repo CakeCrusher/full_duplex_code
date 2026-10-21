@@ -7,13 +7,13 @@ import { VoiceHistory, type SpokenRequest } from './voice-history.ts';
 import { ObservationFeed, type Hold } from './observation-feed.ts';
 import { Floor, operatorSpeaking, type MicrophoneLevel } from './floor.ts';
 import { DEFAULT_TUNING, holdOf, type Tuning } from './tuning.ts';
-import type { InstructionLearner } from './instruction-learner.ts';
 import type { DelegationAudit, HandOff } from './delegation-audit.ts';
+import type { Line, Reading, Trigger } from './jev.ts';
 import { cueNoDelegation, handledNote, nothingToSend, queueFailed, sessionEndRequest, uncertainNote, voiceRequest } from './prompts.ts';
 
-/** What the gate (Jev's check before delivery) found: its judgment, and when fdc handled the request itself, what GPT Live is told instead. */
+/** What the gate (Jev's check before delivery) found: Jev's reading, and when fdc handled the request itself, what GPT Live is told instead. */
 export interface Gated {
-  needsAgent?: number | null; handled?: string;
+  reading?: Reading; handled?: string;
   /** Handled because it was only about how the companion behaves. */
   companion?: boolean;
   /** Handled because it only asked for things on the page, done there. */
@@ -47,23 +47,24 @@ export class Mediator {
   context: ContextQueue; feed: ObservationFeed;
   /** Whether the operator is talking: agent updates wait for them. */
   floor: Floor;
-  /** Learns the operator's standing instructions, when Jev is configured. */
-  learner?: InstructionLearner; previousUtterance = '';
   /** Records each hand-off decision of GPT Live with Jev's judgment of it, when Jev is configured. Sends nothing. */
   audit?: DelegationAudit;
   /** The gate: reads a request GPT Live passed on before it reaches the harness (sessions, the companion, the page), when Jev is configured. */
-  gate?: (said: string, requestId: string, earlier?: string, companion?: string, cued?: boolean) => Promise<Gated>;
-  /** The operator's words of each request, for Jev to tune the companion from (jev-tuner.ts). */
-  onSaid?: (said: string) => void;
+  gate?: (said: string, requestId: string, lines: Line[], cued?: boolean) => Promise<Gated>;
+  /** Jev's reading of words that reach the harness without the gate's (voice ended, or the voice tool sent them). */
+  read?: (trigger: Trigger, lines: Line[]) => Promise<Reading>;
+  /** What Jev read in a request, for the learner and the tuner: each reading once. */
+  consider?: (reading: Reading, requestId?: string) => void;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
-  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, learner, audit, gate, onSaid, firstRecordId = 0 }: {
+  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, audit, gate, read, consider, firstRecordId = 0 }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
-    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; learner?: InstructionLearner; audit?: DelegationAudit; gate?: (said: string, requestId: string, earlier?: string, companion?: string, cued?: boolean) => Promise<Gated>; onSaid?: (said: string) => void;
+    publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; audit?: DelegationAudit;
+    gate?: (said: string, requestId: string, lines: Line[], cued?: boolean) => Promise<Gated>; read?: (trigger: Trigger, lines: Line[]) => Promise<Reading>; consider?: (reading: Reading, requestId?: string) => void;
     /** Context records are numbered after this one: a fork's context already holds its source's. */
     firstRecordId?: number;
   }) {
-    this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.learner = learner; this.audit = audit; this.gate = gate; this.onSaid = onSaid;
+    this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.audit = audit; this.gate = gate; this.read = read; this.consider = consider;
     this.agent = agent;
     this.floor = new Floor({ thinkMs: tuning.thinkMs, pauseMs: tuning.pauseMs });
     if (hold === undefined) hold = holdOf(tuning);
@@ -110,27 +111,24 @@ export class Mediator {
       this.schedule(attempt, 650);
     }
   }
-  // Jev checks what reached the harness, once per request: whether it holds a standing instruction
-  // for the companion, and (recorded only) whether it needed the harness at all.
   said(request: SpokenRequest) { return this.clean(request.utterances.filter(u => u.role === 'operator').map(u => u.text).join(' ').replace(/\s+/g, ' ').trim()); }
-  check(requestId: string, request: SpokenRequest, handOff: HandOff, delegationId: string | null = null, judged?: number | null) {
+  /** The conversation Jev reads for a request: up to its last words. */
+  lines(request: SpokenRequest) { return this.history.lines(request.through).map(line => ({ ...line, text: this.clean(line.text) })); }
+  /**
+   * Each request that reaches the harness is recorded with what GPT Live did and Jev's judgment of whether it needed the
+   * harness (the gate's reading, or one made now), and Jev's reading is considered once for a standing instruction and
+   * the settings.
+   */
+  async check(requestId: string, request: SpokenRequest, handOff: HandOff, delegationId: string | null = null, reading?: Reading) {
     const said = this.said(request);
     if (!said) return;
-    this.consider(requestId, request, said);
-    if (this.audit) void this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId }, judged).then(needsAgent => this.publish({
-      type: 'jev_check', requestId, at: Date.now(), kind: 'handoff', words: said, scores: { needsAgent, handOff },
-      outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${{ passed: 'GPT Live passed it on', answered: 'GPT Live kept it; sent when voice ended', escalated: "The voice tool passed it on: the page couldn't do what they meant" }[handOff]}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})`,
-    }));
-  }
-  // Whether the words hold a standing instruction for the companion (Jev's learner), and Jev's tuning from them.
-  consider(requestId: string, request: SpokenRequest, said: string) {
-    const companion = this.clean(request.utterances.filter(u => u.role === 'intermediary').map(u => u.text).join(' ').trim().slice(-400));
-    if (this.learner) {
-      const utterance = { utterance: said, previous: this.previousUtterance, companion, requestId };
-      this.learner.consider(utterance).catch(error => this.log({ type: 'instruction.error', message: (error as Error).message }));
-    }
-    this.previousUtterance = said;
-    this.onSaid?.(said);
+    if (!reading && this.read) reading = await this.read('unsent', this.lines(request)).catch(error => { this.log({ type: 'jev.error', message: (error as Error).message }); return undefined; });
+    if (reading) this.consider?.(reading, requestId);
+    if (!this.audit) return;
+    const needsAgent = reading?.needsAgent ?? null;
+    this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId }, needsAgent, reading?.transcript);
+    this.publish({ type: 'jev_check', requestId, at: Date.now(), kind: 'handoff', words: said, scores: { needsAgent, handOff },
+      outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${{ passed: 'GPT Live passed it on', answered: 'GPT Live kept it; sent when voice ended', escalated: "The voice tool passed it on: the page couldn't do what they meant" }[handOff]}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})` });
   }
   /** The microphone level of the page this voice session listens to. */
   // The operator's held words still going out after a wake count as their talking: GPT Live is hearing them now.
@@ -169,10 +167,8 @@ export class Mediator {
   // undelegated: they go with the next request, noted, since they may begin what it finishes.
   gated(id: string, request: SpokenRequest, content: string, delegationId: string) {
     const said = this.clean(request.fresh);
-    // What GPT Live said last before the operator's latest words: the offer a "yes, please" accepts.
-    const lastOperator = request.utterances.findLastIndex(u => u.role === 'operator'), companion = request.utterances.slice(0, lastOperator).findLast(u => u.role === 'intermediary')?.text;
     // The gate starts once earlier gates are done: it may move the page, after the moves asked for before.
-    const judge = () => this.gate!(said, id, request.earlier && this.clean(request.earlier), companion && this.clean(companion), request.cued).catch(error => { this.log({ type: 'gate.error', message: (error as Error).message }); return undefined; });
+    const judge = () => this.gate!(said, id, this.lines(request), request.cued).catch(error => { this.log({ type: 'gate.error', message: (error as Error).message }); return undefined; });
     this.gating++;
     const done = this.order.then(judge).then(gated => this.afterGate(id, request, content, delegationId, said, gated))
       // Whatever went wrong, the words go with the next request rather than nowhere.
@@ -185,12 +181,12 @@ export class Mediator {
     if (gated?.told && this.live.state === 'active') this.context.add('thinking', gated.told, delegationId);
     if (gated?.handled === undefined) {
       const noted = gated?.note ? this.clean(voiceRequest(request.utterances, [...request.notes ?? [], gated.note])) : content;
-      return this.send(id, request, noted, delegationId, gated?.needsAgent);
+      return this.send(id, request, noted, delegationId, gated?.reading);
     }
     this.log({ type: 'bridge.request_handled', id, delegationId, said, companion: gated.companion, page: gated.page });
     this.giveBack(id, handledNote(gated.page ? 'page' : gated.companion ? 'companion' : 'sessions'));
-    // A preference about the companion is still a standing instruction to learn, and Jev's to tune from.
-    if (gated.companion) this.consider(id, request, said); else this.previousUtterance = said;
+    // Handled here or not, what Jev read is the learner's and the tuner's too (a preference about the companion above all).
+    if (gated.reading) this.consider?.(gated.reading, id);
     if (this.live.state === 'active') this.context.add('thinking', gated.handled, delegationId);
   }
   /**
@@ -206,10 +202,10 @@ export class Mediator {
     this.inTurn(() => this.send(id, request, this.clean(voiceRequest(request.utterances, [...request.notes ?? [], note])), null, undefined, 'escalated'));
     return true;
   }
-  send(id: string, request: SpokenRequest, content: string, delegationId: string | null, judged?: number | null, handOff: HandOff = 'passed') {
+  send(id: string, request: SpokenRequest, content: string, delegationId: string | null, reading?: Reading, handOff: HandOff = 'passed') {
     try {
       this.deliver({ id, content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now() });
-      this.check(id, request, handOff, delegationId, judged);
+      this.check(id, request, handOff, delegationId, reading).catch(error => this.fault(error as Error));
     } catch (error) {
       this.history.release(id);
       this.fault(error as Error);
@@ -238,7 +234,7 @@ export class Mediator {
       try {
         this.deliver({ id, content: this.clean(sessionEndRequest(reason, request.utterances, request.notes)), delegationId: null, voiceSessionId: this.live.id, queuedAt: Date.now() });
         this.log({ type: 'bridge.session_end_handoff', id, reason, utterances: request.utterances.length });
-        this.check(id, request, 'answered');
+        this.check(id, request, 'answered').catch(error => this.fault(error as Error));
       } catch (error) { this.history.release(id); this.fault(error as Error); }
     });
   }

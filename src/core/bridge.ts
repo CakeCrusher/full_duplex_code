@@ -8,7 +8,8 @@ import { withoutBinary } from './context-rules.ts';
 import { InstructionLearner, LearnedLog, type LearnedInstruction } from './instruction-learner.ts';
 import { DelegationAudit } from './delegation-audit.ts';
 import { askAgent, distillPrompt, parseDistilled } from './instruction-distiller.ts';
-import { JevTuner, type TuningChange } from './jev-tuner.ts';
+import { tuningFrom, type TuningChange } from './jev-tuner.ts';
+import { Jev, type Moment, type Reading } from './jev.ts';
 import { Stage } from './stage.ts';
 import { Presenter } from './presenter.ts';
 import { UsageLedger } from './usage-ledger.ts';
@@ -47,9 +48,10 @@ export interface HarnessOptions {
 // It owns the shared state; each concern lives in its own module.
 export class Harness {
   agent: AgentDefinition; adapter: AgentAdapter; observer: AgentObserver;
-  learner?: InstructionLearner; handOffAudit?: DelegationAudit; tuner?: JevTuner; learned: LearnedLog;
-  /** Settings the operator set by hand (FDC_TUNING), which Jev leaves alone; Jev's pending and latest asks, and the operator's words awaiting one. */
-  pinned: (keyof Tuning)[] = []; tuneTimer?: NodeJS.Timeout; tuneAsks = 0; tuneLatest?: string;
+  /** Jev, when a TypeSafe key is set: one reading per moment (jev.ts), for the gate, the page, the learner and, with Jev's tuning on, the tuner. */
+  jev?: Jev; learner?: InstructionLearner; handOffAudit?: DelegationAudit; jevTuning: boolean; learned: LearnedLog;
+  /** Settings the operator set by hand (FDC_TUNING), which Jev leaves alone; the latest ask for settings (only its answer counts), and the one waiting. */
+  pinned: (keyof Tuning)[] = []; tuneAsks = 0; tuneTimer?: NodeJS.Timeout;
   /** Every change to the settings in this run, newest last: when, by whom, from what to what (Developer mode lists them). */
   tuningHistory: { at: number; by: string; changes: TuningChange[] }[] = [];
   root: string; runDir: string; cwd: string; sessionId?: string; apiKey: string;
@@ -92,14 +94,14 @@ export class Harness {
     this.tuning = tuning(overrides); this.pinned = Object.keys(overrides ?? {}) as (keyof Tuning)[];
     if (this.pinned.length) this.tuningHistory.push({ at: Date.now(), by: 'FDC_TUNING', changes: this.pinned.map(name => ({ name, from: DEFAULT_TUNING[name], to: this.tuning[name] })) });
     this.learned = new LearnedLog(path.join(root, '.runs', 'learned-instructions.jsonl'));
-    if (jevKey && jevTuning) this.tuner = new JevTuner({ apiKey: jevKey, log: this.log });
-    if (jevKey) this.handOffAudit = new DelegationAudit({ apiKey: jevKey, file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log });
+    this.jevTuning = Boolean(jevKey && jevTuning);
+    if (jevKey) { this.jev = new Jev({ apiKey: jevKey, log: this.log }); this.handOffAudit = new DelegationAudit({ file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log }); }
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
     this.stage = new Stage({ log: this.log, file: stageFile, onChange: () => void this.voiceSessions?.briefStage() });
     this.presenter = new Presenter(this, apiKey);
     this.sessionSwitch = new SessionSwitch(this);
     this.voiceSessions = new VoiceSessions(this, { store });
-    if (jevKey) this.learner = new InstructionLearner({ apiKey: jevKey, log: this.log,
+    if (jevKey) this.learner = new InstructionLearner({ log: this.log,
       onJudged: judged => { if (!judged.learned) this.jevCheck(judged.requestId, 'instruction', `Not a standing instruction (${judged.behave.toFixed(2)})`, judged); },
       onLearn: instruction => { this.learnInstruction(instruction).catch(error => this.fault(error as Error)); } });
     this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,
@@ -162,7 +164,7 @@ export class Harness {
     const inForce = this.voiceSessions.additionalInstructions.filter(item => item.learned).map(item => ({ id: item.learned!, text: item.text.replace(`${item.learned}: `, '') }));
     let text = instruction.text;
     try {
-      const reply = await this.ask(distillPrompt({ said: instruction.said ?? instruction.text, previous: instruction.previous, companion: instruction.companion, inForce, scores: instruction }));
+      const reply = await this.ask(distillPrompt({ said: instruction.said ?? instruction.text, transcript: instruction.transcript, inForce, scores: instruction }));
       const distilled = parseDistilled(this.clean(reply));
       this.log({ type: 'instruction.distilled', said: instruction.said, distilled, requestId: instruction.requestId });
       if ('same' in distilled) return this.jevCheck(instruction.requestId, 'instruction', `Already in force as ${distilled.same}`, instruction);
@@ -181,21 +183,31 @@ export class Harness {
     this.log({ type: 'tuning.changed', tuning: next, changes }); this.publish({ type: 'tuning', tuning: next, changes }); this.publish(this.status());
   }
   /**
-   * With Jev's tuning on: Jev re-reads the operator's instructions, those from earlier sessions and,
-   * after a request, what the operator just said, and picks the settings that fit.
+   * Jev's reading of a moment (jev.ts). Of the operator's words it also asks whether they give a standing instruction
+   * (the learner) and, with Jev's tuning on, which settings fit (the tuner), with the instructions in force.
    */
-  tuneFromInstructions(latest?: string) {
-    if (!this.tuner) return;
-    if (latest) this.tuneLatest = latest;
+  read(moment: Moment, timeoutMs?: number): Promise<Reading> {
+    if (!this.jev) return Promise.reject(new Error('Jev is not configured'));
+    const words = ['turn', 'delegation', 'unsent'].includes(moment.trigger), tune = this.jevTuning && (words || moment.trigger === 'settings');
+    const ask = tune ? ++this.tuneAsks : 0;
+    return this.jev.read({ ...moment, learn: words || undefined, tune: tune ? { instructions: this.voiceSessions.additionalInstructions.map(item => item.text), earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined }, timeoutMs)
+      .then(reading => Object.assign(reading, ask ? { tuneAsk: ask } : {}));
+  }
+  /** What Jev read in the operator's words, acted on once: a standing instruction to learn, and the settings that fit (only the latest ask's: an older answer arriving late would undo it). */
+  consider(reading: Reading & { tuneAsk?: number }, requestId?: string) {
+    if (reading.considered) return;
+    reading.considered = true;
+    this.learner?.consider(reading, requestId);
+    if (reading.tuning && reading.tuneAsk === this.tuneAsks && !this.stopping) {
+      const { tuning: next, changes } = tuningFrom(reading.tuning, this.tuning, this.pinned);
+      if (changes.length) this.setTuning(next, changes);
+    }
+  }
+  /** With Jev's tuning on: when the instructions change or voice starts, Jev reads them again for the settings that fit. */
+  tuneFromInstructions() {
+    if (!this.jevTuning) return;
     clearTimeout(this.tuneTimer);
-    this.tuneTimer = setTimeout(async () => {
-      // Only the newest ask may change the settings: an older answer arriving late would undo it.
-      const ask = ++this.tuneAsks, words = this.tuneLatest; this.tuneLatest = undefined;
-      try {
-        const { tuning: next, changes } = await this.tuner!.choose({ instructions: this.voiceSessions.additionalInstructions.map(item => item.text), earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned, latest: words });
-        if (changes.length && ask === this.tuneAsks && !this.stopping) this.setTuning(next, changes);
-      } catch (error) { this.log({ type: 'tuning.error', message: (error as Error).message }); }
-    }, 1000);
+    this.tuneTimer = setTimeout(() => this.read({ trigger: 'settings', lines: [] }, 8000).then(reading => this.consider(reading), error => this.log({ type: 'tuning.error', message: (error as Error).message })), 1000);
   }
   /** The operator removes an instruction Jev learned, by its ID. */
   removeInstruction(id: unknown) { return this.voiceSessions.removeLearned(id); }

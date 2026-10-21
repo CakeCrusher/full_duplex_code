@@ -73,7 +73,7 @@ test('a request fdc handles itself just after the connection drops gives its wor
   const deliveries: any[] = [];
   let handle!: () => void;
   const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null,
-    gate: () => new Promise(resolve => { handle = () => resolve({ needsAgent: .1, handled: 'Turned on.', companion: false }); }) });
+    gate: () => new Promise(resolve => { handle = () => resolve({ handled: 'Turned on.', companion: false }); }) });
   t.after(() => observer.close());
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Turn on the other session.', start_ms: 0, end_ms: 900 });
   m.delegate('d1', 900);

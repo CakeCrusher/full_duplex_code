@@ -9,6 +9,7 @@ import { EventEmitter } from 'node:events';
 import { Harness } from '../src/core/bridge.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { VoiceHistory } from '../src/core/voice-history.ts';
+import { fakeJev } from './live-fake.ts';
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20));
 const until = async <T>(check: () => T) => { for (let i = 0; i < 200; i++) { const value = check(); if (value) return value; await settle(); } throw new Error('timed out'); };
@@ -145,7 +146,8 @@ test('an instruction Jev learns while voice is connecting waits for the session 
 test('across an automatic reconnect, Jev is asked about carried speech once, when it reaches the harness', async t => {
   const { h, lives } = await harness(t, { jevKey: 'jev-test' });
   const considered: string[] = [];
-  h.learner!.consider = async (utterance: any) => { considered.push(utterance.utterance); return undefined; };
+  fakeJev(h);
+  h.learner!.consider = reading => { considered.push(reading.said); return undefined; };
   h.handOffAudit = undefined; h.pages.send = () => {}; h.deliver = () => {};
   const page = openPage('p');
   await h.voiceSessions.start('sdp', page, 'fresh');

@@ -1,6 +1,6 @@
 // Turning the voice of the operator's running companions on and off, by voice. Jev reads each
-// request GPT Live passes on (delegation-audit.ts) against the companions running now; what it
-// finds asked for is carried out here, and GPT Live is told what was done.
+// request GPT Live passes on (jev.ts) against the companions running now; what it finds asked
+// for is carried out here, and GPT Live is told what was done.
 //
 // Turning one on asks it to start voice in its open page (Resume when it has a conversation);
 // turning one off ends its voice. Companions that start come first: this one goes off only once
@@ -11,7 +11,7 @@
 import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import { listCompanions, type CompanionEntry } from './companions.ts';
-import { ASKED, COMPANION_ONLY, ONLY, UNLISTED, type Session } from './delegation-audit.ts';
+import { ASKED, COMPANION_ONLY, ONLY, UNLISTED, type Line, type Session } from './jev.ts';
 import type { Gated } from './mediator.ts';
 import { companionHandled, sessionsHandled, sessionsOutcome } from './prompts.ts';
 
@@ -41,26 +41,30 @@ export class SessionSwitch {
   asked?: { at: number; from: string; failed?: string };
   constructor(bridge: Harness) { this.bridge = bridge; }
 
-  /** The gate: Jev's check of a request GPT Live passed on, before it reaches the harness. */
-  async gate(said: string, requestId: string, earlier?: string, companion?: string, cued?: boolean): Promise<Gated> {
+  /** The companions this one can reach and turn on or off, as Jev is told about them. */
+  async sessions(timeoutMs = 800): Promise<Session[]> {
+    const companions = await listCompanions(this.bridge, true, timeoutMs);
+    return companions.filter(c => c.current || (c.reachable && c.link)).map(c => ({ id: c.id, folder: c.folder, agent: c.agent, on: c.voice !== 'none', current: c.current, blocked: c.blocked }));
+  }
+  /** The gate: Jev's reading of a request GPT Live passed on, before it reaches the harness. */
+  async gate(said: string, requestId: string, lines: Line[], cued?: boolean): Promise<Gated> {
     const bridge = this.bridge;
-    // The presenter judges the operator's words for the page itself, if it hasn't yet: the page part is done once.
-    const presented = bridge.presenter.operatorTurn();
-    // The page on the stage is read meanwhile; without one, Jev is asked nothing about a page.
-    const [companions, page] = await Promise.all([listCompanions(bridge, true, 800), bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
-    // Only companions this one can reach and turn on or off.
-    const sessions: Session[] = companions.filter(c => c.current || (c.reachable && c.link)).map(c => ({ id: c.id, folder: c.folder, agent: c.agent, on: c.voice !== 'none', current: c.current, blocked: c.blocked }));
-    const judgment = await bridge.handOffAudit!.judge(said, sessions, 3000, page, earlier, companion), { needsAgent } = judgment, asked = judgment.sessions!;
-    bridge.log({ type: 'sessions.judged', requestId, needsAgent, ...asked, companionOnly: judgment.companionOnly, page: judgment.page });
+    // With a page on the stage, the presenter has read (or is reading) the operator's turn: for the same words, that reading
+    // is this one too, and its page part is done once. The page and the companions are read meanwhile.
+    const turn = bridge.presenter.turnFor(said);
+    const [sessions, page] = await Promise.all([this.sessions(800), bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
+    const ours = await turn;
+    const reading = ours?.reading ?? await bridge.read({ trigger: 'delegation', lines, sessions, page });
+    const asked = reading.sessions ?? { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] };
+    bridge.log({ type: 'sessions.judged', requestId, needsAgent: reading.needsAgent, ...asked, companionOnly: reading.companionOnly, page: reading.page, read: reading.trigger });
     if (asked.asked < ASKED) {
       // Asked of the page: the presenter does it (and says what went on to the agent, if anything).
-      const moved = await presented.then(() => bridge.presenter.movedFor(said));
-      const done = page && judgment.page && await bridge.presenter.request(judgment.page, said, needsAgent, cued || moved);
+      const done = page && reading.page && await bridge.presenter.request(reading, said, lines, cued || ours?.moved);
       if (done) return done;
       // Only about how the companion behaves: Jev's tuning and instruction learning take it from here, not the harness.
-      if ((judgment.companionOnly ?? 0) >= COMPANION_ONLY) return { needsAgent, handled: companionHandled(bridge.agent), companion: true };
+      if ((reading.companionOnly ?? 0) >= COMPANION_ONLY) return { reading, handled: companionHandled(bridge.agent), companion: true };
       // For the agent: what the page could not do, or what the user was looking at when they said it.
-      return page ? { needsAgent, note: bridge.presenter.noteFor(page, judgment.page) } : { needsAgent };
+      return page ? { reading, note: bridge.presenter.noteFor(page, reading.page) } : { reading };
     }
     // A session named that isn't running: Jev still picks the nearest listed one to turn on ("switch to runta" chose
     // video-editing), so nothing is turned on or off; GPT Live is told which ones are running.
@@ -74,10 +78,10 @@ export class SessionSwitch {
     const only = asked.only >= ONLY;
     bridge.publish({ type: 'sessions', text: plan, handled: only });
     if (on.length || off.length) void this.carryOut(on, off);
-    if (only) return { needsAgent, handled: sessionsHandled(bridge.agent, plan) };
+    if (only) return { reading, handled: sessionsHandled(bridge.agent, plan) };
     // Asked together with something for the harness: the request goes on, and GPT Live hears what changes.
     this.tell(plan);
-    return { needsAgent };
+    return { reading };
   }
 
   async carryOut(on: Session[], off: Session[]) {

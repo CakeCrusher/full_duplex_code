@@ -12,15 +12,13 @@ import type { AgentDefinition } from './adapter.ts';
 
 export type Distilled = { text: string } | { same: string };
 
-export function distillPrompt({ said, previous = '', companion = '', inForce, scores }: { said: string; previous?: string; companion?: string; inForce: { id: string; text: string }[]; scores?: { behave?: number; lasting?: string } }) {
+export function distillPrompt({ said, transcript = '', inForce, scores }: { said: string; transcript?: string; inForce: { id: string; text: string }[]; scores?: { behave?: number; lasting?: string } }) {
   return [
     'You are writing one instruction for a voice companion. The operator talks by voice to the companion, which relays a coding agent\'s work.',
     `A judge (Jev) has determined that the operator just gave the companion a standing instruction: how it should behave toward them ${scores?.lasting === 'always' ? 'in every session' : 'for the rest of this session'}${typeof scores?.behave === 'number' ? ` (confidence ${scores.behave.toFixed(2)})` : ''}. There is an instruction here; your only job is to state it clearly.`,
     '',
     'What the judge saw:',
-    `- What the companion said just before: ${JSON.stringify(companion.slice(-400))}`,
-    `- What the operator said before that: ${JSON.stringify(previous.slice(-400))}`,
-    `- What the operator just said (speech-to-text, may be imperfect or unfinished): ${JSON.stringify(said)}`,
+    `- The conversation, oldest first (speech-to-text, may be imperfect or unfinished; the line marked ► is what the operator just said): ${JSON.stringify(transcript.slice(-1500) || said)}`,
     `- Instructions already in force: ${inForce.length ? inForce.map(i => `${i.id}: ${i.text}`).join(' | ') : '(none)'}`,
     '',
     'Reply with exactly one of these and nothing else, no other text before or after:',

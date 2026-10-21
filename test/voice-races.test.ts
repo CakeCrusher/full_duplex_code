@@ -200,9 +200,8 @@ test('instructions restored after a restart bring back the settings Jev chose fo
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-retune-')), sessionId = randomUUID();
   const make = () => {
     const h = new Harness({ agent: claude, root, runDir: path.join(root, `run-${randomUUID()}`), cwd: root, sessionId, apiKey: 'unused', jevKey: 'k', jevTuning: true });
-    h.tuner!.choose = async ({ instructions, current }) => instructions.some(i => /talk at length/.test(i)) && current.holdLongestMs !== 20000
-      ? { tuning: { ...current, holdLongestMs: 20000 }, changes: [{ name: 'holdLongestMs', from: current.holdLongestMs, to: 20000 }] } : { tuning: current, changes: [] };
-    h.learner!.consider = async () => undefined;
+    // Jev picks the longest hold for an operator who talks at length.
+    h.jev = { read: async (moment: any) => ({ trigger: moment.trigger, said: '', transcript: '', needsAgent: null, tuning: moment.tune.instructions.some((i: string) => /talk at length/.test(i)) ? { holdLongestMs: { choice: 'level_20000' } } : {} }) } as any;
     return h;
   };
   const first = make(); await first.start(); first.agentReady = true;

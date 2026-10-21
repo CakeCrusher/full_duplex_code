@@ -416,7 +416,8 @@ export class VoiceSessions {
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator: Mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
-      learner: bridge.learner, audit: bridge.handOffAudit, gate: bridge.handOffAudit ? (said, id, earlier, companion, cued) => bridge.sessionSwitch.gate(said, id, earlier, companion, cued) : undefined, onSaid: said => bridge.tuneFromInstructions(said),
+      audit: bridge.handOffAudit, gate: bridge.jev ? (said, id, lines, cued) => bridge.sessionSwitch.gate(said, id, lines, cued) : undefined,
+      read: bridge.jev ? (trigger, lines) => bridge.read({ trigger, lines }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake };
     // A fork knows the page state its source was told, and how full its context is; a new session, the page it starts with.

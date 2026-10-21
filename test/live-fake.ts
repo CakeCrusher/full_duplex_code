@@ -10,6 +10,7 @@ import { EventEmitter } from 'node:events';
 import type { TestContext } from 'node:test';
 import { Harness } from '../src/core/bridge.ts';
 import { claude } from '../src/adapters/claude/index.ts';
+import type { Moment, PageJudgment, Reading } from '../src/core/jev.ts';
 
 export const settle = (ms = 20) => new Promise(resolve => setTimeout(resolve, ms));
 export const until = async <T>(check: () => T) => { for (let i = 0; i < 300; i++) { const v = check(); if (v) return v; await settle(); } throw new Error('timed out'); };
@@ -95,3 +96,12 @@ export async function harness(t: TestContext, extra: Record<string, unknown> = {
 }
 export const learn = (h: Harness, text: string) => h.voiceSessions.learn({ text, scope: 'session', behave: .9, design: .1, lasting: 'this_session' });
 export const disregarded = (live: Live, id: string) => live.appended.some(([kind, text]) => kind === 'instructions' && text.startsWith(`Disregard instruction ${id}`));
+
+/** A page judgment as Jev would give it: nothing asked unless the test says so. */
+export const pageReading = (page: Partial<PageJudgment> = {}): PageJudgment => ({ only: 0, work: 1, other: 0, walk: 0, unhappy: 0, ...page });
+/** A stand-in for Jev (jev.ts): the test's reading of each moment; returns every moment it was asked about. */
+export function fakeJev(h: Harness, reading: (moment: Moment) => Partial<Reading> = () => ({})) {
+  const moments: Moment[] = [];
+  h.jev = { read: async (moment: Moment) => { moments.push(moment); return { trigger: moment.trigger, said: moment.lines.at(-1)?.text ?? '', transcript: '', needsAgent: .3, ...reading(moment) }; } } as any;
+  return moments;
+}
