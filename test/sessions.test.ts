@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events';
 import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
 import { Mediator, type Gated } from '../src/core/mediator.ts';
 import type { Harness } from '../src/core/bridge.ts';
-import type { Reading, Session, SessionsJudgment } from '../src/core/jev.ts';
+import { Jev, type Reading, type Session, type SessionsJudgment } from '../src/core/jev.ts';
 import { fakeJev, harness, until } from './live-fake.ts';
 
 // Two companions in their own folders, both registered under one root, as two fdc runs are.
@@ -37,11 +37,26 @@ test('"switch to beta": beta\'s voice starts, alpha is told, then alpha\'s voice
   await a.h.startLive(undefined, undefined, 'fresh');
   const gated = await a.h.sessionSwitch.gate('Switch to beta.', 'r1', []);
   assert.deepEqual(seen[0].map(s => [s.folder, s.on, s.current]), [['alpha', true, true], ['beta', false, false]], 'Jev sees every running companion and whether its voice is on');
-  assert.match(gated.handled!, /Nothing was sent to Claude Code.*Turning on the voice of beta\. Turning off the voice of this session once the others are on\./);
+  // As the page's list shows each one: folder, agent, session ID and state, then what hovering it shows.
+  assert.match(seen[0][0].shown, /^alpha · Claude Code · [0-9a-f]{8} · Voice on \(Claude Code .* open · started .*\)$/);
+  assert.match(seen[0][1].shown, /^beta · Claude Code · [0-9a-f]{8} · Ready \(/);
+  assert.match(gated.handled!, /Nothing was sent to Claude Code.*Turning on the voice of beta \([0-9a-f]{8}\)\. Turning off the voice of this session once the others are on\./);
   await until(() => b.lives[0]?.state === 'active');
   await until(() => a.lives[0].state === 'closed');
-  assert.ok(a.lives[0].appended.some(([kind, text]) => kind === 'thinking' && /Voice sessions: beta's voice is on; this session's voice ends/.test(text)));
-  assert.equal(a.lives[0].closeReason, 'Switched to beta');
+  assert.ok(a.lives[0].appended.some(([kind, text]) => kind === 'thinking' && /Voice sessions: the voice of beta \([0-9a-f]{8}\) is on; this session's voice ends/.test(text)));
+  assert.match(a.lives[0].closeReason!, /^Switched to beta \([0-9a-f]{8}\)$/);
+});
+
+test('Jev reads each session as the page lists it, so the operator can name one by its session ID', async t => {
+  const { a } = await pair(t);
+  let sent: any;
+  const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers: {} }) }; } });
+  const sessions = await a.h.sessionSwitch.sessions(), [alpha, beta] = sessions.map(s => s.sessionId);
+  await jev.read({ trigger: 'delegation', latest: { role: 'operator', text: `Turn off the ${beta!.slice(0, 3).split('').join(' ')} session.` }, sessions });
+  assert.match(sent.state.sessions, new RegExp(`^session_1 \\(the one the operator is speaking to now\\): alpha · Claude Code · ${alpha} · [^\\n]+ \\(Claude Code [^\\n]+ · started [^\\n]+\\)\\nsession_2: beta · Claude Code · ${beta} · Ready \\(`));
+  assert.match(sent.state.setting, /a session ID by its first characters/);
+  assert.match(sent.questions.session_2.instructions, new RegExp(`session_2 \\(beta \\(${beta}\\)\\)`));
+  assert.match(sent.questions.session_2.criteria.turn_on, new RegExp(`clearly means beta \\(${beta}\\)`));
 });
 
 test('a companion that cannot start voice is reported, and this one stays on', async t => {
@@ -52,7 +67,7 @@ test('a companion that cannot start voice is reported, and this one stays on', a
   await a.h.sessionSwitch.gate('Switch to beta.', 'r1', []);
   await until(() => a.lives[0].appended.some(([, text]) => /^Voice sessions:/.test(text)));
   const outcome = a.lives[0].appended.find(([, text]) => /^Voice sessions:/.test(text))![1];
-  assert.match(outcome, /beta's voice can't start: no page of it is open.*; this session stays on/);
+  assert.match(outcome, /the voice of beta \([0-9a-f]{8}\) can't start: no page of it is open.*; this session stays on/);
   assert.equal(a.lives[0].state, 'active');
 });
 
@@ -62,7 +77,7 @@ test('turning another companion off ends its voice', async t => {
   judge(a.h, sessions => ({ turnOff: [id(sessions, 'beta')] }));
   await a.h.startLive(undefined, undefined, 'fresh');
   const gated = await a.h.sessionSwitch.gate('Turn off beta.', 'r1', []);
-  assert.match(gated.handled!, /Turning off the voice of beta\./);
+  assert.match(gated.handled!, /Turning off the voice of beta \([0-9a-f]{8}\)\./);
   await until(() => b.lives[0].state === 'closed');
   assert.equal(b.lives[0].closeReason, 'Turned off from alpha');
 });
@@ -72,7 +87,7 @@ test('a session named that is not running changes nothing, even when Jev picks t
   judge(a.h, sessions => ({ unlisted: .82, turnOn: [id(sessions, 'beta')], turnOff: [id(sessions, 'alpha')] }));
   await a.h.startLive(undefined, undefined, 'fresh');
   const gated = await a.h.sessionSwitch.gate('Switch to gamma.', 'r1', []);
-  assert.match(gated.handled!, /Nothing was sent.*The operator named a session that is not running; running now: alpha \(this one, voice on\), beta \(voice off\)\./);
+  assert.match(gated.handled!, /Nothing was sent.*The operator named a session that is not running; running now: alpha · Claude Code · [0-9a-f]{8} · Voice on \(.*\), this one; beta · Claude Code · [0-9a-f]{8} · Ready \(.*\)\./);
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(b.lives.length, 0); assert.equal(a.lives[0].state, 'active');
 });
@@ -174,7 +189,7 @@ test('a tab that has not been clicked, or allowed the microphone, is reported at
   const started = Date.now();
   await a.h.sessionSwitch.gate('Turn on beta too.', 'r1', []);
   await until(() => a.lives[0].appended.some(([, text]) => /^Voice sessions:/.test(text)));
-  assert.match(a.lives[0].appended.find(([, text]) => /^Voice sessions:/.test(text))![1], /beta's voice can't start: its page has not been clicked since it opened/);
+  assert.match(a.lives[0].appended.find(([, text]) => /^Voice sessions:/.test(text))![1], /the voice of beta \([0-9a-f]{8}\) can't start: its page has not been clicked since it opened/);
   assert.ok(Date.now() - started < 2000);
   page.ready = { microphone: 'prompt', clicked: true };
   assert.match(b.h.status().voiceBlocked!, /not been allowed the microphone/);

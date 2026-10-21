@@ -28,7 +28,7 @@ const WHY: Record<Trigger, string> = {
   settings: 'The operator\'s instructions to the companion have changed, or voice has started.',
 };
 const SETTING = 'An operator talks by voice (transcribed, may be imperfect) to a voice companion that presents a coding agent\'s work while the agent produces it. The companion answers what it can from what the agent already said, and passes the rest on. You are the voice tool between the companion and the agent: what the voice tool can do itself (the page beside the conversation, the companion\'s own behavior and settings, voice sessions) it does at once, without the agent; everything else must reach the agent. `latest` holds the latest words: judge those. `history` is what happened just before them, oldest first, as context (what "it", "that one" or "yes, please" refers to): the coding agent\'s events, as JSON records, and the conversation, where `user` is the operator and `voice assistant` the voice companion. `why` says why you are asked now.';
-const SESSIONS_SETTING = ' The operator may run several companions at once, each beside its own coding session in its own folder (`sessions`); each one\'s voice can be on or off, and several can be on together. fdc, the voice tool itself, turns them on or off; the coding agent does not. Every listed session is already running, so starting, opening or turning on a listed session (named by its folder or project) means turning its voice on, and stopping or closing one means turning its voice off.';
+const SESSIONS_SETTING = ' The operator may run several companions at once, each beside its own coding session (`sessions`); each one\'s voice can be on or off, and several can be on together. Each session is listed as the operator sees it in the page\'s list of running companions: its folder, its coding agent, the start of its session ID and its state, then what hovering it shows. The operator may name a session by any of these, and a session ID by its first characters, which speech may spell out ("six two zero" or "620" for an ID that starts with 620). fdc, the voice tool itself, turns them on or off; the coding agent does not. Every listed session is already running, so starting, opening or turning on a listed session means turning its voice on, and stopping or closing one means turning its voice off.';
 const PAGE_SETTING = ' A page is open in the browser beside the conversation (`page`). The voice tool can move it, show and highlight its parts with the listed page commands, without the coding agent. Commands whose id starts with page_ are the page\'s own (slides, tabs, views): prefer them when they fit.';
 
 // Probabilities above which Jev's reading is acted on. A request is kept from the harness only when
@@ -65,7 +65,9 @@ export const BEHAVE = .6, DESIGN = .5;
 /** One utterance of the conversation. */
 export interface Line { role: 'operator' | 'intermediary'; text: string }
 /** A running companion, as Jev is told about it. */
-export interface Session { id: string; folder: string; agent: string; on: boolean; current: boolean; /** Why its voice can't start without the operator. */ blocked?: string | null }
+export interface Session { id: string; folder: string; sessionId: string | null; on: boolean; current: boolean; /** The session as the page's list of running companions shows it to the operator (web/companions.ts). */ shown: string }
+/** A session by its folder and session ID: two sessions can share a folder. */
+export const sessionName = (s: Pick<Session, 'folder' | 'sessionId'>) => s.sessionId ? `${s.folder} (${s.sessionId})` : s.folder;
 /** Jev's reading of the words for session orchestration. */
 export interface SessionsJudgment { asked: number; only: number; unlisted: number; turnOn: string[]; turnOff: string[] }
 /** Jev's reading of the words for the page on the stage. */
@@ -120,25 +122,25 @@ const GATE = {
 };
 const sessionQuestions = (sessions: Session[]) => ({
   sessions_asked: noul('In the latest words, does the operator ask to turn the voice of one or more companion sessions on or off: start one, stop one, switch to another, switch away from this one, or talk to several at once?',
-    'Asks to start, open, turn on, stop or turn off a listed session, to switch to or between sessions, to bring another session in, or for this session to stop listening, end or shut itself off, with or without the word voice. The session may be named by its folder, project or agent.',
+    'Asks to start, open, turn on, stop or turn off a listed session, to switch to or between sessions, to bring another session in, or for this session to stop listening, end or shut itself off, with or without the word voice. The session may be named by its folder, project, agent or session ID.',
     'Anything else: work on a project, even one named like a session; questions about how sessions work; designing the voice tool; switching something inside the code, such as a branch, a file or a setting; "stop" or "wait" on its own, which asks the companion to stop talking or stop what it is doing, not to turn voice off.'),
   only_sessions: noul('Is turning companion sessions on or off the only thing the latest words ask for, with nothing for the coding agent to do or answer?',
     'Only session on/off or switching requests, with at most filler or thanks.',
     'They also ask for work, a question, an instruction, a correction or any message for the coding agent, or they are not about sessions at all. When in doubt, false.'),
   unlisted_session: noul('In the latest words, does the operator ask to turn on, or switch to, a session that matches none of `sessions`?',
-    'Names a session, project or folder to start or switch to that is not listed.', 'Every session asked for is listed, or no session is asked for.'),
+    'Names a session, project, folder or session ID to start or switch to that is not listed.', 'Every session asked for is listed, or no session is asked for.'),
   ...Object.fromEntries(sessions.map((session, index) => [`session_${index + 1}`, {
     type: 'choice',
-    instructions: `What do the latest words ask for session_${index + 1} (${session.folder}${session.current ? ', the session they are speaking to now' : ''})? Its voice is ${session.on ? 'on' : 'off'}.`,
+    instructions: `What do the latest words ask for session_${index + 1} (${sessionName(session)}${session.current ? ', the session they are speaking to now' : ''})? Its voice is ${session.on ? 'on' : 'off'}.`,
     // The session spoken to is told apart from the others: "turn off video-editing", said to two at once, turned both off.
     criteria: session.current
-      ? { turn_off: 'The operator asks the session they are speaking to (here, you, this one, or all of them) to stop listening, end or shut itself off, or to switch away from it to another session.', leave: 'The operator does not ask this session itself to stop listening: "stop" on its own asks it to stop talking or stop what it is doing. Asking to turn off a different session, named by its folder or project, leaves this one on.' }
+      ? { turn_off: 'The operator asks the session they are speaking to (here, you, this one, it by its folder or session ID, or all of them) to stop listening, end or shut itself off, or to switch away from it to another session.', leave: 'The operator does not ask this session itself to stop listening: "stop" on its own asks it to stop talking or stop what it is doing. Asking to turn off a different session, named by its folder, project or session ID, leaves this one on.' }
       : session.on
-      ? { turn_off: `The operator names or clearly means ${session.folder} (or all of them) and asks for its voice to stop.`, leave: `The operator does not ask ${session.folder}'s voice to stop.` }
-      : { turn_on: `The operator names or clearly means ${session.folder} and asks to start its voice, switch to it, or bring it into the conversation.`, leave: `The operator does not ask to start ${session.folder}'s voice.` },
+      ? { turn_off: `The operator names or clearly means ${sessionName(session)} (or all of them) and asks for its voice to stop.`, leave: `The operator does not ask the voice of ${sessionName(session)} to stop.` }
+      : { turn_on: `The operator names or clearly means ${sessionName(session)} and asks to start its voice, switch to it, or bring it into the conversation.`, leave: `The operator does not ask to start the voice of ${sessionName(session)}.` },
   }])),
 });
-const sessionLines = (sessions: Session[]) => sessions.map((s, index) => `session_${index + 1}: ${s.folder} (${s.agent}), voice ${s.on ? 'on' : 'off'}${s.current ? ' (the one the operator is speaking to now)' : ''}`).join('\n') || '(none)';
+const sessionLines = (sessions: Session[]) => sessions.map((s, index) => `session_${index + 1}${s.current ? ' (the one the operator is speaking to now)' : ''}: ${s.shown}`).join('\n') || '(none)';
 
 /** The choice for "another action on the page": something asked of it that no command does, for fdc's one-off action (fast-action.ts). */
 export const OTHER = 'other_action';

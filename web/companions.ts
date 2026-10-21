@@ -1,6 +1,6 @@
 import type { CompanionSummary as Companion } from '../src/core/companions.ts';
 
-// Every running companion, to switch between them in this tab: its folder, agent and state,
+// Every running companion, to switch between them in this tab: its folder, agent, session ID and state,
 // refreshed every few seconds. Switching never leaves a page and never ends the voice it runs.
 const LABELS = { voice: 'Voice on', standby: 'Standby', starting: 'Starting voice', ready: 'Ready', notReady: 'Not ready', waiting: 'Agent not connected', unreachable: 'Unreachable' };
 const AGENT_STATES: Record<string, string> = { starting: 'starting', idle: 'ready for a request', working: 'working', needs_attention: 'needs your attention', failed: 'reported an error', exited: 'session ended' };
@@ -22,13 +22,23 @@ function details(c: Companion) {
   if (c.voice === 'none' && c.blocked) parts.push(`voice can't start by voice: ${c.blocked}`);
   return parts.join(' · ');
 }
+/** What the list shows of a companion: under its folder, its agent, session ID and state; on hovering it, the details. */
+export function shown(c: Companion) {
+  const state = stateOf(c);
+  return { state, meta: [c.agent, c.sessionId, state === 'notReady' ? lacks(c.blocked!) : LABELS[state]].filter(Boolean).join(' · '), hover: details(c) };
+}
+/** The same in one line: how fdc's voice tool reads each session, as the operator sees it (sessions.ts). */
+export function shownLine(c: Companion) {
+  const { meta, hover } = shown(c);
+  return `${[c.folder, c.public ? 'Public' : '', meta].filter(Boolean).join(' · ')} (${hover})`;
+}
 function chip(c: Companion, show: (c: Companion) => void) {
-  const state = stateOf(c), button = element('button', 'companion');
-  button.type = 'button'; button.dataset.companion = c.id; button.dataset.state = state; button.title = details(c);
+  const { state, meta, hover } = shown(c), button = element('button', 'companion');
+  button.type = 'button'; button.dataset.companion = c.id; button.dataset.state = state; button.title = hover;
   const name = element('span', 'companion-name');
   name.append(element('i', 'companion-dot'), element('strong', '', c.folder));
   if (c.public) name.append(element('b', 'companion-public', 'Public'));
-  button.append(name, element('span', 'companion-meta', [c.agent, c.sessionId, state === 'notReady' ? lacks(c.blocked!) : LABELS[state]].filter(Boolean).join(' · ')));
+  button.append(name, element('span', 'companion-meta', meta));
   if (c.current) button.setAttribute('aria-current', 'page');
   // The link holds the other page's token: it is loaded from here rather than shown as an address on hover.
   if (c.current || (c.link && c.reachable)) button.onclick = () => show(c);

@@ -11,10 +11,11 @@
 import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import { listCompanions, type CompanionEntry } from './companions.ts';
-import { ASKED, COMPANION_ONLY, ONLY, UNLISTED, type Session } from './jev.ts';
+import { ASKED, COMPANION_ONLY, ONLY, UNLISTED, sessionName, type Session } from './jev.ts';
 import type { Spoken } from './voice-history.ts';
 import type { Gated } from './mediator.ts';
 import { companionHandled, sessionsHandled, sessionsOutcome } from './prompts.ts';
+import { shownLine } from '../../web/companions.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
 
@@ -30,9 +31,9 @@ export function startBlocked(bridge: Harness): string | undefined {
   return 'its page has not been clicked since it opened (Chrome allows sound and the microphone only after a click)';
 }
 
-const name = (s: Session) => s.current ? 'this session' : s.folder;
+const name = (s: Session) => s.current ? 'this session' : sessionName(s);
 const names = (sessions: Session[]) => sessions.map(name).join(', ');
-const running = (sessions: Session[]) => sessions.map(s => `${s.folder} (${s.current ? 'this one, ' : ''}voice ${s.on ? 'on' : 'off'}${!s.on && s.blocked ? `, can't start: ${s.blocked}` : ''})`).join(', ');
+const running = (sessions: Session[]) => sessions.map(s => `${s.shown}${s.current ? ', this one' : ''}`).join('; ');
 
 export class SessionSwitch {
   bridge: Harness;
@@ -42,10 +43,10 @@ export class SessionSwitch {
   asked?: { at: number; from: string; failed?: string };
   constructor(bridge: Harness) { this.bridge = bridge; }
 
-  /** The companions this one can reach and turn on or off, as Jev is told about them. */
+  /** Every running companion, as the page lists it to the operator: what Jev and GPT Live are told about them. */
   async sessions(timeoutMs = 800): Promise<Session[]> {
     const companions = await listCompanions(this.bridge, true, timeoutMs);
-    return companions.filter(c => c.current || (c.reachable && c.link)).map(c => ({ id: c.id, folder: c.folder, agent: c.agent, on: c.voice !== 'none', current: c.current, blocked: c.blocked }));
+    return companions.map(c => ({ id: c.id, folder: c.folder, sessionId: c.sessionId, on: c.voice !== 'none', current: c.current, shown: shownLine(c) }));
   }
   /** The gate: Jev's reading of a request GPT Live passed on, before it reaches the harness. */
   async gate(said: string, requestId: string, spoken: Spoken[], cued?: boolean): Promise<Gated> {
@@ -112,27 +113,27 @@ export class SessionSwitch {
 
   async turnOn(session: Session): Promise<Outcome> {
     const entry = this.entry(session), from = this.bridge.companionEntry().cwd.split('/').pop() ?? '';
-    if (!entry) return { session, ok: false, text: `${session.folder} has stopped` };
+    if (!entry) return { session, ok: false, text: `${sessionName(session)} has stopped` };
     try {
       const answer = await this.call(entry, '/api/voice', { method: 'POST', body: JSON.stringify({ action: 'on', from }) });
-      if (!answer.ok) return { session, ok: false, text: `${session.folder}'s voice can't start: ${answer.reason}` };
+      if (!answer.ok) return { session, ok: false, text: `the voice of ${sessionName(session)} can't start: ${answer.reason}` };
       for (const until = Date.now() + this.confirmMs; Date.now() < until;) {
         const status = await this.call(entry, '/api/status').catch(() => undefined);
-        if (status?.live === 'active') return { session, ok: true, text: `${session.folder}'s voice is on` };
-        if (status?.voiceAsked?.failed) return { session, ok: false, text: `${session.folder}'s voice did not start: ${status.voiceAsked.failed}` };
+        if (status?.live === 'active') return { session, ok: true, text: `the voice of ${sessionName(session)} is on` };
+        if (status?.voiceAsked?.failed) return { session, ok: false, text: `the voice of ${sessionName(session)} did not start: ${status.voiceAsked.failed}` };
         await new Promise(resolve => setTimeout(resolve, 500));
       }
-      return { session, ok: false, text: `${session.folder}'s voice did not start within ${this.confirmMs / 1000} s` };
-    } catch (error) { return { session, ok: false, text: `${session.folder} did not answer (${(error as Error).message})` }; }
+      return { session, ok: false, text: `the voice of ${sessionName(session)} did not start within ${this.confirmMs / 1000} s` };
+    } catch (error) { return { session, ok: false, text: `${sessionName(session)} did not answer (${(error as Error).message})` }; }
   }
 
   async turnOff(session: Session): Promise<Outcome> {
     const entry = this.entry(session), from = this.bridge.companionEntry().cwd.split('/').pop() ?? '';
-    if (!entry) return { session, ok: true, text: `${session.folder} has stopped` };
+    if (!entry) return { session, ok: true, text: `${sessionName(session)} has stopped` };
     try {
       const answer = await this.call(entry, '/api/voice', { method: 'POST', body: JSON.stringify({ action: 'off', from }) });
-      return answer.ok ? { session, ok: true, text: `${session.folder}'s voice is off` } : { session, ok: false, text: `${session.folder}'s voice did not stop: ${answer.reason}` };
-    } catch (error) { return { session, ok: false, text: `${session.folder} did not answer (${(error as Error).message})` }; }
+      return answer.ok ? { session, ok: true, text: `the voice of ${sessionName(session)} is off` } : { session, ok: false, text: `the voice of ${sessionName(session)} did not stop: ${answer.reason}` };
+    } catch (error) { return { session, ok: false, text: `${sessionName(session)} did not answer (${(error as Error).message})` }; }
   }
 
   /** Another companion asks this one to turn its voice on or off. */
