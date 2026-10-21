@@ -34,6 +34,18 @@ Keep it in its own file beside the page (`diagram.controller.js` for `diagram.ht
 `<script src="diagram.controller.js"></script>` after the page's own script): it is a document you
 maintain and grow, and it survives rewrites of the page.
 
+How the voice tool uses it, so you can write it to be used well:
+
+- When the user stops speaking, a judge reads what they said beside every command's `say`, the
+  page's `about` and where the user is (`where()`), and picks the one command that does what they
+  asked. It sees nothing else of your controller: a command it can't tell apart from another by its
+  `say` is a command it can't choose.
+- After that command runs, it reads `where()` again and decides whether the user asked for more
+  ("forward two slides", "open the options and highlight the recommendation"), one command at a time.
+- What `run()` returns is what the voice is told is now on screen, and what it says about it.
+- A command's `name` is a phrase the voice itself can say ("let's look at Margins") to move the page
+  as it talks.
+
 ```js
 window.fdcController = {
   // One line: what this page is.
@@ -54,7 +66,8 @@ window.fdcController = {
     // …
     return 'Slide 4 of 12: "Margins". Gross margin is 41%, up 3 points.';
   },
-  // Optional: where the user is now, in words (only where: not what to say or do next).
+  // Where the user is now, in words, in the terms your commands use (only where: not what to say or do next).
+  // Without it, the voice tool describes the element in view, which can't tell which slide, step or tab is showing.
   where() { return `Slide ${current + 1} of 12: "${slides[current].title}"`; },
 };
 ```

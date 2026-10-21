@@ -1,9 +1,12 @@
 // Everything the voice model reads that names the agent, built from the
 // adapter's profile.
+import { fileURLToPath } from 'node:url';
 import type { AgentProfile } from './adapter.ts';
 import type { Utterance } from './voice-history.ts';
 
 type Agent = { profile: AgentProfile };
+// How the agent makes a page the voice tool can steer: named in what fdc asks of it about a page's controls, so any agent can find it.
+const STAGE_GUIDE = fileURLToPath(new URL('../../STAGE.md', import.meta.url));
 
 // GPT Live's own instructions, in the shape OpenAI recommends for gpt-live-1 (role, backchannels, interruptions, then
 // when to generate <|SpawnThinking|>, its delegation token: "delegate to the backend" is not what it was trained on, and
@@ -181,20 +184,20 @@ export const pageNothing = ({ profile: { name } }: Agent, failed: { say: string 
 export const lookingNote = (page: { title: string; url: string; where: string }) =>
   `When they said it, the user was looking at "${page.title.slice(0, 80)}" (${page.url}) in the browser, at: ${page.where.replace(/\s+/g, ' ').slice(0, 300)}.`;
 export const controllerNote = (page: { title: string; url: string; where: string }) =>
-  `The user is unhappy with how the page "${page.title.slice(0, 80)}" (${page.url}) in the browser responded to voice, at: ${page.where.replace(/\s+/g, ' ').slice(0, 300)}. Its controls couldn't do what they meant: improve the page's controller (window.fdcController, in its own file beside the page: its commands and names, or its data-fdc annotations; see the voice tool's guide) so the voice can do it itself next time, reload the page, then do what they asked.`;
+  `The user is unhappy with how the page "${page.title.slice(0, 80)}" (${page.url}) in the browser responded to voice, at: ${page.where.replace(/\s+/g, ' ').slice(0, 300)}. Its controls couldn't do what they meant: improve the page's controller (window.fdcController, in its own file beside the page: its commands and names, or its data-fdc annotations; the guide is ${STAGE_GUIDE}) so the voice can do it itself next time, reload the page, then do what they asked.`;
 export const pageNothingNote = (failed: { say: string }) =>
   `The voice tool tried to do this on the page in the browser (${failed.say.replace(/\.$/, '')}) but there was nothing to do there; do what the user asked.`;
 // No page command did it, so the voice tool improvised: the page's controller is short of a command, which the agent adds.
 export const oneOffNote = (said: string, onScreen: string) =>
-  `No page command did this, so the voice tool did it in the browser with a one-off step ("${said.slice(0, 120)}"; on screen now: ${onScreen.replace(/\s+/g, ' ').slice(0, 200)}). Don't redo it: add a command for it to the page's controller (see the voice tool's guide), so the voice can do it directly next time.`;
+  `No page command did this, so the voice tool did it in the browser with a one-off step ("${said.slice(0, 120)}"; on screen now: ${onScreen.replace(/\s+/g, ' ').slice(0, 200)}). Don't redo it: add a command for it to the page's controller (the guide is ${STAGE_GUIDE}), so the voice can do it directly next time.`;
 export const oneOffDone = ({ profile: { name } }: Agent, onScreen: string) =>
   `The voice tool did it on the page with a one-off step. On screen now: ${onScreen.slice(0, 500)} ${name} gets the request too, to give the page a command for it. Tell the operator in a few words what they are looking at.`;
 export const improvisedFailedNote = (error: string) =>
-  `No page command fitted this, and the voice tool's one-off action on the page failed: ${error.slice(0, 300)}. Do what the user asked, and consider giving the page a command for it.`;
+  `No page command fitted this, and the voice tool's one-off action on the page failed: ${error.slice(0, 300)}. Do what the user asked, and consider giving the page a command for it (the guide is ${STAGE_GUIDE}).`;
 export const pageDoneNote = (done: readonly { say: string }[]) =>
   `The voice tool already did the page part of this in the browser (${steps(done)}); don't do that again, do the rest.`;
 export const pageFailedNote = (done: readonly { say: string }[], error: string, page?: { title: string; url: string }) =>
-  `The voice tool tried to do this on the page${page ? ` "${page.title.slice(0, 80)}" (${page.url})` : ''} in the browser (${steps(done)}) and the page's controls failed: ${error.slice(0, 400)}. Fix the page's controller (window.fdcController or its data-fdc annotations) so this works, reload the page, then do what the user asked.`;
+  `The voice tool tried to do this on the page${page ? ` "${page.title.slice(0, 80)}" (${page.url})` : ''} in the browser (${steps(done)}) and the page's controls failed: ${error.slice(0, 400)}. Fix the page's controller (window.fdcController or its data-fdc annotations; the guide is ${STAGE_GUIDE}) so this works, reload the page, then do what the user asked.`;
 export const uncertainNote = 'Some of it may have reached you already: its delivery was uncertain. Don\'t repeat work it already started.';
 // Speech the voice assistant had not passed on when the voice session ended.
 export const sessionEndRequest = (reason: string, utterances: readonly Pick<Utterance, 'role' | 'text'>[], notes: readonly string[] = []) =>
