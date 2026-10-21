@@ -130,17 +130,30 @@ export const pageAlongside = ({ profile: { name } }: Agent, done: readonly { say
   `The voice tool already did the page part (${steps(done)}); on screen now: ${onScreen.slice(0, 500)} The rest goes to ${name}.`;
 export const pageFailed = ({ profile: { name } }: Agent, error: string, done: readonly { say: string }[] = []) =>
   `${done.length ? `The page did part of it (${steps(done)}), then` : 'The page'} couldn't go on (${error.slice(0, 200)}). The request went to ${name}, who made the page, to fix its controls and do it.`;
-// The page on the stage, as data: how to present it is in the voice's own instructions. Where the operator is comes last,
-// after the page's text: told first, the voice took the last part it read for where the page was ("at the end of the deck").
-export const stageBrief = (title: string, names: readonly string[], others: readonly string[] = [], where = '') =>
-  `The page "${title.slice(0, 80)}" is open beside you${others.length ? ` (also open in other tabs: ${others.map(o => `"${o.slice(0, 60)}"`).join(', ')})` : ''}.${names.length ? ` Its parts, by name: ${names.join(', ')}.` : ''}${where ? ` When you were told this, the operator was looking at ${where.replace(/\s+/g, ' ').slice(0, 200)}` : ''}`;
-// What the page says, from its own text (never from its controller): for answering, explaining and presenting.
-const partsText = (parts: readonly { name: string; text: string }[]) => parts.map(part => `## ${part.name}\n${part.text}`).join('\n');
-export const stageText = (title: string, parts: readonly { name: string; text: string }[]) =>
-  `What the page "${title.slice(0, 80)}" says, part by part, in its own words (reference for answering, explaining and presenting it; not news to report):\n${partsText(parts)}`;
-// Mid-conversation, in short: appends take GPT Live's timeline, and a long one lost the operator's words said meanwhile.
-export const stageOutline = (title: string, parts: readonly { name: string; text: string }[]) =>
-  `What the page "${title.slice(0, 80)}" says, part by part, in short (reference, not news to report):\n${parts.map(part => `${part.name}: ${part.text.replace(/\s+/g, ' ').slice(0, 140)}`).join('\n').slice(0, 1800)}`;
+// The page on the stage, as data (how to present it is in the voice's own instructions), in one message that replaces the
+// one before: which pages are open, the parts the voice can name, what each says in short, and where the operator is
+// (last: told first, the voice took the last part it read for where the page was, "at the end of the deck"). A new
+// session starts with it; a running one is told it again whenever it changes, and after GPT Live trims its context.
+// Sized to land in a few seconds: a whole page's text (5,000 tokens on the Jev page), appended mid-conversation, took
+// GPT Live's timeline and lost the operator's words said meanwhile.
+export const PAGE_STATE_CHARS = 4000;
+export interface PageState { title: string; names: readonly string[]; others: readonly string[]; parts: readonly { name: string; text: string }[]; where: string }
+/** What each part says, in short: the short ones whole, the long ones cut, all within `room` characters. */
+export function outline(parts: PageState['parts'], room: number) {
+  const texts = parts.map(part => part.text.replace(/\s+/g, ' ').trim()), allow: number[] = [];
+  let left = parts.length;
+  for (const i of texts.map((_, i) => i).sort((a, b) => texts[a].length - texts[b].length)) {
+    allow[i] = Math.max(0, Math.min(texts[i].length, Math.floor(room / left) - parts[i].name.length - 3)); room -= allow[i] + parts[i].name.length + 3; left--;
+  }
+  return parts.map((part, i) => `${part.name}: ${allow[i] < texts[i].length ? `${texts[i].slice(0, allow[i])}…` : texts[i]}`).join('\n');
+}
+export function pageState(page?: PageState) {
+  if (!page) return 'No page is open beside the operator now (this replaces the page you were told about before).';
+  const head = `The page open beside the operator now (this replaces any page you were told about before): "${page.title.slice(0, 80)}"${page.others.length ? `; also open in other tabs: ${page.others.map(o => `"${o.slice(0, 60)}"`).join(', ')}` : ''}.${page.names.length ? ` Its parts, by name: ${page.names.join(', ')}.` : ''}`;
+  const where = page.where ? `\nWhen you were told this, the operator was looking at ${page.where.replace(/\s+/g, ' ').slice(0, 200)}` : '';
+  const room = PAGE_STATE_CHARS - head.length - where.length - 80;
+  return `${head}${page.parts.length && room > 0 ? `\nWhat it says, part by part, in short (reference, not news to report):\n${outline(page.parts, room)}` : ''}${where}`;
+}
 export const cueNoDelegation = 'Nothing to delegate: the page moved when you said the part\'s name. Say what is there without "one moment", then stop.';
 export const cueMovedNote = 'The voice assistant moved the page in the browser as it answered some of this; don\'t move or open pages for that again, but do anything else it asks.';
 // Quiet: said as "nothing was sent", it was news the operator never asked for ("Yep, nothing was sent anywhere for that").

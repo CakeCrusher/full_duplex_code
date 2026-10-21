@@ -22,10 +22,8 @@ export interface ResumeRecord {
   forkFailed?: string;
   /** Which of fdc's own instructions the last session started with (a hash): a fork keeps a session's first instructions. */
   prompt?: string;
-  /** All the instructions it started with, fdc's own and the companion's (a hash), and the page text in them ('' for none). */
-  firstInstructions?: string; pageText?: string;
-  /** The page and brief GPT Live was last told, and how full its context has been since the session a fork continues started. */
-  told?: string; briefed?: string; context?: number;
+  /** The page state GPT Live was last told (pageSeen), and how full its context was at the end (GPT Live's last report). */
+  briefed?: string; context?: number;
 }
 export interface SavedInstruction { id: string; text: string; learned?: string; learnedIn?: string }
 // OpenAI keeps stored recordings for 30 days.
@@ -40,58 +38,46 @@ export const DROPPED_FORK_MS = 8000;
 export const forkable = (record: ResumeRecord, now = Date.now()) =>
   Boolean(record.liveSessionId && record.stored && record.forkFailed !== record.liveSessionId && record.endedAt && now - record.endedAt < RECORDING_MS && (record.finalized || now - record.endedAt >= DROPPED_FORK_MS));
 // A fork keeps the instructions its session first started with (OpenAI: "Forks inherit the GPT-Live model, voice, and
-// original instructions"), and every brief appended since: after fdc's own instructions change, the conversation is
-// rebuilt from its text instead, under today's (and so is one from before fdc kept track).
+// original instructions"): after fdc's own instructions change, the conversation is rebuilt from its text instead, under
+// today's (and so is one from before fdc kept track).
 export const planFor = (record: ResumeRecord, mode: 'resume' | 'fresh', prompt?: string): ResumePlan =>
   mode === 'fresh' ? 'fresh' : forkable(record) && (!prompt || record.prompt === prompt) ? 'fork' : record.turns.length ? 'seed' : 'fresh';
 
-// A fork keeps the instructions its first session started with; what was appended since (instructions too) is conversation:
-// it carries over, but a later appended instruction can displace an earlier one (Oct 21: "end every answer with pineapple"
-// was dropped once "start every answer with Captain" followed), and when the context passes 90% GPT Live keeps only the first
-// instructions and about 8,000 tokens of the rest. So a wake forks while the context has stayed under WAKE_FORK_CONTEXT
-// (room for the session it resumes), and the startup stays short: a fork took 2.1 s at 15% full, 4.2 s at 35%, 7.3 s at
-// 56% and 8.5 s at 75% (Oct 21; once 17.7 s), a seeded session about 1.7 s. After a wake's fork fails, wakes seed for
-// WAKE_FORK_BACKOFF_MS rather than wait on another.
+// Everything that changes during a conversation is told to GPT Live in it rather than in its instructions: the page on the
+// stage, and the operator's learned instructions, which carry over to a fork as conversation (on Oct 21 a later appended
+// instruction displaced an earlier one: "end every answer with pineapple" was dropped once "start every answer with
+// Captain" followed). Both are told again when GPT Live trims its context (voice-sessions.ts). Its startup grows with its context: a fork took 2.1 s at 15% full, 4.2 s at
+// 35%, 7.3 s at 56% and 8.5 s at 75% (Oct 21; once 17.7 s), a seeded session about 1.7 s. So a wake forks while the
+// context it continues has room (WAKE_FORK_CONTEXT); after a wake's fork fails, wakes seed for WAKE_FORK_BACKOFF_MS rather
+// than wait on another.
 export const WAKE_FORK_CONTEXT = .6, WAKE_FORK_BACKOFF_MS = 10 * 60 * 1000;
-// A page's text changes a little as it is used (a deck's "12 / 30" counter): up to this many characters, it's the same page.
-export const PAGE_CHANGED_CHARS = 8;
-/** How many characters differ between two texts, from their first difference to their last. */
-export function changedChars(a: string, b: string) {
-  let start = 0, end = 0;
-  while (start < a.length && start < b.length && a[start] === b[start]) start++;
-  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
-  return Math.max(a.length, b.length) - start - end;
-}
 /**
- * A wake from Standby resumes the session it paused (a fork keeps everything GPT Live had) while that session's first
- * instructions are still the ones in force now (fdc's own and the companion's, as hashes, and the page on the stage, as
- * text; undefined: the page couldn't be read) and its context has room. Otherwise it starts a new session with all of
- * them in its instructions, seeded with the conversation. Returns the plan and, for a seed, why it doesn't fork.
+ * A wake from Standby resumes the session it paused (a fork keeps everything GPT Live had) while fdc's own instructions
+ * are the ones it started with and its context has room; otherwise it starts a new session seeded with the conversation.
+ * Returns the plan and, for a seed, why it doesn't fork.
  */
-export function wakePlanFor(record: ResumeRecord, now: { prompt: string; instructions: string; pageText?: string }, forkFailedLately = false): [ResumePlan, string?] {
+export function wakePlanFor(record: ResumeRecord, prompt: string, forkFailedLately = false): [ResumePlan, string?] {
   const fallback = record.turns.length ? 'seed' : 'fresh';
-  if (planFor(record, 'resume', now.prompt) !== 'fork') return [fallback, 'not forkable'];
+  if (planFor(record, 'resume', prompt) !== 'fork') return [fallback, 'not forkable'];
   if (forkFailedLately) return [fallback, 'a fork failed lately'];
-  if (record.firstInstructions !== now.instructions) return [fallback, 'the instructions changed'];
-  if ((record.context ?? 0) >= WAKE_FORK_CONTEXT) return [fallback, `its context reached ${Math.round(record.context! * 100)}%`];
-  if (now.pageText !== undefined && changedChars(record.pageText ?? '', now.pageText) > PAGE_CHANGED_CHARS) return [fallback, 'the page changed'];
+  if ((record.context ?? 0) >= WAKE_FORK_CONTEXT) return [fallback, `its context was ${Math.round(record.context! * 100)}% full`];
   return ['fork'];
 }
 
 const message = (role: 'user' | 'assistant', text: string) => ({ type: 'message', role, content: [{ type: role === 'user' ? 'input_text' : 'output_text', text }] });
 const tokens = (input: readonly any[]) => input.reduce((n, item) => n + MESSAGE_TOKENS + estimatedTokens(item.content[0].text), 0);
-/** The newest turns that fit beside the startup input already there, as operator (user) and GPT Live (assistant) messages. */
-export function seedInput(startup: readonly any[], turns: readonly Turn[]) {
-  let room = INPUT_TOKENS - MARGIN_TOKENS - tokens(startup);
+/** The newest turns that fit beside the startup input already there (and what goes after them), as operator (user) and GPT Live (assistant) messages. */
+export function seedInput(startup: readonly any[], turns: readonly Turn[], after: readonly any[] = []) {
+  let room = INPUT_TOKENS - MARGIN_TOKENS - tokens(startup) - tokens(after);
   const seeded = [];
-  for (let i = turns.length - 1; i >= 0 && startup.length + seeded.length < INPUT_MESSAGES; i--) {
+  for (let i = turns.length - 1; i >= 0 && startup.length + seeded.length + after.length < INPUT_MESSAGES; i--) {
     const { role, text } = turns[i];
     const next = message(role === 'operator' ? 'user' : 'assistant', text.length > TURN_CHARS ? `…${text.slice(-TURN_CHARS)}` : text);
     room -= tokens([next]);
     if (room < 0) break;
     seeded.unshift(next);
   }
-  return [...startup, ...seeded];
+  return [...startup, ...seeded, ...after];
 }
 
 // One small private file per agent session, beside the usage ledger.

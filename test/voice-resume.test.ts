@@ -13,7 +13,7 @@ import { Pages } from '../src/core/pages.ts';
 import { AudioAudit } from '../src/core/audio-audit.ts';
 import { LiveSession } from '../src/core/live-session.ts';
 import { UsageLedger } from '../src/core/usage-ledger.ts';
-import { MEDIA_STALLED, VoiceSessions } from '../src/core/voice-sessions.ts';
+import { changedChars, MEDIA_STALLED, sameStage, VoiceSessions } from '../src/core/voice-sessions.ts';
 import { forkable, planFor, seedInput, wakePlanFor, INPUT_MESSAGES, INPUT_TOKENS, RECORDING_MS } from '../src/core/voice-resume.ts';
 import { estimatedTokens } from '../src/core/text-fragments.ts';
 import { claude } from '../src/adapters/claude/index.ts';
@@ -246,21 +246,23 @@ test('a fork asks only for storage, over WebSocket and WebRTC, and the Live clos
   rtc.abort('test done');
 });
 
-test("a wake resumes the paused session while its first instructions are the ones in force and its context has room", () => {
-  const page = (slide: number, total = '1.2 million') => `What the page "Since your feedback" says:\n## Header\nSince your feedback${slide} / 30\n## Cost\nStandby saved ${total} seconds of voice this month, about a quarter of it.`;
-  const record = { liveSessionId: 'live_1', stored: true, finalized: true, endedAt: Date.now() - 20000, turns: [{ role: 'operator' as const, text: 'Next.' }], prompt: 'aaa', firstInstructions: 'all1', pageText: page(12), context: .3 };
-  const now = { prompt: 'aaa', instructions: 'all1', pageText: page(12) };
-  assert.deepEqual(wakePlanFor(record, now), ['fork']);
-  assert.deepEqual(wakePlanFor(record, { ...now, pageText: page(13) }), ['fork'], 'the deck moved on a slide: its counter changed, nothing else');
-  assert.deepEqual(wakePlanFor(record, { ...now, pageText: undefined }), ['fork'], "a page that can't be read in time doesn't stop it");
-  assert.deepEqual(wakePlanFor(record, { ...now, pageText: page(12, '3.4 thousand') }), ['seed', 'the page changed'], 'its first instructions hold other words: a new session gets these');
-  assert.deepEqual(wakePlanFor(record, { ...now, pageText: '' }), ['seed', 'the page changed'], 'the page closed');
-  assert.deepEqual(wakePlanFor({ ...record, pageText: undefined }, { ...now, pageText: '' }), ['fork'], 'no page then, none now');
-  assert.deepEqual(wakePlanFor(record, { ...now, instructions: 'all2' }), ['seed', 'the instructions changed'], 'an instruction learned since would only be appended conversation in a fork');
-  assert.deepEqual(wakePlanFor({ ...record, context: .62 }, now), ['seed', 'its context reached 62%'], 'GPT Live compacts at 90%, keeping only the first instructions');
-  assert.deepEqual(wakePlanFor(record, now, true), ['seed', 'a fork failed lately']);
-  assert.deepEqual(wakePlanFor(record, { ...now, prompt: 'bbb' }), ['seed', 'not forkable'], "fdc's own instructions changed");
-  assert.deepEqual(wakePlanFor({ ...record, stored: false, turns: [] }, now), ['fresh', 'not forkable']);
+test("a wake resumes the paused session while fdc's own instructions are the ones it started with and its context has room", () => {
+  const record = { liveSessionId: 'live_1', stored: true, finalized: true, endedAt: Date.now() - 20000, turns: [{ role: 'operator' as const, text: 'Next.' }], prompt: 'aaa', context: .3 };
+  assert.deepEqual(wakePlanFor(record, 'aaa'), ['fork']);
+  assert.deepEqual(wakePlanFor({ ...record, context: .62 }, 'aaa'), ['seed', 'its context was 62% full'], 'a fork of a fuller context starts slower');
+  assert.deepEqual(wakePlanFor(record, 'aaa', true), ['seed', 'a fork failed lately']);
+  assert.deepEqual(wakePlanFor(record, 'bbb'), ['seed', 'not forkable'], "fdc's own instructions changed");
+  assert.deepEqual(wakePlanFor({ ...record, stored: false, turns: [] }, 'aaa'), ['fresh', 'not forkable']);
+});
+
+test('the page GPT Live was told is the same while only its counter or where the operator is changed', () => {
+  const told = (slide: number, total = '1.2 million', names = ['Header', 'Cost']) => JSON.stringify(['http://127.0.0.1:8765/since.html', names, [], `The page open beside the operator now: "Since your feedback". Its parts, by name: ${names.join(', ')}.\nHeader: Since your feedback ${slide} / 30\nCost: Standby saved ${total} seconds of voice this month.`]);
+  assert.equal(sameStage(told(12), told(13)), true, 'the deck moved on a slide: its counter changed, nothing else');
+  assert.equal(sameStage(told(12), told(12, '3.4 thousand')), false, 'its words changed');
+  assert.equal(sameStage(told(12), told(12, '1.2 million', ['Header', 'Cost', 'Wakes'])), false, 'a part was added');
+  assert.equal(sameStage(undefined, told(12)), false, 'never told');
+  assert.equal(sameStage('[]', '[]'), true, 'no page then, none now');
+  assert.equal(changedChars('abc12def', 'abc13def'), 1);
 });
 
 test("a session that started under other instructions of fdc's own is rebuilt from its text, not forked: a fork keeps its first instructions", () => {

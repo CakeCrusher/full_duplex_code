@@ -9,7 +9,7 @@ import { Mediator } from './mediator.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { startupHistory } from './startup-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
-import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, reconnectGreeting, resumeGreeting, stageBrief, stageOutline, stageText, standbyNews, standbyWake } from './prompts.ts';
+import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, standbyNews, standbyWake } from './prompts.ts';
 import { Stage, type StageView } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
@@ -31,6 +31,27 @@ export const STANDBY = 'Standby: the conversation was quiet';
 const WAKE_AGAIN_MS = 10000, WAKE_GIVE_UP_MS = 30000;
 /** A page's address without its query or fragment: a reload that busts the cache is the same page. */
 const address = (url: string) => url.replace(/[?#].*$/, '');
+/** What GPT Live was told when no page is on the stage. */
+const NO_PAGE = '[]';
+// A page's text changes a little as it is used (a deck's "12 / 30" counter): up to this many characters, it's the same page.
+const PAGE_CHANGED_CHARS = 8;
+/** How many characters differ between two texts, from their first difference to their last. */
+export function changedChars(a: string, b: string) {
+  let start = 0, end = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+  return Math.max(a.length, b.length) - start - end;
+}
+/** Whether GPT Live was told this page state already (pageFor's signatures): the same pages and parts, and nearly the same text. */
+export function sameStage(told: string | undefined, now: string) {
+  if (told === now) return true;
+  try { const [a, b] = [JSON.parse(told ?? ''), JSON.parse(now)]; return a.length === 4 && b.length === 4 && JSON.stringify(a.slice(0, 3)) === JSON.stringify(b.slice(0, 3)) && changedChars(a[3], b[3]) <= PAGE_CHANGED_CHARS; }
+  catch { return false; }
+}
+// GPT Live's context falls this much between two reports only when it trims it, past 90%, to its first instructions and
+// the latest conversation: in every run up to Oct 21, all 88 such falls were from .89-.94 to .07-.15, and no other fall
+// between two reports was more than .07.
+const TRIMMED = .5;
 const emptyRecord = (): ResumeRecord => ({ stored: false, finalized: false, turns: [] });
 const saved = ({ id, text, learned, learnedIn }: Instruction | SavedInstruction): SavedInstruction => ({ id, text, ...learned ? { learned, learnedIn } : {} });
 
@@ -38,11 +59,9 @@ const saved = ({ id, text, learned, learnedIn }: Instruction | SavedInstruction)
 interface Run {
   live: LiveSession; plan: ResumePlan; page?: Page; automatic: boolean; mediator: Mediator;
   record: ResumeRecord; recordId?: string;
-  /** The page on the stage GPT Live was last told about (its address and cue words), and the page whose text it was told. */
-  briefed?: string; told?: string;
-  /** What a new session started with: all its instructions (a hash) and the page text in them. */
-  firstInstructions?: string; pageText?: string;
-  /** How full GPT Live's context has been, since the first session a fork continues (GPT Live's reports). */
+  /** The page state GPT Live was last told (pageFor's signature). */
+  briefed?: string;
+  /** How full GPT Live's context is (its last report). */
   context?: number;
   /** The instructions it started with, those a fork inherited from its source, and those in force in it now (given and not countermanded). */
   startup: Instruction[]; inherited: SavedInstruction[]; inForce: Map<string, SavedInstruction>;
@@ -324,17 +343,15 @@ export class VoiceSessions {
     const record = this.current();
     // The operator starting voice: Jev looks at the settings again (a wake or reconnect is not the operator starting it).
     if (!wake && !automatic) bridge.tuneFromInstructions();
-    // A wake resumes the session it paused while that session's first instructions are still current and its context has
-    // room; otherwise it starts a new one with all of it, seeded with the conversation (wakePlanFor). A fork takes 1 to
-    // 8.5 s to start: the page holds the operator's words meanwhile and plays a waking sound.
-    const view = wake ? await this.stageNow() : undefined;
-    let [plan, seeded] = wake ? wakePlanFor(record, { prompt: this.prompt(), instructions: this.prompt(this.instructions()), pageText: view ? this.pageFor(view).text : bridge.stage.tabId ? undefined : '' }, Date.now() - this.wakeForkFailedAt < WAKE_FORK_BACKOFF_MS)
-      : [planFor(record, mode, this.prompt())];
+    // A wake resumes the session it paused while fdc's own instructions are the ones it started with and its context has
+    // room; otherwise it starts a new one, seeded with the conversation (wakePlanFor). A fork takes 1 to 8.5 s to start:
+    // the page holds the operator's words meanwhile and plays a waking sound.
+    let [plan, seeded] = wake ? wakePlanFor(record, this.prompt(), Date.now() - this.wakeForkFailedAt < WAKE_FORK_BACKOFF_MS) : [planFor(record, mode, this.prompt())];
     // Starting fresh after a drop: the speech it had not passed on goes to the agent now.
     if (plan === 'fresh' && !wake) this.handOffCarried();
     const requested = { at: Date.now(), plan, seeded };
     for (;;) {
-      const attempt: { live?: LiveSession; requested: Run['requested']; wake?: Wake; view?: StageView } = { requested, wake, view };
+      const attempt: { live?: LiveSession; requested: Run['requested']; wake?: Wake } = { requested, wake };
       try { return await this.connect(sdp as string | undefined, page, plan, automatic, attempt); }
       catch (error) {
         const live = attempt.live, message = (error as Error).message;
@@ -372,7 +389,7 @@ export class VoiceSessions {
       }
     }
   }
-  async connect(sdp: string | undefined, page: Page | undefined, plan: ResumePlan, automatic: boolean, attempt: { live?: LiveSession; requested?: Run['requested']; wake?: Wake; view?: StageView } = {}) {
+  async connect(sdp: string | undefined, page: Page | undefined, plan: ResumePlan, automatic: boolean, attempt: { live?: LiveSession; requested?: Run['requested']; wake?: Wake } = {}) {
     const bridge = this.bridge, { agent, observer, log, publish, fault, clean } = bridge, { name } = agent.profile;
     const record = this.current(), recordId = this.recordFor, sourceId = plan === 'fork' ? record.liveSessionId : undefined;
     // Waking, GPT Live is told at the start that the conversation continues, rather than by an append after it starts.
@@ -383,14 +400,15 @@ export class VoiceSessions {
     const wake = attempt.wake;
     const observations = plan === 'fork' ? bridge.adapter.history().filter(o => o.at > since) : wake ? bridge.adapter.history().filter(o => o.at <= wake.since) : bridge.adapter.history();
     const history = startupHistory(agent, observations, Math.max(0, 7600 - Buffer.byteLength(startup)));
-    let input = [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: startup }] }];
-    if (history.text) input.push({ type: 'message', role: 'user', content: [{ type: 'input_text', text: historyIntro(agent) + history.text }] });
-    if (plan === 'seed') input = seedInput(input, record.turns);
-    // The page on the stage goes in with the instructions it starts with: appended once it had started, it took GPT Live's
-    // timeline from the operator (after a wake, their first words reached it 6-25 s late, their beginning lost). A fork
-    // keeps its source's instructions and what it was told since, so it is told by appends only what changed.
-    const view = attempt.view ?? (plan === 'fork' ? undefined : await this.stageNow()), stage = plan === 'fork' ? undefined : view && this.pageFor(view), instructions = this.instructions();
-    const live: LiveSession = this.createLive({ apiKey: bridge.apiKey, budget: bridge.ledger, voice: bridge.voice, instructions: instructions + (stage ? `${stage.text ? `\n\n${stage.text}` : ''}\n\n${stage.brief}` : ''), label: `${name} ${bridge.sessionId ?? 'session'}`,
+    // A new session starts knowing the page on the stage, last in its startup input: appended once it had started, the page
+    // took GPT Live's timeline from the operator (after a wake, their first words reached it 6-25 s late, their beginning
+    // lost). A fork has what its source was told, and is told what changed since by an append (brief).
+    const view = plan === 'fork' ? undefined : await this.stageNow(), seen = view && this.pageFor(view);
+    const message = (role: 'developer' | 'user', text: string) => ({ type: 'message', role, content: [{ type: 'input_text', text }] });
+    let input = [message('developer', startup), ...history.text ? [message('user', historyIntro(agent) + history.text)] : []];
+    const now = seen ? [message('developer', seen.state)] : [];
+    input = plan === 'seed' ? seedInput(input, record.turns, now) : [...input, ...now];
+    const live: LiveSession = this.createLive({ apiKey: bridge.apiKey, budget: bridge.ledger, voice: bridge.voice, instructions: this.instructions(), label: `${name} ${bridge.sessionId ?? 'session'}`,
       input: plan === 'fork' ? [] : input, store: this.store, fork: sourceId, log: event => log({ liveRun: live.reservation, ...event }) });
     attempt.live = live;
     this.audit?.close(); this.audit = null; this.failed = undefined;
@@ -401,11 +419,9 @@ export class VoiceSessions {
       learner: bridge.learner, audit: bridge.handOffAudit, gate: bridge.handOffAudit ? (said, id, earlier, companion, cued) => bridge.sessionSwitch.gate(said, id, earlier, companion, cued) : undefined, onSaid: said => bridge.tuneFromInstructions(said),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake };
-    // A fork knows what its source was told; woken, it holds the page as it is now (wakePlanFor), so isn't told it again: a
-    // deck's parts name its current slide, and a brief appended as the operator's held words went in lost their first ones.
-    if (plan === 'fork') Object.assign(run, { context: record.context }, wake && view ? { briefed: this.pageFor(view).signature, told: address(view.url) } : { briefed: record.briefed, told: record.told });
-    else Object.assign(run, { firstInstructions: this.prompt(instructions), pageText: stage?.text ?? '', ...stage ? { briefed: stage.signature, told: address(view!.url) } : {} });
-    if (view) this.bridge.presenter.speechCues.set(Stage.cues(view));
+    // A fork knows the page state its source was told, and how full its context is; a new session, the page it starts with.
+    Object.assign(run, plan === 'fork' ? { briefed: record.briefed, context: record.context } : { briefed: seen?.signature ?? NO_PAGE });
+    if (seen) this.bridge.presenter.speechCues.set(seen.cues);
     // A dropped or moved session's unsent speech: this session takes it if it starts; meanwhile it isn't handed off.
     // The copies are now the ones to carry or hand off: if this connection fails to start, they go on from here.
     if (this.carried) { clearTimeout(this.carried.timer); mediator.history.carry(this.carried.mediator.history); this.carried.mediator = mediator; }
@@ -441,42 +457,51 @@ export class VoiceSessions {
     void this.briefStage(run);
   }
   /**
-   * GPT Live learns the page on the stage: the words that move it as it talks, and what it says.
-   * Once per page per session, again when the page or its parts change.
+   * GPT Live learns the page on the stage: the words that move it as it talks, and what it says, in one message that
+   * replaces the last (pageState). Whenever the page, its parts or the set of open pages changes (a page rebuilt at the
+   * same address included), and with `again` when GPT Live may have lost it (its context was trimmed).
    */
-  async briefStage(run = this.run, attempt = 0) {
+  async briefStage(run = this.run, attempt = 0, again = false) {
     // Whatever goes wrong here (a page's odd data, a closed session) is logged, never thrown: callers don't wait.
     try {
       // A page that can't be read yet (a new tab's blank page while the agent's code navigates it) is read again shortly.
-      if (await this.brief(run) === false && attempt < 5) setTimeout(() => void this.briefStage(run, attempt + 1), 1500).unref();
+      if (await this.brief(run, again) === false && attempt < 5) setTimeout(() => void this.briefStage(run, attempt + 1, again), 1500).unref();
     } catch (error) { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); }
   }
   /** Resolves to false when the page couldn't be read. */
-  async brief(run = this.run): Promise<boolean | void> {
-    const live = run?.live;
+  async brief(run = this.run, again = false): Promise<boolean | void> {
+    const live = run?.live, stage = this.bridge.stage;
     if (!run || !live || live.state !== 'active' || this.live !== live) return;
-    const view = await this.bridge.stage.describe(0).catch(error => { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; });
-    if (!view) return false;
+    const view = await stage.describe(0).catch(error => { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); return null; });
+    // Still on stage but unreadable: read again. Gone (closed, or never shown): GPT Live hears there is no page.
+    if (view === null && stage.tabId) return false;
     if (live.state !== 'active') return;
-    const stage = this.pageFor(view);
-    this.bridge.presenter.speechCues.set(stage.cues);
-    // A page new to this session is told in short, through the same queue as the agent's work (it waits while the operator
-    // talks): appended in full (5,000 tokens on the Jev page), it took GPT Live's timeline and lost the operator's words said
-    // meanwhile. The next session starts with all of it.
-    if (run.told !== address(view.url) && view.parts.length) { run.told = address(view.url); run.mediator.context.add('thinking', stageOutline(view.title, view.parts)); }
-    // A reload (often with a new query to bust the cache) is the same page unless its parts changed. The brief follows the
-    // text through the same queue (in pieces under GPT Live's 500 tokens an append), so where the operator is comes last.
-    if (run.briefed === stage.signature) return;
-    run.briefed = stage.signature;
-    this.bridge.log({ type: 'stage.briefed', url: view.url, names: stage.cues.filter(c => c.listed).map(c => c.label), parts: view.parts.length });
-    run.mediator.context.add('instructions', stage.brief);
+    const seen = view && this.pageFor(view);
+    if (seen) this.bridge.presenter.speechCues.set(seen.cues);
+    if (!again && sameStage(run.briefed, seen?.signature ?? NO_PAGE)) return;
+    run.briefed = seen?.signature ?? NO_PAGE;
+    this.bridge.log({ type: 'stage.briefed', url: view?.url ?? null, names: seen?.cues.filter(c => c.listed).map(c => c.label) ?? [], parts: view?.parts.length ?? 0, again: again || undefined });
+    // Through the same queue as the agent's work: it waits while the operator talks.
+    run.mediator.context.add('thinking', seen?.state ?? pageState());
   }
-  /** What GPT Live is told of the page on the stage: where it is and its parts' names (speech cues), and what it says. */
+  /** What GPT Live is told of the page on the stage (pageState), the words that move it (speech cues), and what it was told, to compare. */
   pageFor(view: StageView) {
     // Every part the voice can name, up to the stage script's own cap on a page's commands (80).
     const cues = Stage.cues(view), names = cues.filter(c => c.listed).map(c => c.label).slice(0, 80);
     const others = [...this.bridge.stage.pages].filter(([tabId]) => tabId !== view.tabId).map(([, page]) => page.title);
-    return { cues, signature: JSON.stringify([address(view.url), names, others]), brief: stageBrief(view.title, names, others, view.where), text: view.parts.length ? stageText(view.title, view.parts) : '' };
+    const state = pageState({ title: view.title, names, others, parts: view.parts, where: view.where });
+    // Where the operator is changes with every move, and they hear of each move: it's no change to the page.
+    return { cues, state, signature: JSON.stringify([address(view.url), names, others, state.replace(/\nWhen you were told this, [^]*$/, '')]) };
+  }
+  /**
+   * GPT Live trimmed its context: past 90% it keeps its first instructions and the latest 8,192 tokens of the conversation,
+   * so what it was told in the conversation since may be gone. It is told the page again, and the operator's instructions in
+   * force that its first instructions don't hold (a fork's first are its source chain's, so all of them).
+   */
+  retell(run: Run) {
+    void this.briefStage(run, 0, true);
+    const first = new Set(run.plan === 'fork' ? [] : run.startup.map(item => item.id));
+    for (const item of run.inForce.values()) if (!first.has(item.id)) run.mediator.context.add('instructions', item.text);
   }
   /** The page on the stage, if it can be read quickly: a voice starting doesn't wait long for it. */
   async stageNow(): Promise<StageView | undefined> {
@@ -508,9 +533,12 @@ export class VoiceSessions {
     // ...and to the first words it says.
     if (event.type === 'session.output_transcript.delta' && !run.spoke) { run.spoke = true; this.bridge.log({ type: 'voice.first_words', plan: run.plan, automatic: run.automatic, firstWordsMs: Date.now() - run.requested.at }); }
     // Live reports usage about every 15 seconds; the last few minutes of it are enough for the meters. How full the context
-    // has been is kept for a fork of this session (wakePlanFor).
+    // is, for a fork of this session (wakePlanFor); a sharp fall is GPT Live trimming it (retell).
     const usage = this.usage, ratio = event.context_window?.usage_ratio;
-    if (event.type === 'session.usage.updated' && Number.isFinite(ratio)) run.context = Math.max(run.context ?? 0, ratio);
+    if (event.type === 'session.usage.updated' && Number.isFinite(ratio)) {
+      if ((run.context ?? 0) - ratio >= TRIMMED) { this.bridge.log({ type: 'voice.trimmed', from: run.context, to: ratio }); this.retell(run); }
+      run.context = ratio;
+    }
     if (event.type === 'session.usage.updated' && usage && usage.voiceSessionId === live.id) {
       if (Number.isFinite(ratio)) { usage.ratio = ratio; usage.points = [...usage.points.slice(-39), [Date.now(), ratio]]; }
       usage.seconds = event.usage?.seconds ?? usage.seconds;
@@ -528,8 +556,8 @@ export class VoiceSessions {
     for (const item of this.additionalInstructions) if (run.inForce.has(item.id)) Object.assign(item, { state: 'acknowledged', sessionId: live.id, acknowledgedAt: Date.now(), error: undefined, appended: false });
     if (plan === 'fresh') record.turns = [];
     Object.assign(record, { liveSessionId: live.id, stored: live.stored, finalized: false, endedAt: undefined, deliveredThrough: undefined });
-    // A fork started with its source's instructions, and the page text in them; anything else with today's.
-    if (plan !== 'fork') Object.assign(record, { prompt: this.prompt(), firstInstructions: run.firstInstructions, pageText: run.pageText });
+    // A fork started with its source's instructions; anything else with today's.
+    if (plan !== 'fork') record.prompt = this.prompt();
     this.noteInForce(run);
     this.audit = new AudioAudit({ dir: path.join(bridge.runDir, 'audio', live.reservation!), log: event => log({ liveRun: live.reservation, ...event }), onError: error => fault(error) });
     this.usage = { voiceSessionId: live.id!, startedAt: live.startedAt ?? Date.now(), seconds: 0, ratio: null, points: [] };
@@ -550,8 +578,8 @@ export class VoiceSessions {
     const undelivered = Math.min(...mediator.feed.pending.map(record => record.at), mediator.context.undeliveredSince() ?? Infinity);
     record.turns.push(...mediator.history.turns());
     record.inForce = [...run.inForce.values()];
-    // What a fork of it would know of the page, and how full its context has been.
-    Object.assign(record, { told: run.told, briefed: run.briefed, context: run.context, finalized: result.finalized, endedAt: Date.now(), deliveredThrough: Number.isFinite(undelivered) ? undelivered - 1 : Date.now(), lastRecordId: mediator.feed.projector.sequence });
+    // What a fork of it would know of the page, and how full its context is.
+    Object.assign(record, { briefed: run.briefed, context: run.context, finalized: result.finalized, endedAt: Date.now(), deliveredThrough: Number.isFinite(undelivered) ? undelivered - 1 : Date.now(), lastRecordId: mediator.feed.projector.sequence });
     this.saveRun(run);
     // Ended without anyone asking (dropped, closed by GPT Live, or its media stalled): resume on the same page, a limited number of times.
     // Ended for Standby: voice stays on, and the page keeps listening.

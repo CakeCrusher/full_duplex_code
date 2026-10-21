@@ -94,11 +94,11 @@ test("GPT Live is briefed on the page once it can be read: a new tab's blank pag
   const { h, lives } = await harness(t);
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   let reads = 0;
-  h.stage.describe = (async () => { if (reads++ === 0) throw new Error('javascript_tool failed: Cannot access a chrome:// URL'); return view; }) as any;
+  h.stage.tabId = 1; h.stage.describe = (async () => { if (reads++ === 0) throw new Error('javascript_tool failed: Cannot access a chrome:// URL'); return view; }) as any;
   await h.voiceSessions.briefStage();
-  assert.ok(!lives[0].appended.some(([kind, text]) => kind === 'instructions' && /is open beside you/.test(text)), 'not yet');
+  assert.ok(!lives[0].appended.some(([, text]) => /The page open beside the operator now/.test(text)), 'not yet');
   await new Promise(resolve => setTimeout(resolve, 1700));
-  assert.ok(lives[0].appended.some(([kind, text]) => kind === 'instructions' && /The page "Deck" is open beside you/.test(text)), 'briefed on the second read');
+  assert.ok(lives[0].appended.some(([kind, text]) => kind === 'thinking' && /The page open beside the operator now \(this replaces any page you were told about before\): "Deck"/.test(text)), 'briefed on the second read');
   assert.ok(reads >= 2);
 });
 

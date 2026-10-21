@@ -61,45 +61,54 @@ test('speech wakes it, priced like everything else, and the paused session resum
   assert.deepEqual(lives[1].appended, [], 'the operator speaking is the cue: nothing is added or said first');
 });
 
-test("a wake starts a new session with the page in it when the paused one doesn't hold the page as it is now; once it does, wakes resume it", async t => {
+const PLAN = { tabId: 1, title: 'Plan', url: 'http://127.0.0.1:8765/plan.html', about: null, where: 'Goals', commands: [], parts: [{ name: 'Goals', text: 'Ship the dark mode toggle by Friday.' }] };
+const toldPage = (live: Live) => live.appended.filter(([kind, text]) => kind === 'thinking' && /The page open beside the operator now/.test(text)).map(([, text]) => text);
+
+test('a wake resumes the paused session whatever the page did meanwhile: the fork is told the page as it is now, once', async t => {
   const { h, lives, goQuiet } = await quiet(t);
-  const view = { tabId: 1, title: 'Plan', url: 'http://127.0.0.1:8765/plan.html', about: null, where: 'Goals', commands: [], parts: [{ name: 'Goals', text: 'Ship the dark mode toggle by Friday.' }] };
-  // The agent opened a page while voice was paused: the paused session never had its text.
-  h.voiceSessions.stageNow = async () => view;
+  // The agent opened a page while voice was paused: the paused session was never told of it.
+  h.stage.tabId = 1; h.stage.describe = async () => PLAN;
   await goQuiet();
   const wake = async (n: number) => { speak(h, 10); h.voiceSessions.checkStandby(); await h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true); await until(() => lives[n]?.state === 'active'); };
   await wake(1);
-  assert.equal(lives[1].options.fork, undefined, 'not a fork: a fork keeps its source\'s first instructions, without this page');
-  assert.ok(lives[1].options.instructions.includes('Ship the dark mode toggle by Friday.'), 'the page in it from its start');
-  assert.ok(lives[1].options.input.some((item: any) => item.role === 'user' && /dark mode/.test(item.content[0].text)), 'seeded with the conversation');
-  // Told at the start, not by an append: appends right after a wake took GPT Live's timeline from the operator's words.
-  assert.ok(lives[1].options.input.some((item: any) => item.role === 'developer' && /The conversation continues.*Don't greet.*Sound from the operator woke it.*If no words of theirs arrive, say nothing/s.test(item.content[0].text)), 'told why in its startup input');
-  const starting = fs.readFileSync(`${h.runDir}/events.jsonl`, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(e => e.type === 'voice.starting').at(-1);
-  assert.equal(starting.seeded, 'the page changed', 'logged why it did not resume');
+  assert.equal(lives[1].options.fork, lives[0].id, 'a fork: the page is told in the conversation, never in its instructions');
+  await until(() => toldPage(lives[1]).length === 1);
+  assert.match(toldPage(lives[1])[0], /"Plan".*Goals: Ship the dark mode toggle by Friday\./s);
   // Quiet again, the page as it was: the next wake resumes, and the page isn't told again.
   h.voiceSessions.checkStandby(later(WINDOW + 500)); await until(() => lives[1].state === 'closed');
   await wake(2);
   assert.equal(lives[2].options.fork, lives[1].id);
-  await new Promise(resolve => setTimeout(resolve, 50));
-  assert.deepEqual(lives[2].appended, [], 'it knows the page: nothing added');
+  await settle(50);
+  assert.deepEqual(toldPage(lives[2]), [], 'it knows the page: nothing added');
 });
 
-test('a wake starts afresh, all its instructions in its startup, after one was learned or once the context is past 60%; the next one resumes', async t => {
+test('an instruction learned before a wake rides along in the fork; a trim of GPT Live\'s context makes fdc tell it the page and the instructions again; past 60% full, a wake seeds, the page last in its startup input', async t => {
   const { h, lives, goQuiet } = await quiet(t);
+  h.stage.tabId = 1; h.stage.describe = async () => PLAN;
   const wake = async (n: number) => { speak(h, 10); h.voiceSessions.checkStandby(); await h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true); await until(() => lives[n]?.state === 'active'); };
   const sleep = async (n: number) => { h.voiceSessions.checkStandby(later(WINDOW + 500)); await until(() => lives[n].state === 'closed'); };
+  const usage = (live: Live, ratio: number) => live.emit('event', { type: 'session.usage.updated', usage: { seconds: 40 }, context_window: { usage_ratio: ratio } });
   await learn(h, 'Keep answers under two sentences.');
   await goQuiet(); await wake(1);
-  assert.equal(lives[1].options.fork, undefined, 'a fork would hold it only as appended conversation, which a later instruction can displace');
-  assert.match(lives[1].options.instructions, /I1: Keep answers under two sentences/);
+  assert.equal(lives[1].options.fork, lives[0].id, 'the instruction it was told carries over');
+  await until(() => toldPage(lives[1]).length === 1);
+  assert.ok(!lives[1].appended.some(([kind, text]) => kind === 'instructions' && /I1:/.test(text)), 'not told again');
+  // Past 90%, GPT Live keeps its first instructions and the latest 8,192 tokens of the conversation.
+  usage(lives[1], .9); usage(lives[1], .12);
+  await until(() => lives[1].appended.some(([kind, text]) => kind === 'instructions' && /^I1: Keep answers under two sentences/.test(text)));
+  await until(() => toldPage(lives[1]).length === 2);
+  usage(lives[1], .65);
   await sleep(1); await wake(2);
-  assert.equal(lives[2].options.fork, lives[1].id, 'its instructions are the ones in force: it resumes');
-  // GPT Live compacts a conversation at 90%, keeping only its first instructions and about 8,000 tokens of the rest.
-  lives[2].emit('event', { type: 'session.usage.updated', usage: { seconds: 40 }, context_window: { usage_ratio: .65 } });
+  assert.equal(lives[2].options.fork, undefined, 'past 60%: a seeded session, which starts faster');
+  assert.match(lives[2].options.instructions, /I1: Keep answers under two sentences/);
+  assert.ok(!lives[2].options.instructions.includes('dark mode toggle'), 'no page in its instructions');
+  const last = lives[2].options.input.at(-1);
+  assert.ok(last.role === 'developer' && /The page open beside the operator now.*"Plan"/s.test(last.content[0].text), 'the page last in its startup input');
+  assert.ok(lives[2].options.input.some((item: any) => item.role === 'user' && /dark mode/.test(item.content[0].text)), 'seeded with the conversation');
+  await settle(50);
+  assert.deepEqual(toldPage(lives[2]), [], 'it started with the page: nothing added');
   await sleep(2); await wake(3);
-  assert.equal(lives[3].options.fork, undefined, 'past 60%: afresh');
-  await sleep(3); await wake(4);
-  assert.equal(lives[4].options.fork, lives[3].id);
+  assert.equal(lives[3].options.fork, lives[2].id);
 });
 
 test("a wake's fork that never starts gives way to a seeded session on the same microphone, and wakes seed for a while after", async t => {

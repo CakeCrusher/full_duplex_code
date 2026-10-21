@@ -59,8 +59,9 @@ window.fdcController = {
 };
 ```
 
-The controller only moves the page. What the voice knows of the page is the page's own text, all of it,
-hidden slides and tabs included: to let it explain something, put it on the page, never in the controller.
+The controller only moves the page. What the voice knows of the page comes from the page's own text, hidden slides and
+tabs included: each part in short, and what is on screen whenever the page moves. To let it explain something, put it on
+the page, never in the controller.
 
 Rules that make it work well:
 
