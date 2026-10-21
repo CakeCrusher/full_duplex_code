@@ -290,7 +290,7 @@ test('additional instructions preserve the base, show exact text, and wait for a
   const h = await fixture(t);
   await h.appendInstruction('Explain unfamiliar terms.');
   assert.equal(h.status().prompt.additional[0].state, 'next_session');
-  assert.match(h.status().prompt.instructions, /Conversation priority:/);
+  assert.match(h.status().prompt.instructions, /Delegation policy:/);
   assert.match(h.status().prompt.instructions, /Explain unfamiliar terms\./);
   let resolve!: (value?: unknown) => void, reject!: (error: Error) => void; const sent: { kind: string; text: string }[]=[];
   const live: any=h.live={id:'one',state:'active',instructions:h.instructions(),append:(kind: string,text: string)=>{
