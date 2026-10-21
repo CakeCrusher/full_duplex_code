@@ -44,7 +44,7 @@ class DuplexAudio extends AudioWorkletProcessor {
     this.port.onmessage = ({ data }) => {
       if (data.type === 'hold') { this.holding = true; this.keepAll = false; this.replaying = false; this.held = []; this.heldSamples = 0; this.auditSession = null; }
       if (data.type === 'wake') { this.keepAll = true; this.fromSpan(); }
-      if (data.type === 'replay') { this.holding = false; this.replaying = this.held.length > 0; }
+      if (data.type === 'replay') { this.holding = false; this.replaying = this.held.length > 0; if (!this.replaying) this.port.postMessage({ type: 'replayed' }); }
       if (data.type === 'mute') { this.muted = data.muted; if (this.muted) this.gateHoldSamples = 0; }
       if (data.type === 'audit_start') { this.auditSession = data.sessionId; this.auditOffset = 0; }
       if (data.type === 'gate' && Number.isFinite(data.threshold) && data.threshold >= 0 && data.threshold <= .05) {
@@ -106,7 +106,7 @@ class DuplexAudio extends AudioWorkletProcessor {
         while (this.held.length > 1 && this.held[0].every(x => x === 0)) this.heldSamples -= this.held.shift()!.length;
         const next = this.held.shift()!; this.heldSamples -= next.length;
         microphoneOutput.set(next.subarray(0, microphoneOutput.length));
-        if (!this.held.length) this.replaying = false;
+        if (!this.held.length) { this.replaying = false; this.port.postMessage({ type: 'replayed' }); }
       }
     }
     this.levelSamples += output.length;
@@ -122,9 +122,10 @@ class DuplexAudio extends AudioWorkletProcessor {
       this.auditOffset += output.length;
     }
     if (++this.ticks % 20 === 0) {
+      // backlogMs: held audio still going out ahead of the live microphone, the operator's words GPT Live hasn't heard yet.
       this.port.postMessage({ type: 'level', rms: Math.sqrt(this.inputPower / this.levelSamples), outputRms: Math.sqrt(this.outputPower / this.levelSamples),
         rawRms: Math.sqrt(this.rawInputPower / this.levelSamples), gateThreshold: this.gateThreshold, voiced: this.windows ? this.voicedWindows / this.windows : 0,
-        durationMs: this.levelSamples / sampleRate * 1000, endTime: currentTime + output.length / sampleRate });
+        durationMs: this.levelSamples / sampleRate * 1000, endTime: currentTime + output.length / sampleRate, backlogMs: this.replaying ? this.heldSamples / sampleRate * 1000 : 0 });
       this.inputPower = 0; this.outputPower = 0; this.rawInputPower = 0; this.levelSamples = 0; this.windows = 0; this.voicedWindows = 0;
     }
     return true;

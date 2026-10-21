@@ -20,6 +20,8 @@ let active = false, starting = false, muted = false, currentStatus: BridgeEvent 
 // On Standby: GPT Live is disconnected while the conversation is quiet, and this page keeps its microphone
 // open, held, so the operator's speech (or the agent's news, through the bridge) can wake voice.
 let standby = false, waking = false;
+// Woken: until the operator's held words have gone in, the waking sound goes on.
+let loading: ReturnType<typeof setTimeout> | undefined;
 let voiceSessionId: string | null = null;
 let generation = 0;
 // The audit copy pauses while the bridge connection is backlogged, and how many packets it dropped.
@@ -39,7 +41,8 @@ import('./settings-panel.js').then(module => { settingsPanel = module.mountSetti
 function handle(event: BridgeEvent) {
   timeline.handle(event); meters.handle(event);
   const cue = cues.cue(event, { replaying });
-  if (cue) cuePlayer.play(cue);
+  // Woken, the start cue waits for the operator's held words to go in (loaded()).
+  if (cue && !(cue === 'start' && waking)) cuePlayer.play(cue);
   if (event.type === 'page') pageId = event.id;
   if (event.type === 'status') {
     currentStatus = event;
@@ -71,13 +74,15 @@ function handle(event: BridgeEvent) {
     voiceSessionId = event.sessionId;
     audio.auditStart(event.sessionId);
     const woke = waking;
-    active = true; starting = false; standby = false; waking = false; cuePlayer.waking(false);
-    if (woke) replayWhenConnected(); else notice(event.automatic ? 'Reconnected. The conversation continues.' : '');
+    active = true; starting = false; standby = false; waking = false;
+    if (woke) { loading = setTimeout(() => loaded(true), 20000); replayWhenConnected(); } else notice(event.automatic ? 'Reconnected. The conversation continues.' : '');
     $<HTMLButtonElement>('mute').disabled = false; $<HTMLButtonElement>('stop').disabled = false; $('audioState').textContent = 'Microphone on';
   }
   if (event.type === 'voice_closed') {
     // Quiet: voice goes on Standby, and this page keeps listening.
     if (event.standby && (active || starting)) { pause(); return; }
+    // Waking, a resumed session that never started: start again on the same microphone, the operator's held words kept.
+    if (event.waking && waking) { peer.close(); starting = false; start('resume', true, false, true); return; }
     releaseAudio();
     // Voice that ended on its own resumes by itself, a limited number of times.
     if (event.reconnect) { notice(`Voice dropped (${event.reason}). Reconnecting…`); start('resume', true); return; }
@@ -196,11 +201,13 @@ function measured(data: WorkletMessage) {
       at: audio.audioEpoch + data.startTime * 1000, pcm: btoa(String.fromCharCode(...new Uint8Array(data.pcm))),
       microphone: data.microphone ? btoa(String.fromCharCode(...new Uint8Array(data.microphone))) : undefined });
   }
+  // Woken: the held words have all gone out (or GPT Live is already answering).
+  if (data.type === 'replayed' || data.type === 'level' && loading && data.outputRms > .003) loaded(data.type === 'replayed');
   if (data.type === 'level') {
     $<HTMLMeterElement>('level').value = Math.min(1, (data.rawRms ?? data.rms) * 5);
     $('gate-state').textContent = standby ? muted ? 'Muted' : data.rms > 0 ? 'Standby · speech wakes voice' : 'Standby · listening here' : !active ? 'Waiting for Live' : muted ? 'Muted' : data.rms > 0 ? 'Passing audio to Live' : 'Gate closed · sending silence';
     // On Standby too: the bridge hears the operator start speaking from these.
-    if (bridge.open && (active || standby)) bridge.send({ type: 'audio_level', at: audio.audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, voiced: data.voiced, outputRms: data.outputRms });
+    if (bridge.open && (active || standby)) bridge.send({ type: 'audio_level', at: audio.audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, voiced: data.voiced, outputRms: data.outputRms, backlogMs: data.backlogMs });
   }
 }
 async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false, asked = false, fromStandby = false) {
@@ -242,7 +249,7 @@ async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false, aske
 }
 // GPT Live has disconnected; the microphone stays open and is held for the next connection.
 function pause() {
-  voiceSessionId = null; active = false; starting = false; standby = true; waking = false;
+  voiceSessionId = null; active = false; starting = false; standby = true; waking = false; loaded(false);
   peer.close(); audio.hold();
   $('audioState').textContent = 'Standby · listening here';
   if (currentStatus) handle(currentStatus);
@@ -254,13 +261,19 @@ function wake() {
   $('audioState').textContent = 'Waking…';
   start('resume', true, false, true);
 }
+// The held words have gone in: the start cue (none if GPT Live answered first, or voice ended).
+function loaded(cue: boolean) {
+  if (!loading) return;
+  clearTimeout(loading); loading = undefined; cuePlayer.waking(false);
+  if (cue) cuePlayer.play('start');
+}
 // The held audio goes out once the new connection carries media, ahead of the live microphone.
 async function replayWhenConnected() {
   for (let i = 0; i < 100 && peer.connection && peer.connection.connectionState !== 'connected'; i++) await new Promise(resolve => setTimeout(resolve, 50));
   audio.replay();
 }
 function releaseAudio() {
-  voiceSessionId = null; standby = false; waking = false; cuePlayer.waking(false);
+  voiceSessionId = null; standby = false; waking = false; cuePlayer.waking(false); loaded(false);
   if (audio.node && bridge.open) bridge.send({ type: 'audio_stopped' });
   generation++;
   active = false; starting = false; audio.stopCapture();

@@ -133,7 +133,8 @@ export class Mediator {
     this.onSaid?.(said);
   }
   /** The microphone level of the page this voice session listens to. */
-  hear(level: MicrophoneLevel) { if (operatorSpeaking(level)) this.floor.hear(); }
+  // The operator's held words still going out after a wake count as their talking: GPT Live is hearing them now.
+  hear(level: MicrophoneLevel) { if (operatorSpeaking(level) || level.backlogMs! > 0) this.floor.hear(); }
   schedule(fn: () => void, ms: number) { const timer = setTimeout(() => { this.timers.delete(timer); fn(); }, ms); this.timers.add(timer); }
   delegate(delegationId: string, offsetMs: number) {
     if (this.live.state !== 'active') return;

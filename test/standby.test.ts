@@ -10,7 +10,7 @@ import { Timeline } from '../src/core/timeline.ts';
 import { stripTypes } from '../src/core/page.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { CueTracker } from '../web/cues.ts';
-import { harness, page, settle, until } from './live-fake.ts';
+import { harness, learn, Live, page, settle, until } from './live-fake.ts';
 
 const WINDOW = 2000;
 // The operator speaking for about this long, as the page's level reports (0.1 s each) say.
@@ -44,7 +44,7 @@ test('a quiet conversation goes on Standby: GPT Live closes, voice stays on, and
   assert.equal(lives.length, 1);
 });
 
-test('speech wakes it, priced like everything else; the new session is seeded, not greeted, and told why', async t => {
+test('speech wakes it, priced like everything else, and the paused session resumes: a fork, not greeted, with nothing added first', async t => {
   const { h, lives, sent, goQuiet } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30 } });
   await goQuiet();
   speak(h, 2); h.voiceSessions.checkStandby();
@@ -54,13 +54,87 @@ test('speech wakes it, priced like everything else; the new session is seeded, n
   // The page reconnects on the same microphone.
   await h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true);
   await until(() => lives[1]?.state === 'active' && !h.status().standby);
-  assert.equal(lives[1].options.fork, undefined, 'never a slow fork');
-  assert.ok(lives[1].options.input.some((item: any) => item.role === 'user' && /dark mode/.test(item.content[0].text)), 'seeded with the conversation');
+  assert.equal(lives[1].options.fork, lives[0].id, 'a fork of the paused session: GPT Live keeps everything it had');
   assert.equal(lives[1].greeting, undefined, 'no greeting');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  // Appends right after a wake took GPT Live's timeline from the operator's words.
+  assert.deepEqual(lives[1].appended, [], 'the operator speaking is the cue: nothing is added or said first');
+});
+
+test("a wake starts a new session with the page in it when the paused one doesn't hold the page as it is now; once it does, wakes resume it", async t => {
+  const { h, lives, goQuiet } = await quiet(t);
+  const view = { tabId: 1, title: 'Plan', url: 'http://127.0.0.1:8765/plan.html', about: null, where: 'Goals', commands: [], parts: [{ name: 'Goals', text: 'Ship the dark mode toggle by Friday.' }] };
+  // The agent opened a page while voice was paused: the paused session never had its text.
+  h.voiceSessions.stageNow = async () => view;
+  await goQuiet();
+  const wake = async (n: number) => { speak(h, 10); h.voiceSessions.checkStandby(); await h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true); await until(() => lives[n]?.state === 'active'); };
+  await wake(1);
+  assert.equal(lives[1].options.fork, undefined, 'not a fork: a fork keeps its source\'s first instructions, without this page');
+  assert.ok(lives[1].options.instructions.includes('Ship the dark mode toggle by Friday.'), 'the page in it from its start');
+  assert.ok(lives[1].options.input.some((item: any) => item.role === 'user' && /dark mode/.test(item.content[0].text)), 'seeded with the conversation');
   // Told at the start, not by an append: appends right after a wake took GPT Live's timeline from the operator's words.
   assert.ok(lives[1].options.input.some((item: any) => item.role === 'developer' && /The conversation continues.*Don't greet.*Sound from the operator woke it.*If no words of theirs arrive, say nothing/s.test(item.content[0].text)), 'told why in its startup input');
+  const starting = fs.readFileSync(`${h.runDir}/events.jsonl`, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(e => e.type === 'voice.starting').at(-1);
+  assert.equal(starting.seeded, 'the page changed', 'logged why it did not resume');
+  // Quiet again, the page as it was: the next wake resumes, and the page isn't told again.
+  h.voiceSessions.checkStandby(later(WINDOW + 500)); await until(() => lives[1].state === 'closed');
+  await wake(2);
+  assert.equal(lives[2].options.fork, lives[1].id);
   await new Promise(resolve => setTimeout(resolve, 50));
-  assert.deepEqual(lives[1].appended, [], 'the operator speaking is the cue: nothing is added or said first');
+  assert.deepEqual(lives[2].appended, [], 'it knows the page: nothing added');
+});
+
+test('a wake starts afresh, all its instructions in its startup, after one was learned or once the context is past 60%; the next one resumes', async t => {
+  const { h, lives, goQuiet } = await quiet(t);
+  const wake = async (n: number) => { speak(h, 10); h.voiceSessions.checkStandby(); await h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true); await until(() => lives[n]?.state === 'active'); };
+  const sleep = async (n: number) => { h.voiceSessions.checkStandby(later(WINDOW + 500)); await until(() => lives[n].state === 'closed'); };
+  await learn(h, 'Keep answers under two sentences.');
+  await goQuiet(); await wake(1);
+  assert.equal(lives[1].options.fork, undefined, 'a fork would hold it only as appended conversation, which a later instruction can displace');
+  assert.match(lives[1].options.instructions, /I1: Keep answers under two sentences/);
+  await sleep(1); await wake(2);
+  assert.equal(lives[2].options.fork, lives[1].id, 'its instructions are the ones in force: it resumes');
+  // GPT Live compacts a conversation at 90%, keeping only its first instructions and about 8,000 tokens of the rest.
+  lives[2].emit('event', { type: 'session.usage.updated', usage: { seconds: 40 }, context_window: { usage_ratio: .65 } });
+  await sleep(2); await wake(3);
+  assert.equal(lives[3].options.fork, undefined, 'past 60%: afresh');
+  await sleep(3); await wake(4);
+  assert.equal(lives[4].options.fork, lives[3].id);
+});
+
+test("a wake's fork that never starts gives way to a seeded session on the same microphone, and wakes seed for a while after", async t => {
+  const { h, lives, sent, goQuiet } = await quiet(t);
+  await goQuiet();
+  // OpenAI answers the fork but never starts it.
+  Live.deferStart.add('1');
+  speak(h, 10); h.voiceSessions.checkStandby();
+  const starting = h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true);
+  await until(() => lives[1]?.state === 'connecting');
+  assert.equal(lives[1].options.fork, lives[0].id);
+  lives[1].answered = true; lives[1].abort('session startup timed out');
+  await starting;
+  const closed = sent('voice_closed').at(-1);
+  assert.deepEqual([closed.reconnect, closed.waking], [true, true], 'the page starts again, still waking, and keeps the words it holds');
+  assert.ok(h.status().standby, 'voice is still waking from Standby');
+  assert.equal(new CueTracker().cue(closed), null, 'no end sound: voice is still waking');
+  await h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true);
+  await until(() => lives[2]?.state === 'active' && !h.status().standby);
+  assert.equal(lives[2].options.fork, undefined, 'seeded instead');
+  h.voiceSessions.checkStandby(later(WINDOW + 500)); await until(() => lives[2].state === 'closed');
+  speak(h, 10); h.voiceSessions.checkStandby();
+  await h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true);
+  await until(() => lives[3]?.state === 'active');
+  assert.equal(lives[3].options.fork, undefined, 'after a fork failed, wakes seed rather than wait on another');
+});
+
+test("the operator's held words still going in after a wake hold the agent's updates, as their talking does", async t => {
+  const { h } = await quiet(t);
+  const floor = h.voiceSessions.mediator!.floor;
+  floor.heardAt = -Infinity;
+  h.voiceSessions.mediator!.hear({ at: Date.now(), inputRms: 0, backlogMs: 0 });
+  assert.equal(floor.held(), false);
+  h.voiceSessions.mediator!.hear({ at: Date.now(), inputRms: 0, backlogMs: 2400 });
+  assert.equal(floor.held(), true);
 });
 
 test("chewing, typing and knocks don't wake it: only a voice that lasts does", async t => {
@@ -172,6 +246,7 @@ test('cues: Standby has its own sound, waking plays the start cue, and voice goi
   const cues = new CueTracker();
   cues.cue({ type: 'voice_started', sessionId: 'a' });
   assert.equal(cues.cue({ type: 'voice_closed', standby: true }), 'standby');
+  assert.equal(cues.cue({ type: 'voice_closed', reconnect: true, waking: true }), null, "a wake's session that never started: still waking");
   assert.equal(cues.cue({ type: 'voice_started', sessionId: 'b' }), 'start');
   cues.cue({ type: 'voice_closed', standby: true });
   assert.equal(cues.cue({ type: 'voice_closed', standbyEnded: true }), 'end');
@@ -180,7 +255,8 @@ test('cues: Standby has its own sound, waking plays the start cue, and voice goi
 
 // The worklet exactly as the page gets it.
 function worklet() {
-  let Processor: any; const context = vm.createContext({ AudioWorkletProcessor: class { port = { postMessage() {} }; }, registerProcessor: (_: string, type: any) => { Processor = type; }, sampleRate: 24000, currentTime: 0 });
+  let Processor: any; const posted: any[] = [];
+  const context = vm.createContext({ AudioWorkletProcessor: class { port = { postMessage: (message: any) => posted.push(message) }; }, registerProcessor: (_: string, type: any) => { Processor = type; }, sampleRate: 24000, currentTime: 0 });
   vm.runInContext(stripTypes(fs.readFileSync(new URL('../web/audio-worklet.ts', import.meta.url), 'utf8')), context);
   const processor = new Processor(), sent: number[] = [];
   const run = (value: number, blocks: number) => {
@@ -190,7 +266,7 @@ function worklet() {
       sent.push(...outgoing);
     }
   };
-  return { send: (data: any) => processor.port.onmessage({ data }), run, sent };
+  return { send: (data: any) => processor.port.onmessage({ data }), run, sent, posted };
 }
 
 test('on Standby the microphone is held; waking, it goes back to where the operator started talking; once connected it goes out first, then the live microphone, skipping silence', () => {
@@ -208,4 +284,18 @@ test('on Standby the microphone is held; waking, it goes back to where the opera
   const held = w.sent.filter(x => Math.abs(x - .4) < .01).length;
   assert.ok(Math.abs(held - 5 * 24000) < 1000, `all 5 s the operator spoke before the wake (${held})`);
   assert.ok(w.sent.slice(-128).every(x => x > .5), 'the live microphone follows, the silence between skipped');
+});
+
+test("waking, the page reports the held words still going out, and when they all have", () => {
+  const w = worklet(), second = 24000 / 128;
+  w.send({ type: 'gate', threshold: .008 }); w.send({ type: 'hold' });
+  w.run(.1, Math.round(4 * second));
+  w.send({ type: 'wake' }); w.send({ type: 'replay' });
+  w.run(.1, 40);
+  const backlog = w.posted.filter(m => m.type === 'level').at(-1).backlogMs;
+  assert.ok(backlog > 3500, `about 4 s still to go out (${backlog} ms)`);
+  assert.ok(!w.posted.some(m => m.type === 'replayed'));
+  w.run(0, Math.round(6 * second));
+  assert.equal(w.posted.filter(m => m.type === 'replayed').length, 1, 'once the held words are out and only silence is left');
+  assert.equal(w.posted.filter(m => m.type === 'level').at(-1).backlogMs, 0);
 });

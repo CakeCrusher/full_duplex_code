@@ -36,7 +36,8 @@ export function watchMicrophones(notice: (text: string) => void) {
 
 /** Messages from the audio worklet. */
 export type WorkletMessage = { type: 'playback'; pcm: ArrayBuffer; microphone?: ArrayBuffer; sessionId: string; offsetSamples: number; startTime: number }
-  | { type: 'level'; rms: number; rawRms?: number; outputRms: number; gateThreshold: number; voiced?: number; durationMs: number; endTime: number };
+  | { type: 'level'; rms: number; rawRms?: number; outputRms: number; gateThreshold: number; voiced?: number; durationMs: number; endTime: number; backlogMs?: number }
+  | { type: 'replayed' };
 
 export class AudioIO {
   context: AudioContext | null = null;

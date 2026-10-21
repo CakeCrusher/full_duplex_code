@@ -22,6 +22,8 @@ export class CueTracker {
       this.session = null; this.paused = true;
       return replaying ? null : 'standby';
     }
+    // A wake's session that never started: voice is still waking, on another connection.
+    if (event.type === 'voice_closed' && event.waking) return null;
     if (event.type === 'voice_closed') return this.end();
     // An instruction Jev added: once, and never from restored history.
     if (event.type === 'instruction_learned' && typeof event.id === 'string') {
@@ -80,12 +82,16 @@ export class CuePlayer {
     oscillator.start(at); oscillator.stop(at + duration + .02);
   }
   pulseTimer?: ReturnType<typeof setInterval>;
-  /** While voice wakes from Standby: a soft pulse, like breathing, until it is connected (then the start cue). */
+  /**
+   * While voice wakes from Standby: the start cue's first note at once (the operator is heard), then again softly, like
+   * breathing, while the session starts and their held words go in (a wake that continues the paused session takes
+   * 3-10 s); the page then plays the whole start cue.
+   */
   waking(on: boolean) {
     clearInterval(this.pulseTimer); this.pulseTimer = undefined;
-    const context = this.context;
+    const context = this.context, [[note]] = PATTERNS.start.notes;
     if (!on || !context || context.state === 'closed') return;
-    const beat = () => this.tone('sine', .07, 440, context.currentTime + .02, .55, .25);
-    beat(); this.pulseTimer = setInterval(beat, 700);
+    this.tone('sine', .12, note, context.currentTime + .02, .3);
+    this.pulseTimer = setInterval(() => this.tone('sine', .06, note, context.currentTime + .02, .45, .15), 800);
   }
 }

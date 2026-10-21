@@ -8,7 +8,7 @@ import { LiveSession, type CloseResult } from './live-session.ts';
 import { Mediator } from './mediator.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { startupHistory } from './startup-history.ts';
-import { forkable, planFor, ResumeStore, seedInput, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
+import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
 import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, reconnectGreeting, resumeGreeting, stageBrief, stageOutline, stageText, standbyNews, standbyWake } from './prompts.ts';
 import { Stage, type StageView } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
@@ -40,10 +40,14 @@ interface Run {
   record: ResumeRecord; recordId?: string;
   /** The page on the stage GPT Live was last told about (its address and cue words), and the page whose text it was told. */
   briefed?: string; told?: string;
+  /** What a new session started with: all its instructions (a hash) and the page text in them. */
+  firstInstructions?: string; pageText?: string;
+  /** How full GPT Live's context has been, since the first session a fork continues (GPT Live's reports). */
+  context?: number;
   /** The instructions it started with, those a fork inherited from its source, and those in force in it now (given and not countermanded). */
   startup: Instruction[]; inherited: SavedInstruction[]; inForce: Map<string, SavedInstruction>;
-  /** When voice was asked to start and how, for its startup times; and whether it has spoken yet. */
-  requested: { at: number; plan: ResumePlan }; spoke?: boolean;
+  /** When voice was asked to start and how (and why a wake didn't fork), for its startup times; and whether it has spoken yet. */
+  requested: { at: number; plan: ResumePlan; seeded?: string }; spoke?: boolean;
   /** Set when it woke from Standby: when Standby began, and whether the operator was speaking. */
   wake?: Wake;
 }
@@ -93,8 +97,8 @@ export class VoiceSessions {
   carried?: { mediator: Mediator; reason: string; timer?: NodeJS.Timeout };
   /** Which connection sent each request still awaiting delivery, to tell it the outcome. */
   senders = new Map<string, Mediator>();
-  /** Voice on Standby, and what is happening in the conversation, priced (activity.ts). */
-  standby?: Standby; activity = new Activity(); standbyTimer: NodeJS.Timeout;
+  /** Voice on Standby, and what is happening in the conversation, priced (activity.ts); and when a wake's fork last failed. */
+  standby?: Standby; activity = new Activity(); standbyTimer: NodeJS.Timeout; wakeForkFailedAt = -Infinity;
   constructor(bridge: Harness, { store = true, resumeDir = path.join(bridge.root, '.runs', 'voice-resume') }: { store?: boolean; resumeDir?: string } = {}) {
     this.bridge = bridge; this.store = store; this.resumeStore = new ResumeStore(resumeDir);
     this.standbyTimer = setInterval(() => this.checkStandby(), 1000); this.standbyTimer.unref();
@@ -172,8 +176,8 @@ export class VoiceSessions {
     publish({ type: 'voice_closed', reason, standbyEnded: true, moved: moved || undefined, reserved: false, finalized: true, usageSeconds: 0 }, standby.page);
     publish(this.bridge.status());
   }
-  /** fdc's own instructions for the voice, as a short hash: which ones a session started with. */
-  prompt() { return createHash('sha1').update(liveInstructions(this.bridge.agent)).digest('hex').slice(0, 12); }
+  /** fdc's own instructions for the voice (or others), as a short hash: which ones a session started with. */
+  prompt(text = liveInstructions(this.bridge.agent)) { return createHash('sha1').update(text).digest('hex').slice(0, 12); }
   instructions() {
     const additional = this.additionalInstructions.map(item => item.text).join('\n\n');
     return liveInstructions(this.bridge.agent) + (additional ? `\n\nAdditional operator instructions:\n${additional}` : '');
@@ -320,13 +324,17 @@ export class VoiceSessions {
     const record = this.current();
     // The operator starting voice: Jev looks at the settings again (a wake or reconnect is not the operator starting it).
     if (!wake && !automatic) bridge.tuneFromInstructions();
-    // A wake must be quick: a new session seeded with the conversation, never a slow fork.
-    let plan = wake ? record.turns.length ? 'seed' : 'fresh' : planFor(record, mode, this.prompt());
+    // A wake resumes the session it paused while that session's first instructions are still current and its context has
+    // room; otherwise it starts a new one with all of it, seeded with the conversation (wakePlanFor). A fork takes 1 to
+    // 8.5 s to start: the page holds the operator's words meanwhile and plays a waking sound.
+    const view = wake ? await this.stageNow() : undefined;
+    let [plan, seeded] = wake ? wakePlanFor(record, { prompt: this.prompt(), instructions: this.prompt(this.instructions()), pageText: view ? this.pageFor(view).text : bridge.stage.tabId ? undefined : '' }, Date.now() - this.wakeForkFailedAt < WAKE_FORK_BACKOFF_MS)
+      : [planFor(record, mode, this.prompt())];
     // Starting fresh after a drop: the speech it had not passed on goes to the agent now.
     if (plan === 'fresh' && !wake) this.handOffCarried();
-    const requested = { at: Date.now(), plan };
+    const requested = { at: Date.now(), plan, seeded };
     for (;;) {
-      const attempt: { live?: LiveSession; requested: Run['requested']; wake?: Wake } = { requested, wake };
+      const attempt: { live?: LiveSession; requested: Run['requested']; wake?: Wake; view?: StageView } = { requested, wake, view };
       try { return await this.connect(sdp as string | undefined, page, plan, automatic, attempt); }
       catch (error) {
         const live = attempt.live, message = (error as Error).message;
@@ -337,18 +345,20 @@ export class VoiceSessions {
         if (this.started.has(live)) { log({ type: 'voice.start_interrupted', message }); return; }
         // A fork or storage OpenAI refuses falls back quietly: only a session that never started, that nobody canceled, and whose media answer the page has not applied.
         const retry = !live.answered && !live.requested && !bridge.stopping;
+        if (wake && plan === 'fork' && !live.requested) this.wakeForkFailedAt = Date.now();
         if (retry && plan === 'fork') { log({ type: 'voice.fork_failed', from: record.liveSessionId, message }); plan = record.turns.length ? 'seed' : 'fresh'; continue; }
         // The page says so beside the connection facts (resume.store).
         if (retry && live.store && /\bstor(e|ed|age)\b|retention|persist/i.test(message)) { this.store = false; log({ type: 'voice.store_refused', message }); continue; }
         // A fork OpenAI answered but never started (twice in a row on Oct 13, "session startup timed out"): it isn't
-        // tried again; the page starts over at once, and Resume rebuilds the conversation from its text.
-        if (plan === 'fork' && live.answered && !live.requested && !bridge.stopping && record.turns.length) {
+        // tried again; the page starts over at once (a wake keeps the words it holds), and Resume rebuilds the conversation
+        // from its text.
+        if (plan === 'fork' && live.answered && !live.requested && !bridge.stopping && (record.turns.length || wake)) {
           record.forkFailed = record.liveSessionId; this.save();
           log({ type: 'voice.fork_never_started', from: record.liveSessionId, message });
-          if (page?.ws.readyState === WebSocket.OPEN && this.allowReconnect()) {
+          if (page?.ws.readyState === WebSocket.OPEN && (wake || this.allowReconnect())) {
             // If the page doesn't start over, the speech this connection took over goes to the agent.
             this.carryAgain();
-            publish({ type: 'voice_closed', ...(this.failed ?? { reserved: false, finalized: false, usageSeconds: 0 }), reason: 'continuing the last voice session failed; rebuilding the conversation', reconnect: true }, page);
+            publish({ type: 'voice_closed', ...(this.failed ?? { reserved: false, finalized: false, usageSeconds: 0 }), reason: 'continuing the last voice session failed; rebuilding the conversation', reconnect: true, waking: wake ? true : undefined }, page);
             publish(bridge.status());
             return;
           }
@@ -362,7 +372,7 @@ export class VoiceSessions {
       }
     }
   }
-  async connect(sdp: string | undefined, page: Page | undefined, plan: ResumePlan, automatic: boolean, attempt: { live?: LiveSession; requested?: Run['requested']; wake?: Wake } = {}) {
+  async connect(sdp: string | undefined, page: Page | undefined, plan: ResumePlan, automatic: boolean, attempt: { live?: LiveSession; requested?: Run['requested']; wake?: Wake; view?: StageView } = {}) {
     const bridge = this.bridge, { agent, observer, log, publish, fault, clean } = bridge, { name } = agent.profile;
     const record = this.current(), recordId = this.recordFor, sourceId = plan === 'fork' ? record.liveSessionId : undefined;
     // Waking, GPT Live is told at the start that the conversation continues, rather than by an append after it starts.
@@ -378,9 +388,9 @@ export class VoiceSessions {
     if (plan === 'seed') input = seedInput(input, record.turns);
     // The page on the stage goes in with the instructions it starts with: appended once it had started, it took GPT Live's
     // timeline from the operator (after a wake, their first words reached it 6-25 s late, their beginning lost). A fork
-    // keeps its source's instructions, so it is told by appends.
-    const view = plan === 'fork' ? undefined : await this.stageNow(), stage = view && this.pageFor(view);
-    const live: LiveSession = this.createLive({ apiKey: bridge.apiKey, budget: bridge.ledger, voice: bridge.voice, instructions: this.instructions() + (stage ? `${stage.text ? `\n\n${stage.text}` : ''}\n\n${stage.brief}` : ''), label: `${name} ${bridge.sessionId ?? 'session'}`,
+    // keeps its source's instructions and what it was told since, so it is told by appends only what changed.
+    const view = attempt.view ?? (plan === 'fork' ? undefined : await this.stageNow()), stage = plan === 'fork' ? undefined : view && this.pageFor(view), instructions = this.instructions();
+    const live: LiveSession = this.createLive({ apiKey: bridge.apiKey, budget: bridge.ledger, voice: bridge.voice, instructions: instructions + (stage ? `${stage.text ? `\n\n${stage.text}` : ''}\n\n${stage.brief}` : ''), label: `${name} ${bridge.sessionId ?? 'session'}`,
       input: plan === 'fork' ? [] : input, store: this.store, fork: sourceId, log: event => log({ liveRun: live.reservation, ...event }) });
     attempt.live = live;
     this.audit?.close(); this.audit = null; this.failed = undefined;
@@ -391,18 +401,24 @@ export class VoiceSessions {
       learner: bridge.learner, audit: bridge.handOffAudit, gate: bridge.handOffAudit ? (said, id, earlier, companion, cued) => bridge.sessionSwitch.gate(said, id, earlier, companion, cued) : undefined, onSaid: said => bridge.tuneFromInstructions(said),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake };
-    if (stage) { run.briefed = stage.signature; run.told = address(view!.url); this.bridge.presenter.speechCues.set(stage.cues); }
+    // A fork knows what its source was told; woken, it holds the page as it is now (wakePlanFor), so isn't told it again: a
+    // deck's parts name its current slide, and a brief appended as the operator's held words went in lost their first ones.
+    if (plan === 'fork') Object.assign(run, { context: record.context }, wake && view ? { briefed: this.pageFor(view).signature, told: address(view.url) } : { briefed: record.briefed, told: record.told });
+    else Object.assign(run, { firstInstructions: this.prompt(instructions), pageText: stage?.text ?? '', ...stage ? { briefed: stage.signature, told: address(view!.url) } : {} });
+    if (view) this.bridge.presenter.speechCues.set(Stage.cues(view));
     // A dropped or moved session's unsent speech: this session takes it if it starts; meanwhile it isn't handed off.
     // The copies are now the ones to carry or hand off: if this connection fails to start, they go on from here.
     if (this.carried) { clearTimeout(this.carried.timer); mediator.history.carry(this.carried.mediator.history); this.carried.mediator = mediator; }
-    if (plan === 'fork') mediator.context.add('thinking', catchUp(agent, bridge.cwd, observer.state) + (history.text ? historyIntro(agent) + history.text : ''), null, '', since);
-    // Instead of a greeting, a waking session is told the conversation continues, then gets the agent's work it missed.
+    // Instead of a greeting, a waking session gets the agent's work it missed as it would have live: a fork, all since its
+    // source last had it; a new session (told at its start that the conversation continues), what came during Standby.
     if (wake) {
-      for (const observation of bridge.adapter.history().filter(o => o.at > wake.since)) mediator.feed.add(observation);
+      const missed = plan === 'fork' ? since : wake.since;
+      for (const observation of bridge.adapter.history().filter(o => o.at > missed)) mediator.feed.add(observation);
       // Woken by the agent's news: after it, the cue to report it if it calls for that. Woken by the operator, their words are the cue.
       if (!wake.operator) { mediator.feed.flush(); mediator.context.add('commentary', standbyNews(agent)); }
-    }
-    log({ type: 'voice.starting', plan, automatic, from: sourceId, seededTurns: plan === 'seed' ? input.length - (history.text ? 2 : 1) : undefined, store: this.store, wake: wake?.reason });
+    } else if (plan === 'fork') mediator.context.add('thinking', catchUp(agent, bridge.cwd, observer.state) + (history.text ? historyIntro(agent) + history.text : ''), null, '', since);
+    log({ type: 'voice.starting', plan, automatic, from: sourceId, seededTurns: plan === 'seed' ? input.length - (history.text ? 2 : 1) : undefined, store: this.store, wake: wake?.reason,
+      context: plan === 'fork' ? record.context : undefined, seeded: wake && plan !== 'fork' ? attempt.requested?.seeded ?? 'its fork failed' : undefined });
     publish(bridge.status());
     // A fork that fails falls back to a new session; its errors are logged, not shown.
     live.on('fault', error => plan === 'fork' && !this.started.has(live) ? log({ type: 'voice.fork_fault', message: error.message }) : fault(error, page));
@@ -491,10 +507,11 @@ export class VoiceSessions {
     if (event.type === 'session.delegation.created') this.activity.add('request');
     // ...and to the first words it says.
     if (event.type === 'session.output_transcript.delta' && !run.spoke) { run.spoke = true; this.bridge.log({ type: 'voice.first_words', plan: run.plan, automatic: run.automatic, firstWordsMs: Date.now() - run.requested.at }); }
-    // Live reports usage about every 15 seconds; the last few minutes of it are enough for the meters.
-    const usage = this.usage;
+    // Live reports usage about every 15 seconds; the last few minutes of it are enough for the meters. How full the context
+    // has been is kept for a fork of this session (wakePlanFor).
+    const usage = this.usage, ratio = event.context_window?.usage_ratio;
+    if (event.type === 'session.usage.updated' && Number.isFinite(ratio)) run.context = Math.max(run.context ?? 0, ratio);
     if (event.type === 'session.usage.updated' && usage && usage.voiceSessionId === live.id) {
-      const ratio = event.context_window?.usage_ratio;
       if (Number.isFinite(ratio)) { usage.ratio = ratio; usage.points = [...usage.points.slice(-39), [Date.now(), ratio]]; }
       usage.seconds = event.usage?.seconds ?? usage.seconds;
       this.bridge.publish({ type: 'live_usage', ...usage });
@@ -511,8 +528,8 @@ export class VoiceSessions {
     for (const item of this.additionalInstructions) if (run.inForce.has(item.id)) Object.assign(item, { state: 'acknowledged', sessionId: live.id, acknowledgedAt: Date.now(), error: undefined, appended: false });
     if (plan === 'fresh') record.turns = [];
     Object.assign(record, { liveSessionId: live.id, stored: live.stored, finalized: false, endedAt: undefined, deliveredThrough: undefined });
-    // A fork started with its source's instructions; anything else with today's.
-    if (plan !== 'fork') record.prompt = this.prompt();
+    // A fork started with its source's instructions, and the page text in them; anything else with today's.
+    if (plan !== 'fork') Object.assign(record, { prompt: this.prompt(), firstInstructions: run.firstInstructions, pageText: run.pageText });
     this.noteInForce(run);
     this.audit = new AudioAudit({ dir: path.join(bridge.runDir, 'audio', live.reservation!), log: event => log({ liveRun: live.reservation, ...event }), onError: error => fault(error) });
     this.usage = { voiceSessionId: live.id!, startedAt: live.startedAt ?? Date.now(), seconds: 0, ratio: null, points: [] };
@@ -533,7 +550,8 @@ export class VoiceSessions {
     const undelivered = Math.min(...mediator.feed.pending.map(record => record.at), mediator.context.undeliveredSince() ?? Infinity);
     record.turns.push(...mediator.history.turns());
     record.inForce = [...run.inForce.values()];
-    Object.assign(record, { finalized: result.finalized, endedAt: Date.now(), deliveredThrough: Number.isFinite(undelivered) ? undelivered - 1 : Date.now(), lastRecordId: mediator.feed.projector.sequence });
+    // What a fork of it would know of the page, and how full its context has been.
+    Object.assign(record, { told: run.told, briefed: run.briefed, context: run.context, finalized: result.finalized, endedAt: Date.now(), deliveredThrough: Number.isFinite(undelivered) ? undelivered - 1 : Date.now(), lastRecordId: mediator.feed.projector.sequence });
     this.saveRun(run);
     // Ended without anyone asking (dropped, closed by GPT Live, or its media stalled): resume on the same page, a limited number of times.
     // Ended for Standby: voice stays on, and the page keeps listening.

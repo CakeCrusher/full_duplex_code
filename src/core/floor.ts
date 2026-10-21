@@ -13,7 +13,8 @@ export class Floor {
 }
 
 /** The microphone level the page reports: speech when the gate passes audio louder than its threshold. */
-export interface MicrophoneLevel { at: number; inputRms: number; rawInputRms?: number; gateThreshold?: number; /** The share of the window that sounded like a voice (pages from Oct 19 on). */ voiced?: number }
+export interface MicrophoneLevel { at: number; inputRms: number; rawInputRms?: number; gateThreshold?: number; /** The share of the window that sounded like a voice (pages from Oct 19 on). */ voiced?: number;
+  /** After a wake, the held audio still going out ahead of the live microphone (ms). */ backlogMs?: number }
 // With the gate off, every window passes audio; the default gate threshold still separates speech from room noise.
 const SPEECH_RMS = .008;
 export const operatorSpeaking = ({ inputRms, rawInputRms = inputRms, gateThreshold = 0 }: MicrophoneLevel) =>
