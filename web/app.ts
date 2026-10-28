@@ -56,7 +56,7 @@ function handle(event: BridgeEvent) {
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
   if (event.type === 'instruction_learned') learned(event);
   if (event.type === 'instruction_removed') removed(event.id);
-  if (event.type === 'tuning' && event.changes?.length) tuned(event.changes);
+  if (event.type === 'tuning' && event.changes?.length) tuned(event);
   // Sessions turned on or off by voice: what fdc is doing, and another companion asking this one to start voice.
   if (event.type === 'sessions' && !replaying) notice(event.text);
   // The page beside the conversation moved without the agent: by the voice's own words, or by the voice tool.
@@ -100,11 +100,12 @@ function learned(event: BridgeEvent) {
   card.append(text, remove, Object.assign(document.createElement('small'), { textContent: 'Heard by Jev from what you said. Removing it tells this voice session to disregard it, and later sessions leave it out.' }));
   $('learned').prepend(card);
 }
-// Jev changed how agent updates reach GPT Live: the settings and their old values, for the record.
-function tuned(changes: { name: string; from: number; to: number }[]) {
-  const card = document.createElement('article'); card.className = 'learned';
+// Jev changed how agent updates reach GPT Live: the settings and their old values, for the record, once each.
+function tuned({ id, changes }: BridgeEvent) {
+  if (id && document.getElementById(`tuned-${id}`)) return;
+  const card = document.createElement('article'); card.className = 'learned'; if (id) card.id = `tuned-${id}`;
   const text = document.createElement('p');
-  text.textContent = `Jev adjusted the companion to your instructions: ${changes.map(c => `${c.name} ${c.from} → ${c.to}`).join(', ')}.`;
+  text.textContent = `Jev adjusted the companion to your instructions: ${changes.map((c: { name: string; from: number; to: number }) => `${c.name} ${c.from} → ${c.to}`).join(', ')}.`;
   card.append(text, Object.assign(document.createElement('small'), { textContent: 'Developer mode shows what each setting does.' }));
   $('learned').prepend(card);
 }

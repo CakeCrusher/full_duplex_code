@@ -25,11 +25,12 @@ export class CueTracker {
     // A wake's session that never started: voice is still waking, on another connection.
     if (event.type === 'voice_closed' && event.waking) return null;
     if (event.type === 'voice_closed') return this.end();
-    // An instruction Jev added: once, and never from restored history.
-    if (event.type === 'instruction_learned' && typeof event.id === 'string') {
-      if (replaying || this.tasks.has(`learned-${event.id}`)) return null;
+    // Behavior Jev learned, an instruction or a change to the settings: once each, and never from restored history.
+    const learned = event.type === 'instruction_learned' || (event.type === 'tuning' && event.changes?.some((change: any) => change.from !== change.to));
+    if (learned && typeof event.id === 'string') {
+      if (this.tasks.has(`learned-${event.id}`)) return null;
       this.tasks.add(`learned-${event.id}`);
-      return 'learned';
+      return replaying ? null : 'learned';
     }
     if (event.type === 'task' && typeof event.id === 'string') {
       if (this.tasks.has(event.id)) return null;

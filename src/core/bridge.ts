@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { AgentAdapter, AgentDefinition, AgentLaunch, Observation, VoiceRequest } from './adapter.ts';
 import type { AgentObserver } from './agent-observer.ts';
 import { redact } from './redact.ts';
@@ -178,11 +178,15 @@ export class Harness {
     const id = await this.voiceSessions.learn({ ...instruction, text });
     this.jevCheck(instruction.requestId, 'instruction', `Learned ${id}: ${text}`, instruction);
   }
-  /** New settings for how agent updates reach GPT Live, from now on. */
+  /**
+   * New settings for how agent updates reach GPT Live, from now on. A change is learned behavior, as an instruction Jev
+   * learns is: it has an ID, so the page shows it and plays the same sound once, however often the event reaches it.
+   */
   setTuning(next: Tuning, changes: TuningChange[] = [], by = 'Jev') {
     this.tuning = next; this.mediator?.applyTuning(next);
     if (changes.length) { this.tuningHistory.push({ at: Date.now(), by, changes }); if (this.tuningHistory.length > 200) this.tuningHistory.shift(); }
-    this.log({ type: 'tuning.changed', tuning: next, changes }); this.publish({ type: 'tuning', tuning: next, changes }); this.publish(this.status());
+    const id = changes.length ? randomUUID() : undefined;
+    this.log({ type: 'tuning.changed', id, tuning: next, changes }); this.publish({ type: 'tuning', id, tuning: next, changes }); this.publish(this.status());
   }
   /**
    * Jev's reading of a moment (jev.ts): the latest words (the last of `spoken`), with what happened before them as fdc
