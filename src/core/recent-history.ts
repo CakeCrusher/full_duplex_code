@@ -19,7 +19,7 @@ function headAndTail(text: string, maxBytes: number): string {
 }
 
 /** Something that happened, as fdc keeps it: one of the agent's events, or an utterance of the voice conversation. */
-export type HistoryItem = Pick<Observation, 'name' | 'text'> | Pick<Utterance, 'role' | 'text'>;
+export type HistoryItem = Pick<Observation, 'name' | 'text'> & Partial<Pick<Observation, 'child'>> | Pick<Utterance, 'role' | 'text'>;
 
 /**
  * The most recent of what happened, oldest first, within a byte allowance: the agent's events filtered as live context is

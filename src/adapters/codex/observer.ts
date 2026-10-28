@@ -20,6 +20,9 @@ const eventName = (data: Record<string, any>): string => data.hook_event_name ??
 // The final message, once it has already been observed as a transcript message.
 const SEEN_FINAL = '(the assistant message above)';
 
+// A subagent's own work: its hooks carry its ID. Its start and its finish (with its result) are the main thread's news.
+export const fromSubagent = (data: Record<string, any>) => Boolean(data.agent_id) && !['SubagentStart', 'SubagentStop'].includes(eventName(data));
+
 export function observationKind(data: Record<string, any>): ObservationKind {
   if (data.source === 'transcript') return data.type === 'UserMessage' ? 'prompt' : 'text';
   return KINDS.get(eventName(data)) ?? 'event';
@@ -64,7 +67,7 @@ export class CodexObserver extends AgentObserver {
   }
   observe(data: Record<string, any>, emit = true) {
     this.turn = nextTurnState(this.turn, data);
-    this.add(makeObservation({ kind: observationKind(data), name: data.source === 'transcript' ? data.type : eventName(data), text: this.clean(JSON.stringify(data)), at: Date.now(), state: this.turn, child: Boolean(data.agent_id) }), emit);
+    this.add(makeObservation({ kind: observationKind(data), name: data.source === 'transcript' ? data.type : eventName(data), text: this.clean(JSON.stringify(data)), at: Date.now(), state: this.turn, child: fromSubagent(data) }), emit);
   }
   attachTranscript(file: string, resumed: boolean) {
     if (this.transcriptPath === file || !path.isAbsolute(file)) return;

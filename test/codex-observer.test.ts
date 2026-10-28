@@ -42,7 +42,7 @@ test('the first hook names the session; hooks become observations, turn state an
   const byName = Object.fromEntries(observer.observations.map(o => [o.name, [o.kind, o.state, o.child]]));
   assert.deepEqual(byName, {
     SessionStart: ['event', 'unknown', false], UserPromptSubmit: ['prompt', 'working', false], PreToolUse: ['tool', 'working', false],
-    SubagentStop: ['event', 'working', true], PermissionRequest: ['attention', 'needs_operator', false], Stop: ['turn_end', 'turn_finished', false], SessionEnd: ['session_end', 'exited', false],
+    SubagentStop: ['event', 'working', false], PermissionRequest: ['attention', 'needs_operator', false], Stop: ['turn_end', 'turn_finished', false], SessionEnd: ['session_end', 'exited', false],
   });
 });
 

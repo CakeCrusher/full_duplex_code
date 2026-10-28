@@ -9,7 +9,7 @@ import type { Floor } from './floor.ts';
 import type { AppendKind } from './context-queue.ts';
 
 /** What the feed needs from an observation. */
-export type FeedObservation = Pick<Observation, 'kind' | 'name' | 'text' | 'state'> & Partial<Pick<Observation, 'at'>>;
+export type FeedObservation = Pick<Observation, 'kind' | 'name' | 'text' | 'state'> & Partial<Pick<Observation, 'at' | 'child'>>;
 
 // Prose is never turned into references or noted as large. Urgent kinds flush
 // without waiting for the collection window.
@@ -89,7 +89,8 @@ export class ObservationFeed {
     this.projector = new ObservationProjector(agent); this.label = feedLabel(agent);
   }
   add(observation: FeedObservation) {
-    if (this.stopped) return;
+    // A subagent's own work neither goes nor hurries the batch: its turn end is not the agent's.
+    if (this.stopped || observation.child) return;
     const projection = this.projector.project(observation), now = Date.now();
     if (projection) {
       const { firstMs, perUpdateMs, longestMs } = this.hold ?? { firstMs: 0, perUpdateMs: 0, longestMs: 0 };

@@ -7,7 +7,7 @@ import { contextData, truncate } from '../src/core/context-rules.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { codex } from '../src/adapters/codex/index.ts';
 import { pi } from '../src/adapters/pi/index.ts';
-import { nextTurnState, observationKind } from '../src/adapters/claude/observer.ts';
+import { fromSubagent, nextTurnState, observationKind } from '../src/adapters/claude/observer.ts';
 import * as codexEvents from '../src/adapters/codex/observer.ts';
 import * as piEvents from '../src/adapters/pi/observer.ts';
 
@@ -17,7 +17,7 @@ let turn: TurnState = 'unknown';
 const observation = (name: string, data: Record<string, any> = {}) => {
   const raw = { hook_event_name: name, ...data };
   turn = nextTurnState(turn, raw);
-  return { kind: observationKind(raw), name, text: JSON.stringify(raw), state: turn };
+  return { kind: observationKind(raw), name, text: JSON.stringify(raw), state: turn, child: fromSubagent(raw) };
 };
 const codexObservation = (name: string, data: Record<string, any> = {}) => {
   const raw = { hook_event_name: name, ...data };
@@ -272,17 +272,23 @@ test('every adapter names its tools for the summary line: Codex and Pi as well a
   assert.deepEqual(sent, ['[Codex made 4 Bash calls; their details are omitted]', '[Pi made 4 bash calls; their details are omitted]']);
 });
 
-test('displayed answers are sent in full, from the main agent and subagents alike', t => {
+test("displayed answers are sent in full; of a subagent, only its start and its result", t => {
   const f = fixture(t);
   f.feed.add(observation('MessageDisplay', { delta: 'Earlier error: missing file.' }));
+  f.feed.add(observation('SubagentStart', { agent_id: 'child', agent_type: 'Explore' }));
+  f.feed.add(observation('PreToolUse', { agent_id: 'child', tool_name: 'Grep', tool_input: { pattern: 'missingFile' } }));
+  f.feed.add(observation('MessageDisplay', { agent_id: 'child', delta: 'Child draft.' }));
+  f.feed.add(observation('Stop', { agent_id: 'child' }));
+  f.feed.add(observation('SubagentStop', { agent_id: 'child', agent_type: 'Explore', last_assistant_message: 'The file was renamed.' }));
   f.feed.add(observation('MessageDisplay', { delta: 'File ready.' }));
-  f.feed.add(observation('MessageDisplay', { agent_id: 'child', delta: 'File ready.' }));
   f.feed.add(observation('Stop', { last_assistant_message: 'File ready. Open it locally.' }));
   f.feed.flush();
   const prepared = f.logs.find(e => e.type === 'context.prepared');
-  assert.equal(prepared.sources.length, 3);
+  assert.equal(prepared.sources.length, 4);
   assert.match(prepared.content, /Earlier error: missing file/);
-  assert.match(prepared.content, /child/);
+  assert.match(prepared.content, /SubagentStart.*Explore/);
+  assert.match(prepared.content, /The file was renamed/);
+  assert.doesNotMatch(prepared.content, /missingFile|Child draft/, "the subagent's own steps stay out");
   assert.doesNotMatch(prepared.content, /Open it locally/);
 });
 

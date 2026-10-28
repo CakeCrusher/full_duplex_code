@@ -105,14 +105,17 @@ test('when voice ends with everything already passed on, nothing more is sent', 
   assert.equal(f.deliveries.length, 1, 'the voice assistant speaking alone is not a request');
 });
 
-test('duplicate display hooks do not produce duplicate context; subagent hooks retain their content', async t => {
+test("duplicate display hooks do not produce duplicate context; a subagent's own work stays out, its result reaches Live", async t => {
   const f = fixture(t);
   const display = { hook_event_name: 'MessageDisplay', message_id: 'same', index: 0, delta: 'One answer.' };
   f.hook(display); f.hook(display);
   f.hook({ hook_event_name: 'PostToolUseFailure', agent_id: 'child', tool_name: 'Bash', error: 'test failed', custom_field: { detail: 'kept' } });
+  f.hook({ hook_event_name: 'SubagentStop', agent_id: 'child', agent_type: 'Explore', last_assistant_message: 'Two callers found.' });
   await flush();
   assert.equal(content(f, 'thinking').match(/One answer/g)!.length, 1);
-  assert.match(content(f, 'thinking'), /child.*Bash.*test failed.*custom_field.*kept/);
+  assert.doesNotMatch(content(f, 'thinking'), /test failed/);
+  assert.match(content(f, 'thinking'), /Two callers found/);
+  assert.doesNotMatch(recentHistory(claude, f.observer.observations).text, /test failed/, 'nor in the history a new session or Jev reads');
   f.mediator.stop(); assert.equal(f.observer.listenerCount('observation'), 0);
 });
 

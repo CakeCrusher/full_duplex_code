@@ -60,7 +60,7 @@ export interface Observation {
   at: number;
   /** The agent's turn state after this event. */
   state: TurnState;
-  /** The event came from a subagent. */
+  /** A subagent's own work (its start and finish are not): it never reaches GPT Live or Jev, only the main thread's work does. */
   child: boolean;
 }
 

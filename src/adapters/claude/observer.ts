@@ -18,6 +18,9 @@ const KINDS = new Map<string, ObservationKind>([
 ]);
 const eventName = (data: Record<string, any>): string => data.hook_event_name ?? data.source ?? 'transcript';
 
+// A subagent's own work: its events carry its ID. Its start and its finish (with its result) are the main thread's news.
+export const fromSubagent = (data: Record<string, any>) => Boolean(data.agent_id) && !['SubagentStart', 'SubagentStop'].includes(eventName(data));
+
 export function observationKind(data: Record<string, any>): ObservationKind {
   const name = eventName(data);
   // Restored transcript blocks: conversation text is prose; tool blocks are detail.
@@ -51,7 +54,7 @@ export class ClaudeObserver extends AgentObserver {
   }
   observe(data: Record<string, any>, emit = true, at = Date.now()) {
     this.turn = nextTurnState(this.turn, data);
-    this.add(makeObservation({ kind: observationKind(data), name: eventName(data), text: this.clean(JSON.stringify(data)), at, state: this.turn, child: Boolean(data.agent_id) }), emit);
+    this.add(makeObservation({ kind: observationKind(data), name: eventName(data), text: this.clean(JSON.stringify(data)), at, state: this.turn, child: fromSubagent(data) }), emit);
   }
   attachTranscript(file: string) {
     if (this.transcriptPath === file) return;

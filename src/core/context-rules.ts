@@ -1,7 +1,8 @@
 // What of an agent's events reaches Live. The adapter's table (AgentDefinition.context)
-// removes or truncates events and keys; the core applies it after two rules every
-// agent shares: binary data is never text, and Live already has its own voice
-// requests. Anything else is sent as it is.
+// removes or truncates events and keys; the core applies it after the rules every
+// agent shares: only the main thread's work (a subagent's own steps flooded GPT Live
+// with work the operator never asked about), binary data is never text, and Live
+// already has its own voice requests. Anything else is sent as it is.
 import type { Observation } from './adapter.ts';
 import type { ObservedAgent } from './agent-observer.ts';
 import { voiceEcho } from './prompts.ts';
@@ -48,8 +49,9 @@ function eachEnd(node: unknown, path: readonly string[], change: (object: Record
   if (rest.length) eachEnd(object[part], rest, change); else change(object, part);
 }
 
-/** An event's data as Live may see it, or undefined when the adapter's table removes the event. */
-export function contextData(agent: ObservedAgent, { name, text }: Pick<Observation, 'name' | 'text'>): unknown {
+/** An event's data as Live may see it, or undefined when it is a subagent's own work or the adapter's table removes it. */
+export function contextData(agent: ObservedAgent, { name, text, child }: Pick<Observation, 'name' | 'text'> & Partial<Pick<Observation, 'child'>>): unknown {
+  if (child) return undefined;
   let data: any = shared(agent, JSON.parse(text));
   // Rows match the event as it arrived, before any row changes it.
   const arrived = structuredClone(data);
