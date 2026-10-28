@@ -80,14 +80,14 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     levels: [
     { value: 0, consequence: 'Never on Standby: voice stays connected and billed the whole time it is on, as before Standby. Nothing wakes and GPT Live misses nothing.' },
     { value: 10000, consequence: "Cheapest: saved 26% of the cost of recorded conversations, but woke 26 times an hour (4.5 of them for noise), and GPT Live missed 84 s an hour of what it would have said. A 10 s pause while the operator thinks disconnects it." },
-    { value: 15000, consequence: 'The default, the operator\'s choice: saved 21%, woke 18 times an hour (3.3 of them for noise); GPT Live missed 52 s an hour of what it would have said.' },
+    { value: 15000, consequence: 'The operator\'s choice until Oct 28: saved 21%, woke 18 times an hour (3.3 of them for noise); GPT Live missed 52 s an hour of what it would have said.' },
     { value: 20000, consequence: 'Saved 18%, woke 13 times an hour (2.4 for noise); GPT Live missed 34 s an hour.' },
     { value: 30000, consequence: 'Saved 14%, woke 8 times an hour (1.6 for noise); GPT Live missed 19 s an hour.' },
-    { value: 60000, consequence: 'Saved 8%, woke 3 times an hour (0.7 for noise); GPT Live missed 3 s an hour. It rarely disconnects except when the operator steps away.' },
+    { value: 60000, consequence: 'The default, the operator\'s choice (Oct 28): saved 8%, woke 3 times an hour (0.7 for noise); GPT Live missed 3 s an hour. It rarely disconnects except when the operator steps away.' },
     { value: 120000, consequence: 'Saved 5%, woke less than once an hour: only long absences disconnect it.' },
   ] },
   wakeThreshold: { min: 1, max: 1000, describe:
-    "How much currency in the quiet window keeps voice Live, and wakes it from Standby. Everything is priced in one currency by the price settings, by default: each tenth of a second of the operator's sound or of GPT Live's audio 20; each display batch of an agent message 10 (a message is usually about 3 batches); a finished turn 30; a failed turn 30; an approval request 100; a request GPT Live passes on 100; a tool call or a prompt 1. At the default 50: about 0.3 s of the operator's sound wakes it; an approval or a request always does; a finished turn does when its final message comes with it (30 plus 10 a batch), but a turn end with a one-batch message (40) does not; tool calls practically never do (50 within the window). Higher: voice is on Standby more and wakes less often for noise, but more finished turns wait silently until the operator speaks, and GPT Live misses more of what it would have said; above 100 even an approval request no longer wakes it. Lower: the reverse. Choose higher when the operator says it wakes up for nothing, for coughs or noises; lower when they say they missed that the agent finished, or want to hear about its work right away.",
+    "How much currency in the quiet window keeps voice Live, and wakes it from Standby. Everything is priced in one currency by the price settings, by default: each tenth of a second of the operator's sound or of GPT Live's audio 20; each display batch of an agent message 10 (a message is usually about 3 batches); a finished turn 50; a failed turn 50; an approval request 100; a request GPT Live passes on 100; a tool call or a prompt 1. At the default 50: about 0.3 s of the operator's sound wakes it; an approval, a request, or a finished or failed turn always does; tool calls practically never do (50 within the window). The levels' finished turns that waited silently were measured with a finished turn worth 30; at 50 they wake it up to a threshold of 50. Higher: voice is on Standby more and wakes less often for noise, but more finished turns wait silently until the operator speaks, and GPT Live misses more of what it would have said; above 100 even an approval request no longer wakes it. Lower: the reverse. Choose higher when the operator says it wakes up for nothing, for coughs or noises; lower when they say they missed that the agent finished, or want to hear about its work right away.",
     levels: [
     { value: 10, consequence: 'Any agent message, finished turn, or tenth of a second of sound wakes it: saved 18%, 5.0 wakes an hour for noise; GPT Live missed 22 s an hour; every finished turn is reported at once.' },
     { value: 30, consequence: 'A finished turn alone wakes it, or 0.2 s of sound: saved 20%, 4.1 noise wakes an hour; GPT Live missed 45 s an hour.' },
@@ -128,25 +128,25 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     { value: 50, consequence: 'A typed prompt wakes voice: saved 20.4%; GPT Live missed 42 s an hour instead of 52.' },
   ] },
   messagePrice: { min: 0, max: 1000, describe:
-    "What each display batch of an agent message is worth in Standby's currency (Claude shows a message in about 3 batches). With the threshold at 50, a message alone rarely wakes voice (5 batches), but a finished turn's final message together with its turn end (30) does: that is how GPT Live hears that the agent finished. Higher: the agent's messages wake voice as they come, mid-turn included. Lower: fewer wakes, and at 0 finished turns often wait silently until the operator speaks. Choose higher when the operator wants to hear the agent's messages as they arrive; never 0 unless they ask for silence until they speak.",
+    "What each display batch of an agent message is worth in Standby's currency (Claude shows a message in about 3 batches; Codex and Pi a whole message at once). With the threshold at 50, a message alone rarely wakes voice (5 batches); a finished turn wakes it by itself (turnEndPrice). Higher: the agent's messages wake voice as they come, mid-turn included. Lower: fewer wakes mid-turn. Choose higher when the operator wants to hear the agent's messages as they arrive; 0 only if they ask for silence until the agent finishes.",
     levels: [
-    { value: 0, consequence: 'Messages never count: saved 23%, but 1.8 finished turns an hour waited silently until the operator spoke, and GPT Live missed 91 s an hour.' },
-    { value: 10, consequence: 'The default: a final message with its turn end wakes it: saved 21%; 0.1 finished turns an hour waited silently.' },
+    { value: 0, consequence: 'Messages never count, only finished turns wake it: saved 23%; GPT Live missed 91 s an hour.' },
+    { value: 10, consequence: 'The default: a message alone rarely wakes it: saved 21%.' },
     { value: 30, consequence: 'Longer messages wake it mid-turn: saved 20.6%; GPT Live missed 47 s an hour.' },
     { value: 50, consequence: 'Every message wakes it: saved 19.9%; GPT Live missed 31 s an hour.' },
   ] },
   turnEndPrice: { min: 0, max: 1000, describe:
-    "What the agent finishing its turn (or completing a task, or its session ending) is worth in Standby's currency. At the default 30, with its final message it reaches the threshold of 50, so a finished turn wakes voice and GPT Live reports it. At 50 or more a turn end alone wakes it, even without a message. Lower: finished turns wait silently. Choose 50 when the operator says they want to hear every time the agent finishes; lower only if they ask not to be told until they ask.",
+    "What the agent finishing its turn (or completing a task, or its session ending) is worth in Standby's currency. At the default 50, the threshold, a finished turn wakes voice by itself, whatever the agent, and GPT Live reports it. At 30 it took the final message too: Claude's, shown in several batches, mostly made it, but Codex and Pi send a whole message as one, and 9 of 10 Codex turns and 3 of 5 Pi turns that ended on Standby (Oct 24-28) waited silently until the operator spoke. Lower: finished turns wait silently. Choose lower only if the operator asks not to be told until they ask.",
     levels: [
     { value: 10, consequence: '1.1 finished turns an hour waited silently until the operator spoke; saved 21.7%.' },
-    { value: 30, consequence: 'The default: a finished turn with its message wakes it; 0.1 an hour waited silently; saved 21%.' },
-    { value: 50, consequence: 'Every finished turn wakes it, message or not: saved 21%; none waited silently.' },
+    { value: 30, consequence: 'A finished turn wakes it only with a final message of two batches or more: Claude\'s mostly, Codex\'s and Pi\'s never; saved 21%.' },
+    { value: 50, consequence: 'The default: every finished turn wakes it, whatever the agent: saved 21%; none waited silently.' },
   ] },
   failurePrice: { min: 0, max: 1000, describe:
-    "What the agent's turn failing is worth in Standby's currency. Failed turns were rare in recorded conversations: no measurable effect on cost between 10 and 100. At the default 30, a failure with its error message wakes voice; at 50 or more a failure alone does. Choose 50 or more when the operator wants to hear about failures at once.",
+    "What the agent's turn failing is worth in Standby's currency. Failed turns were rare in recorded conversations: no measurable effect on cost between 10 and 100. At the default 50, a failure alone wakes voice, whatever the agent; at 30 only with an error message of two batches or more. Choose lower only if the operator asks not to hear about failures until they ask.",
     levels: [
-    { value: 30, consequence: 'The default: a failure with its error message wakes it.' },
-    { value: 50, consequence: 'Every failure wakes it at once; no measurable cost.' },
+    { value: 30, consequence: 'A failure with a long enough error message wakes it.' },
+    { value: 50, consequence: 'The default: every failure wakes it at once; no measurable cost.' },
   ] },
   approvalPrice: { min: 0, max: 1000, describe:
     "What the agent needing the operator is worth in Standby's currency: an approval, a question, a denial. At the default 100, above the threshold of 50, it always wakes voice, so GPT Live can tell the operator the agent is waiting. Rare in recorded conversations, so no measurable cost. Keep it at or above the threshold; lower it only if the operator says not to be woken for approvals.",
@@ -163,8 +163,8 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
 };
 
 // Standby's defaults are the operator's choice in the Standby sandbox (Oct 18).
-export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 15000, wakeThreshold: 50,
-  speechPrice: 20, liveSpeechPrice: 20, toolPrice: 1, promptPrice: 1, messagePrice: 10, turnEndPrice: 30, failurePrice: 30, approvalPrice: 100, requestPrice: 100 };
+export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 60000, wakeThreshold: 50,
+  speechPrice: 20, liveSpeechPrice: 20, toolPrice: 1, promptPrice: 1, messagePrice: 10, turnEndPrice: 50, failurePrice: 50, approvalPrice: 100, requestPrice: 100 };
 
 /** Settings from partial overrides: unknown names and values out of range are refused. */
 export function tuning(overrides: unknown = {}, base: Tuning = DEFAULT_TUNING): Tuning {

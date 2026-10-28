@@ -243,14 +243,26 @@ test('a page that never reconnects ends Standby rather than leave voice half on'
 test('the activity window counts only what happened inside it', () => {
   const activity = new Activity(), now = 1_000_000, price = priceFor(DEFAULT_TUNING);
   activity.add('tool', now - 5000); activity.add('turn_end', now - 1000);
-  assert.equal(activity.value(2000, price, now), 30);
-  assert.equal(activity.value(10000, price, now), 31);
+  assert.equal(activity.value(2000, price, now), 50);
+  assert.equal(activity.value(10000, price, now), 51);
   assert.equal(activity.latest(2000, price, now)?.source, 'turn_end');
   assert.equal(activity.value(2000, priceFor({ ...DEFAULT_TUNING, turnEndPrice: 45 }), now), 45, 'priced when read: a new price applies at once');
-  // With nothing new, the window falls under 31 once the tool call leaves it, and under 1 once the turn end does.
-  assert.equal(activity.stallAt(10000, 31, price, now), now - 5000 + 10000);
-  assert.equal(activity.stallAt(10000, 30, price, now), now - 1000 + 10000);
-  assert.deepEqual(['tool', 'text', 'turn_end', 'attention'].map(kind => priceOf({ ...DEFAULT_TUNING, messagePrice: 25 }, kind as any)), [1, 25, 30, 100], 'prices are settings');
+  // With nothing new, the window falls under 51 once the tool call leaves it, and under 1 once the turn end does.
+  assert.equal(activity.stallAt(10000, 51, price, now), now - 5000 + 10000);
+  assert.equal(activity.stallAt(10000, 50, price, now), now - 1000 + 10000);
+  assert.deepEqual(['tool', 'text', 'turn_end', 'attention'].map(kind => priceOf({ ...DEFAULT_TUNING, messagePrice: 25 }, kind as any)), [1, 25, 50, 100], 'prices are settings');
+});
+
+test('at the defaults a finished turn wakes voice whatever the agent: Codex and Pi send their reply as one message, not in batches', () => {
+  const now = 1_000_000, price = priceFor(DEFAULT_TUNING), { standbyAfterMs, wakeThreshold } = DEFAULT_TUNING;
+  const reply = new Activity(); reply.add('text', now - 300); reply.add('turn_end', now);
+  assert.ok(reply.value(standbyAfterMs, price, now) >= wakeThreshold);
+  const bare = new Activity(); bare.add('turn_end', now);
+  assert.ok(bare.value(standbyAfterMs, price, now) >= wakeThreshold, 'a turn end with no message too');
+  const failed = new Activity(); failed.add('turn_failed', now);
+  assert.ok(failed.value(standbyAfterMs, price, now) >= wakeThreshold, 'and a failed turn');
+  const message = new Activity(); message.add('text', now);
+  assert.ok(message.value(standbyAfterMs, price, now) < wakeThreshold, 'a message mid-turn alone does not');
 });
 
 test('the timeline draws a Standby stretch from when it began to when it ended', () => {

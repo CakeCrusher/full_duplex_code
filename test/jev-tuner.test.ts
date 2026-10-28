@@ -60,6 +60,6 @@ test("with the operator's words, Jev reads them in the same call and keeps the c
 test('a setting changes only when Jev clearly prefers another level to the current one', () => {
   const flip = { holdFirstMs: { choice: 'level_2000', probabilities: { level_500: .01, level_1000: .47, level_2000: .52 } } };
   assert.deepEqual(tuningFrom(flip, DEFAULT_TUNING).changes, [], 'a near coin toss keeps the current level');
-  const asked = { standbyAfterMs: { choice: 'level_60000', probabilities: { level_15000: .09, level_60000: .65, level_30000: .2 } } };
-  assert.deepEqual(tuningFrom(asked, DEFAULT_TUNING).changes, [{ name: 'standbyAfterMs', from: 15000, to: 60000 }]);
+  const asked = { standbyAfterMs: { choice: 'level_15000', probabilities: { level_15000: .65, level_60000: .09, level_30000: .2 } } };
+  assert.deepEqual(tuningFrom(asked, DEFAULT_TUNING).changes, [{ name: 'standbyAfterMs', from: 60000, to: 15000 }]);
 });
