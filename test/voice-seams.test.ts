@@ -119,7 +119,7 @@ test('moving voice to another page continues the conversation and carries its un
   assert.equal(lives[1].options.fork, 'voice-0');
   assert.ok(h.voiceSessions.record.turns.length >= 2);
   assert.deepEqual(delivered, [], 'no end-of-session hand-off for a move');
-  assert.match(h.voiceSessions.mediator!.history.request(Infinity)!.utterances.map(u => u.text).join(' '), /rename the parser/);
+  assert.match(h.voiceSessions.mediator!.history.request()!.utterances.map(u => u.text).join(' '), /rename the parser/);
 });
 
 test('an agent session switch during voice still saves that voice session to its own record', async t => {

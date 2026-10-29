@@ -8,8 +8,9 @@ import { EventEmitter } from 'node:events';
 import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
 import { Stage, StageNothing, type StageView } from '../src/core/stage.ts';
 import { chosenCommand, Jev, type Line } from '../src/core/jev.ts';
-import { Mediator, type Gated } from '../src/core/mediator.ts';
-import { fakeJev, harness, pageReading, until } from './live-fake.ts';
+import { Mediator, type Decision } from '../src/core/mediator.ts';
+import { handledNote } from '../src/core/prompts.ts';
+import { fakeJev, harness, pageReading, turn, until } from './live-fake.ts';
 
 const view: StageView = { tabId: 7, title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"',
   commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'goto_options', say: 'Go to the section "Options"' }, { id: 'show_the_recommendation', say: 'Show and highlight: the recommendation' }], parts: [] };
@@ -127,52 +128,53 @@ test('the page moves one command at a time until Jev wants no more: a repeated m
   assert.equal(runs.length, 5, 'five at most');
 });
 
-function gated(t: any, page: { command?: string; only: number; work?: number }, run: (ids: string[]) => Promise<any>) {
-  return harness(t).then(({ h }) => {
+function staged(t: any, page: { command?: string; only: number; work?: number }, run: (ids: string[]) => Promise<any>) {
+  return harness(t).then(async ({ h, lives }) => {
     h.stage = { describe: async () => view, run, view, observe() {}, close() {} } as any;
     // After the first command, Jev wants no other.
     fakeJev(h, moment => moment.trigger === 'step' ? { page: pageReading() } : { needsAgent: .3, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: pageReading({ work: page.only > .5 ? .1 : .9, ...page }) });
-    return h;
+    await h.startLive(undefined, undefined, 'fresh');
+    const told = () => lives[0].appended.map(([kind, text]) => `${kind}: ${text}`).join('\n');
+    return { h, told };
   });
 }
 
-test('the gate: page-only is done on the page; with more, the request goes on noting the page part is done; a failure goes to the harness', async t => {
+test('the turn: page-only is done on the page and kept from the harness; with more, the words go on noting the page part is done; a failure goes to the harness', async t => {
   const runs: string[][] = [];
-  const only = await gated(t, { command: 'goto_options', only: .9 }, async ids => { runs.push(ids); return { done: [view.commands[1]], onScreen: 'heading: Options — eleven of them.' }; });
-  const handled = await only.sessionSwitch.gate('take me to the options', 'r1', []);
+  const only = await staged(t, { command: 'goto_options', only: .9 }, async ids => { runs.push(ids); return { done: [view.commands[1]], onScreen: 'heading: Options — eleven of them.' }; });
+  const kept = await turn(only.h, 'take me to the options');
   assert.deepEqual(runs, [['goto_options']]);
-  assert.equal(handled.page, true);
-  assert.match(handled.handled!, /^Nothing was sent to Claude Code: the voice tool did it on the page \(Go to the section "Options"\)\. On screen now: heading: Options — eleven of them\./);
-  const mixed = await gated(t, { command: 'goto_options', only: .1 }, async () => ({ done: [view.commands[1]], onScreen: 'heading: Options' }));
-  const along = await mixed.sessionSwitch.gate('show me the options and fix the typo', 'r2', []);
-  assert.equal(along.handled, undefined);
+  assert.deepEqual([kept.send, kept.moved, kept.note], [false, true, handledNote('page')]);
+  await until(() => /moved the page for the operator's words; on screen now: heading: Options — eleven of them\./.test(only.told()));
+  const mixed = await staged(t, { command: 'goto_options', only: .1 }, async () => ({ done: [view.commands[1]], onScreen: 'heading: Options' }));
+  const along = await turn(mixed.h, 'show me the options and fix the typo');
+  assert.equal(along.send, true, "page_work found work, though needs_agent didn't: either one sends");
   assert.match(along.note!, /already did the page part of this in the browser \(Go to the section "Options"\); don't do that again, do the rest/);
-  assert.match(along.told!, /already did the page part .* The rest goes to Claude/);
-  const work = await gated(t, { only: .1 }, async () => { throw new Error('not run'); });
-  const passed = await work.sessionSwitch.gate('make this title bigger', 'r5', []);
-  assert.equal(passed.handled, undefined);
+  const work = await staged(t, { only: .1 }, async () => { throw new Error('not run'); });
+  const passed = await turn(work.h, 'make this title bigger');
+  assert.equal(passed.send, true);
   assert.match(passed.note!, /^When they said it, the user was looking at "Briefing" \(http:\/\/localhost\/b\.html\) in the browser, at: section "Intro"\.$/);
-  const idle = await gated(t, { command: 'next_section', only: .9 }, async () => { throw new StageNothing('nothing to do there', [], '', view.commands[0]); });
-  const nothing = await idle.sessionSwitch.gate('go back', 'r4', []);
-  assert.equal(nothing.handled, undefined, 'nothing to do: the request goes on');
-  assert.match(nothing.note!, /there was nothing to do there; do what the user asked/);
-    const broken = await gated(t, { command: 'show_the_recommendation', only: .9 }, async () => { throw new Error('fdcController.run: no element #rec'); });
-  const failed = await broken.sessionSwitch.gate('highlight the recommendation', 'r3', []);
-  assert.equal(failed.handled, undefined, 'a failure goes to the harness');
+  const idle = await staged(t, { command: 'next_section', only: .9 }, async () => { throw new StageNothing('nothing to do there', [], '', view.commands[0]); });
+  const nothing = await turn(idle.h, 'go back');
+  assert.deepEqual([nothing.send, nothing.moved], [false, false], 'nothing to do there: the voice says so');
+  await until(() => /The page had nothing to do for the operator's words/.test(idle.told()));
+  const broken = await staged(t, { command: 'show_the_recommendation', only: .9 }, async () => { throw new Error('fdcController.run: no element #rec'); });
+  const failed = await turn(broken.h, 'highlight the recommendation');
+  assert.deepEqual([failed.send, failed.escalated], [true, true], 'a failure goes to the harness');
   assert.match(failed.note!, /page's controls failed: fdcController\.run: no element #rec\. Fix the page's controller/);
-  assert.match(failed.told!, /^The page couldn't go on \(fdcController\.run: no element #rec\)/);
+  await until(() => /The page couldn't go on \(fdcController\.run: no element #rec\)/.test(broken.told()));
 });
 
-test('the mediator tells GPT Live what the page shows and sends the harness the note with the request', async t => {
+test('the mediator tells GPT Live what the voice tool did and sends the harness the note with the words', async t => {
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
   const appends: [string, string, string | null][] = []; live.append = async (kind: string, content: string, delegationId: string | null) => { appends.push([kind, content, delegationId]); };
   const deliveries: any[] = [];
-  const gate = async (): Promise<Gated> => ({ note: 'The voice tool already did the page part.', told: 'On screen now: Options.' });
-  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate });
+  const route = async (): Promise<Decision> => ({ send: true, note: 'The voice tool already did the page part.', told: 'On screen now: Options.' });
+  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, route });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Show me the options and fix the typo.', start_ms: 0, end_ms: 900 });
-  m.delegate('d1', 900);
+  m.decide('delegation', 'd1');
   await until(() => deliveries.length);
   assert.deepEqual(appends[0], ['thinking', 'On screen now: Options.', 'd1']);
   assert.match(deliveries[0].content, /Earlier speech went with earlier voice requests\. The voice tool already did the page part\.\n\nuser: Show me the options and fix the typo\.$/);
@@ -202,7 +204,7 @@ test('a one-off waits 3 s in all, and a click that opens another page of the sit
   await assert.rejects(stage.act([{ do: 'click', n: 9 }]), /No element \[9\]/);
 });
 
-test('requests reach the agent in the order made, however long each one\'s gate takes', async t => {
+test("requests reach the agent in the order made, however long each one's reading takes", async t => {
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
   live.append = async () => {};
@@ -210,34 +212,34 @@ test('requests reach the agent in the order made, however long each one\'s gate 
   let release!: () => void;
   const slow = new Promise<void>(resolve => { release = resolve; });
   const started: string[] = [];
-  const gate = async (said: string): Promise<Gated> => { started.push(said); if (/bigger/.test(said)) await slow; return {}; };
-  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, gate });
+  const route = async ({ fresh }: { fresh: string }): Promise<Decision> => { started.push(fresh); if (/bigger/.test(fresh)) await slow; return { send: true }; };
+  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, route });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Go to the options and make its title bigger.', start_ms: 0, end_ms: 900 });
-  m.delegate('d1', 900);
+  m.decide('turn');
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Actually, make it smaller instead.', start_ms: 5000, end_ms: 6000 });
-  m.delegate('d2', 6000);
+  m.decide('turn');
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(deliveries.length, 0, 'the second waits for the first');
-  assert.equal(started.length, 1, "the second's gate, which may move the page, starts after the first's");
+  assert.equal(started.length, 1, "the second's reading, which may move the page, starts after the first's");
   release();
   await until(() => deliveries.length === 2);
   assert.match(deliveries[0].content, /bigger/); assert.match(deliveries[1].content, /smaller/);
 });
 
-test("a request whose gate's outcome fails isn't lost: its words go with the next request", async t => {
+test("words whose turn fails aren't lost: they go with the next request", async t => {
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
   live.append = async () => {};
   const faults: string[] = [];
-  const m = new Mediator({ live, observer, deliver: () => {}, log: e => { if (e.type === 'bridge.fault') faults.push(String(e.message)); }, publish: () => {}, clean: String, hold: null, gate: async () => ({}) });
+  const m = new Mediator({ live, observer, deliver: () => {}, log: e => { if (e.type === 'bridge.fault') faults.push(String(e.message)); }, publish: () => {}, clean: String, hold: null, route: async () => ({ send: true }) });
   t.after(() => { m.stop(); observer.close(); });
-  m.afterGate = () => { throw new Error('boom'); };
+  m.decided = () => { throw new Error('boom'); };
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Fix the parser.', start_ms: 0, end_ms: 900 });
-  m.delegate('d1', 900);
+  m.decide('turn');
   await until(() => faults.length);
   assert.deepEqual(faults, ['boom']);
-  assert.equal(m.history.request(Infinity)?.fresh, 'Fix the parser.');
+  assert.equal(m.history.request()?.fresh, 'Fix the parser.');
 });
 
 test('a page controller returning anything is kept to well-formed commands', async () => {

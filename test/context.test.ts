@@ -138,15 +138,15 @@ test('JSONL input survives split UTF-8 bytes and partial lines', () => {
   assert.deepEqual(found, [{ text: 'hello 🌎' }]);
 });
 const said = (request: SpokenRequest | null) => request?.utterances.map(u => `${u.role}: ${u.text.trim()}`);
-test('only a delegation consumes a request, and repeating it cannot resend the same speech', () => {
+test('only delivery consumes a request, and repeating it cannot resend the same speech', () => {
   const h = new VoiceHistory();
   h.add({ type: 'session.input_transcript.delta', delta: 'Create ', start_ms: 1, end_ms: 100 });
   h.add({ type: 'session.input_transcript.delta', delta: 'a file.', start_ms: 100, end_ms: 200 });
-  const request = h.request(220)!; assert.deepEqual(said(request), ['operator: Create a file.']);
-  assert.deepEqual(said(h.request(220)), ['operator: Create a file.']);
-  h.markDelivered(request); assert.equal(h.request(220), null);
+  const request = h.request()!; assert.deepEqual(said(request), ['operator: Create a file.']);
+  assert.deepEqual(said(h.request()), ['operator: Create a file.']);
+  h.markDelivered(request); assert.equal(h.request(), null);
   h.add({ type: 'session.input_transcript.delta', delta: 'Use JavaScript.', start_ms: 300, end_ms: 400 });
-  assert.deepEqual(said(h.request(420)), ['operator: Use JavaScript.']);
+  assert.deepEqual(said(h.request()), ['operator: Use JavaScript.']);
 });
 test('words GPT Live transcribed from the silence it heard are not passed on as the operator\'s', () => {
   const h = new VoiceHistory();
@@ -154,13 +154,13 @@ test('words GPT Live transcribed from the silence it heard are not passed on as 
   for (let ms = 0; ms < 20000; ms += 200) echo(ms, ms + 200, ms >= 2000 && ms < 4000 ? 9000 : 1);
   h.add({ type: 'session.input_transcript.delta', delta: 'Add a test.', start_ms: 2200, end_ms: 3600 });
   h.add({ type: 'session.input_transcript.delta', delta: 'a brief outcome only', start_ms: 9000, end_ms: 9400 });
-  const request = h.request(9500)!;
+  const request = h.request()!;
   assert.deepEqual(said(request), ['operator: Add a test.']); assert.deepEqual(request.unheard, ['a brief outcome only']);
   h.markDelivered(request);
   h.add({ type: 'session.input_transcript.delta', delta: 'the', start_ms: 15000, end_ms: 15200 });
-  assert.equal(h.request(15300), null, 'nothing heard, nothing to send');
+  assert.equal(h.request(), null, 'nothing heard, nothing to send');
   h.add({ type: 'session.input_transcript.delta', delta: 'Ship it.', start_ms: 30000, end_ms: 30600 });
-  assert.deepEqual(said(h.request(30700)), ['operator: Ship it.'], 'without an echo of that stretch, the words are kept');
+  assert.deepEqual(said(h.request()), ['operator: Ship it.'], 'without an echo of that stretch, the words are kept');
   assert.equal(h.audible(3800, 4400), true, 'a second either side counts');
 });
 test('compaction summaries do not reach GPT Live; the compaction itself does', () => {
@@ -180,11 +180,11 @@ test('known credentials and likely API keys are scrubbed', () => {
 });
 
 
-test('a request is the conversation since the previous delegation, one utterance per speaker and pause', () => {
+test('a request is the conversation since the previous request, one utterance per speaker and pause', () => {
   const h = new VoiceHistory();
   const say = (stream: 'input' | 'output', delta: string, start_ms: number, end_ms: number) => h.add({ type: `session.${stream}_transcript.delta`, delta, start_ms, end_ms });
   say('input', 'Fix the login bug.', 0, 800);
-  h.markDelivered(h.request(900)!);
+  h.markDelivered(h.request()!);
   say('input', 'What port?', 2000, 2800);
   say('output', 'Port 4317.', 3000, 3800);
   say('input', ' Create', 9000, 9400);
@@ -192,15 +192,16 @@ test('a request is the conversation since the previous delegation, one utterance
   say('input', ' a file.', 9400, 9900);
   say('input', ' Then test it.', 12500, 13000);
   say('output', 'Sure.', 13200, 13600);
-  say('input', ' One more thing.', 17000, 17500);
-  const request = h.request(13100)!;
+  const request = h.request()!;
   assert.deepEqual(said(request), ['operator: What port?', 'intermediary: Port 4317.', 'operator: Create a file.', 'intermediary: Mm hmm', 'operator: Then test it.', 'intermediary: Sure.'],
-    'nothing from before the previous delegation; a backchannel does not split an utterance, a pause over 2 s does');
-  h.markDelivered(request);
-  assert.deepEqual(said(h.request(18000)), ['operator: One more thing.'], 'speech starting over 3 s after a delegation goes with the next request');
-  h.markDelivered(h.request(18000)!);
+    'nothing from before the previous request; a backchannel does not split an utterance, a pause over 2 s does');
+  assert.equal(request.fresh, 'Then test it.', 'the latest words are what the turn is read for');
+  h.claim(request, 'r1');
+  say('input', ' One more thing.', 17000, 17500);
+  assert.deepEqual(said(h.request()), ['operator: One more thing.'], 'words said while a request is on its way go with the next one');
+  h.commit('r1'); h.markDelivered(h.request()!);
   say('output', 'Done.', 19000, 19500);
-  assert.equal(h.request(20000), null, 'the voice assistant alone makes no request');
+  assert.equal(h.request(), null, 'the voice assistant alone makes no request');
 });
 
 
@@ -237,4 +238,17 @@ test('every fragment names its originating hook and reconstructs the full UTF-8 
   assert.ok(sent.every(e=>e.kind==='thinking'&&e.text.startsWith('[Claude PostToolUse; part ')));
   assert.equal(sent.map(e=>e.text.replace(/^\[Claude PostToolUse; part \d+\/\d+\]\n/,'')).join(''),raw);
   queue.stop();
+});
+
+test("the latest words a turn is read for are all of the operator's since the last reading, across their pauses and what the voice said among them", () => {
+  const h = new VoiceHistory();
+  const say = (stream: 'input' | 'output', delta: string, start_ms: number, end_ms: number) => h.add({ type: `session.${stream}_transcript.delta`, delta, start_ms, end_ms });
+  say('input', 'Run the tests.', 0, 900);
+  say('output', 'Sure.', 1000, 1400);
+  say('input', "Okay, that's it, send it", 5000, 6500);
+  say('output', 'Mm-hmm.', 6600, 6900);
+  say('input', ' over.', 9500, 9900);
+  const read = h.spoken(Infinity, 0).map(({ role, text }) => `${role}: ${text}`);
+  assert.deepEqual(read, ['operator: Run the tests.', 'intermediary: Sure.', "operator: Okay, that's it, send it over."]);
+  assert.deepEqual(h.spoken().map(({ text }) => text).at(-1), 'over.', 'without it, only the words after their last pause');
 });

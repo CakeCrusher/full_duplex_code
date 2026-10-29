@@ -10,7 +10,8 @@ import { EventEmitter } from 'node:events';
 import type { TestContext } from 'node:test';
 import { Harness } from '../src/core/bridge.ts';
 import { claude } from '../src/adapters/claude/index.ts';
-import type { Moment, PageJudgment, Reading } from '../src/core/jev.ts';
+import type { Moment, PageJudgment, Reading, Trigger } from '../src/core/jev.ts';
+import { routeTurn } from '../src/core/turn.ts';
 
 export const settle = (ms = 20) => new Promise(resolve => setTimeout(resolve, ms));
 export const until = async <T>(check: () => T) => { for (let i = 0; i < 300; i++) { const v = check(); if (v) return v; await settle(); } throw new Error('timed out'); };
@@ -105,3 +106,6 @@ export function fakeJev(h: Harness, reading: (moment: Moment) => Partial<Reading
   h.jev = { read: async (moment: Moment) => { moments.push(moment); return { trigger: moment.trigger, said: moment.latest?.text ?? '', transcript: '', needsAgent: .3, ...reading(moment) }; } } as any;
   return moments;
 }
+/** What the voice tool makes of the operator's turn with these words as the latest (turn.ts), as the mediator asks it. */
+export const turn = (h: Harness, said: string, { why = 'turn', cued }: { why?: Trigger; cued?: boolean } = {}) =>
+  routeTurn(h, { utterances: [{ role: 'operator', text: said, endMs: 0 }], through: 0, seqs: [0], fresh: said, ...cued && { cued } }, [{ role: 'operator', text: said, at: Date.now() }], why);

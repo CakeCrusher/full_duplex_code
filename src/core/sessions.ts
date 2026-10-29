@@ -1,20 +1,15 @@
-// Turning the voice of the operator's running companions on and off, by voice. Jev reads each
-// request GPT Live passes on (jev.ts) against the companions running now; what it finds asked
-// for is carried out here, and GPT Live is told what was done.
+// Turning the voice of the operator's running companions on and off, by voice. Jev reads each of
+// the operator's turns (turn.ts) against the companions running now; what it finds asked for is
+// carried out here, and GPT Live is told what was done.
 //
 // Turning one on asks it to start voice in its open page (Resume when it has a conversation);
 // turning one off ends its voice. Companions that start come first: this one goes off only once
 // another is on, so the operator is never left without a voice. Several can be on at once.
-//
-// The gate routes every request GPT Live passes on: session changes are carried out here, page requests by the
-// presenter (presenter.ts), and the rest goes to the agent, with what the page could not do noted for it.
 import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import { listCompanions, type CompanionEntry } from './companions.ts';
-import { ASKED, COMPANION_ONLY, ONLY, UNLISTED, sessionName, type Session } from './jev.ts';
-import type { Spoken } from './voice-history.ts';
-import type { Gated } from './mediator.ts';
-import { companionHandled, sessionsHandled, sessionsOutcome } from './prompts.ts';
+import { ASKED, ONLY, UNLISTED, sessionName, type Reading, type Session } from './jev.ts';
+import { sessionsHandled, sessionsOutcome } from './prompts.ts';
 import { shownLine } from '../../web/companions.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
@@ -48,26 +43,13 @@ export class SessionSwitch {
     const companions = await listCompanions(this.bridge, true, timeoutMs);
     return companions.map(c => ({ id: c.id, folder: c.folder, sessionId: c.sessionId, on: c.voice !== 'none', current: c.current, shown: shownLine(c) }));
   }
-  /** The gate: Jev's reading of a request GPT Live passed on, before it reaches the harness. */
-  async gate(said: string, requestId: string, spoken: Spoken[], cued?: boolean): Promise<Gated> {
-    const bridge = this.bridge;
-    // With a page on the stage, the presenter has read (or is reading) the operator's turn: for the same words, that reading
-    // is this one too, and its page part is done once. The page and the companions are read meanwhile.
-    const turn = bridge.presenter.turnFor(said);
-    const [sessions, page] = await Promise.all([this.sessions(800), bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
-    const ours = await turn;
-    const reading = ours?.reading ?? await bridge.read({ trigger: 'delegation', spoken, sessions, page });
-    const asked = reading.sessions ?? { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] };
-    bridge.log({ type: 'sessions.judged', requestId, needsAgent: reading.needsAgent, ...asked, companionOnly: reading.companionOnly, page: reading.page, read: reading.trigger });
-    if (asked.asked < ASKED) {
-      // Asked of the page: the presenter does it (and says what went on to the agent, if anything).
-      const done = page && reading.page && await bridge.presenter.request(reading, said, spoken, cued || ours?.moved);
-      if (done) return done;
-      // Only about how the companion behaves: Jev's tuning and instruction learning take it from here, not the harness.
-      if ((reading.companionOnly ?? 0) >= COMPANION_ONLY) return { reading, handled: companionHandled(bridge.agent), companion: true };
-      // For the agent: what the page could not do, or what the user was looking at when they said it.
-      return page ? { reading, note: bridge.presenter.noteFor(page, reading.page) } : { reading };
-    }
+  /**
+   * What Jev read in the operator's turn about voice sessions, carried out: undefined when they asked for none. Whether
+   * session changes were all they asked (then nothing goes to the agent), and what GPT Live is told.
+   */
+  act(reading: Reading, sessions: Session[]): { only: boolean; told: string } | undefined {
+    const bridge = this.bridge, asked = reading.sessions;
+    if (!asked || asked.asked < ASKED) return;
     // A session named that isn't running: Jev still picks the nearest listed one to turn on ("switch to runta" chose
     // video-editing), so nothing is turned on or off; GPT Live is told which ones are running.
     const unlisted = asked.unlisted >= UNLISTED;
@@ -80,10 +62,8 @@ export class SessionSwitch {
     const only = asked.only >= ONLY;
     bridge.publish({ type: 'sessions', text: plan, handled: only });
     if (on.length || off.length) void this.carryOut(on, off);
-    if (only) return { reading, handled: sessionsHandled(bridge.agent, plan) };
-    // Asked together with something for the harness: the request goes on, and GPT Live hears what changes.
-    this.tell(plan);
-    return { reading };
+    // Asked together with something for the harness, the words go on, and GPT Live hears what changes.
+    return { only, told: only ? sessionsHandled(bridge.agent, plan) : plan };
   }
 
   async carryOut(on: Session[], off: Session[]) {

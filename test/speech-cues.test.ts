@@ -57,36 +57,33 @@ test("the operator's latest words that the voice answered by moving the page are
   const h = new VoiceHistory();
   const say = (delta: string, start_ms: number, end_ms: number) => h.add({ type: 'session.input_transcript.delta', delta, start_ms, end_ms });
   say('Fix the parser.', 0, 900);
-  h.markDelivered(h.request(1000)!);
+  h.markDelivered(h.request()!);
   say('Um, take me', 5000, 5600); say(' to the options.', 5700, 6400);
   assert.equal(h.cueLatest('moved'), 2);
-  const request = h.request(Infinity)!;
+  const request = h.request()!;
   assert.deepEqual(request.notes, ['moved']); assert.equal(request.cued, true);
-  assert.equal(request.fresh, 'Um, take me to the options.', 'the gate still judges them: the move may have been all they asked');
+  assert.equal(request.fresh, 'Um, take me to the options.', 'their turn is still read: the move may have been all they asked');
   say('Highlight your recommendation.', 12000, 13000);
-  const next = h.request(Infinity)!;
-  assert.equal(next.fresh, 'Highlight your recommendation.'); assert.equal(next.cued, undefined, 'words a cue answered earlier leave newer words to the gate');
+  const next = h.request()!;
+  assert.equal(next.fresh, 'Highlight your recommendation.'); assert.equal(next.cued, undefined, 'words a cue answered earlier leave newer words to their turn');
   assert.deepEqual(next.notes, ['moved'], 'though the note still goes with the earlier words');
-  assert.equal(next.earlier, undefined, "nor are they context for what's asked now");
-  say('Then the risks.', 20000, 20800);
-  assert.equal(h.request(Infinity)!.earlier, 'Highlight your recommendation.', 'words no cue answered still are');
 });
 
-test('the gate moves nothing again for words the voice moved the page for; only the page asked for, nothing goes to the agent', async t => {
-  const { harness, fakeJev, pageReading } = await import('./live-fake.ts');
+test('the turn moves nothing again for words the voice moved the page for; only the page asked for, nothing goes to the agent', async t => {
+  const { harness, fakeJev, pageReading, turn } = await import('./live-fake.ts');
   const { h } = await harness(t);
   const runs: string[][] = [];
   let page = pageReading({ command: 'goto_sessions', only: .9, work: 0 });
   h.stage = { describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; }, view, observe() {}, close() {} } as any;
   fakeJev(h, moment => ({ needsAgent: .2, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: moment.trigger === 'step' ? pageReading() : page }));
-  const only = await h.sessionSwitch.gate('take me to the sessions', 'r1', [], true);
-  assert.equal(only.page, true); assert.match(only.handled!, /already moved the page for them/);
+  const only = await turn(h, 'take me to the sessions', { cued: true });
+  assert.equal(only.send, false);
   page = pageReading({ command: 'goto_sessions', only: .1, work: .9 });
-  const more = await h.sessionSwitch.gate('show me the sessions and fix the typo', 'r2', [], true);
-  assert.equal(more.handled, undefined); assert.equal(more.note, undefined, 'the request already carries the cue note');
+  const more = await turn(h, 'show me the sessions and fix the typo', { cued: true });
+  assert.equal(more.send, true);
   assert.deepEqual(runs, [], 'nothing ran twice');
-  await h.sessionSwitch.gate('take me to the sessions', 'r3', []);
-  assert.deepEqual(runs, [['goto_sessions']], 'without a cue, the gate moves the page');
+  await turn(h, 'take me to the sessions');
+  assert.deepEqual(runs, [['goto_sessions']], 'without a cue, the turn moves the page');
 });
 
 test("GPT Live is briefed on the page once it can be read: a new tab's blank page is read again shortly", async t => {
@@ -112,8 +109,10 @@ test('a walkthrough asked for: the first part shows, and each time the voice fin
   const { fakeJev, pageReading } = await import('./live-fake.ts');
   fakeJev(h, () => ({ needsAgent: .4, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: pageReading({ command: 'page_slide_3', only: .8, work: .3, walk: .9 }) }));
   h.presenter.walkQuietMs = 50;
-  const gated = await h.sessionSwitch.gate('walk me through the rest', 'r1', []);
-  assert.match(gated.handled!, /Nothing was sent to Claude Code: the operator asked to be walked through the page.*Slide 3 of 5.*Present this part/);
+  const { turn } = await import('./live-fake.ts');
+  const walked = await turn(h, 'walk me through the rest');
+  assert.deepEqual([walked.send, walked.moved], [false, true]);
+  await until(() => lives[0].appended.some(([kind, text]) => kind === 'commentary' && /Nothing was sent to Claude Code: the operator asked to be walked through the page.*Slide 3 of 5.*Present this part/.test(text)));
   assert.deepEqual(runs, [['page_slide_3']]);
   const commentary = () => lives[0].appended.filter(([kind, text]) => kind === 'commentary' && /The page moved on/.test(text)).map(([, text]) => text);
   await new Promise(resolve => setTimeout(resolve, 700));
@@ -127,7 +126,7 @@ test('a walkthrough asked for: the first part shows, and each time the voice fin
   await until(() => !h.presenter.walking);
   assert.equal(slide, 5); assert.equal(commentary().length, 2, 'the last part ends it: a step that goes nowhere is not presented');
   // Asked again, and the operator speaks up meanwhile: it stops.
-  slide = 3; await h.sessionSwitch.gate('walk me through the rest', 'r2', []);
+  slide = 3; await turn(h, 'walk me through the rest');
   h.voiceSessions.mediator!.history.lastInputAt = Date.now() + 10000;
   await until(() => !h.presenter.walking);
 });
@@ -135,6 +134,8 @@ test('a walkthrough asked for: the first part shows, and each time the voice fin
 test("the operator's words are read once when they finish, and the page moves for them, whatever the voice says or passes on", async t => {
   const { harness, page, until, fakeJev, pageReading } = await import('./live-fake.ts');
   const { h, lives } = await harness(t);
+  // Jev is there before voice starts, as it is when fdc starts with a TypeSafe key.
+  fakeJev(h);
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const runs: string[][] = [], judged: string[] = [];
   const deck: StageView = { ...view, where: 'Slide 24', commands: [{ id: 'page_next', say: 'Go to the next slide' }, { id: 'page_slide_27', say: 'Go to slide 27', name: 'One highlight at a time' }] };
@@ -145,16 +146,16 @@ test("the operator's words are read once when they finish, and the page moves fo
     const said = latest!.text; judged.push(said);
     return { ...read, page: /continue/i.test(said) ? pageReading({ command: 'page_next', only: .7, work: .1, walk: .2 }) : pageReading({ only: .1, work: .9 }) };
   });
-  h.presenter.operatorQuietMs = 30;
+  h.voiceSessions.mediator!.operatorQuietMs = 30;
   h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: "Okay, let's continue.", start_ms: 0, end_ms: 900 });
   await until(() => runs.length === 1);
   await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /The voice tool moved the page for the operator's words.*Slide 25/.test(text)));
-  // The voice then answers, naming the slide it wrongly thinks comes next, and passes the words on too.
+  // The voice then answers, naming the slide it wrongly thinks comes next, and asks to pass the words on too.
   h.voiceSessions.live!.emit('event', { type: 'session.output_transcript.delta', delta: " Let's look at one highlight at a time. " });
-  const gated = await h.sessionSwitch.gate("Okay, let's continue.", 'r1', h.voiceSessions.mediator!.history.spoken());
-  assert.deepEqual(runs, [['page_next']], "one move, once: not again for the gate, nor for the voice's words in that answer");
-  assert.match(gated.handled!, /already moved the page for them/);
-  assert.equal(judged.filter(said => /continue/.test(said)).length, 1, 'read once: the gate routes the same words by the same reading');
+  h.voiceSessions.live!.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' } });
+  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /already moved the page for them/.test(text)));
+  assert.deepEqual(runs, [['page_next']], "one move, once: not again for GPT Live's asking, nor for the voice's words in that answer");
+  assert.equal(judged.filter(said => /continue/.test(said)).length, 1, 'read once: GPT Live asking hears what came of the same reading');
   // Words that ask nothing of the page move nothing.
   h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: 'Fix the parser.', start_ms: 5000, end_ms: 6000 });
   await until(() => judged.includes('Fix the parser.'));
@@ -165,6 +166,7 @@ test("the operator's words come first: a part's last step goes on to the next se
   const { harness, page, until, fakeJev, pageReading } = await import('./live-fake.ts');
   const wait = <T>(label: string, check: () => T) => until(check).catch(error => { throw new Error(`${label}: ${error.message}`); });
   const { h, lives } = await harness(t);
+  fakeJev(h);
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const runs: string[][] = [], judged: string[] = [];
   const box: StageView = { ...view, where: 'Step 3 of 3', commands: [{ id: 'page_next_step', say: 'Next step in the box' }, { id: 'next_section', say: 'Go to the next section' }] };
@@ -180,7 +182,7 @@ test("the operator's words come first: a part's last step goes on to the next se
     const said = latest!.text; judged.push(said);
     return { ...read, page: /next/i.test(said) ? pageReading({ command: 'page_next_step', only: .8, work: .1, walk: .1, unhappy: .1 }) : /wrong/.test(said) ? pageReading({ only: .2, work: .3, unhappy: .8 }) : pageReading({ only: .1, work: .9 }) };
   });
-  h.presenter.operatorQuietMs = 60000;
+  h.voiceSessions.mediator!.operatorQuietMs = 60000;
   const live = h.voiceSessions.live!;
   live.emit('event', { type: 'session.input_transcript.delta', delta: "We're continuing, next", start_ms: 0, end_ms: 900 });
   // GPT Live's "Mm-hmm" while they pause isn't an answer: nothing is judged yet.

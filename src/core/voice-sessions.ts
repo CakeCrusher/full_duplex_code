@@ -6,6 +6,7 @@ import type { OutboxEntry } from './outbox.ts';
 import type { Page } from './pages.ts';
 import { LiveSession, type CloseResult } from './live-session.ts';
 import { Mediator } from './mediator.ts';
+import { routeTurn } from './turn.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { recentHistory } from './recent-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
@@ -118,6 +119,8 @@ export class VoiceSessions {
   senders = new Map<string, Mediator>();
   /** Voice on Standby, and what is happening in the conversation, priced (activity.ts); and when a wake's fork last failed. */
   standby?: Standby; activity = new Activity(); standbyTimer: NodeJS.Timeout; wakeForkFailedAt = -Infinity;
+  /** When Jev found the operator done for now (turn.ts): voice goes on Standby once GPT Live has answered, unless they go on talking. */
+  doneAt?: number;
   constructor(bridge: Harness, { store = true, resumeDir = path.join(bridge.root, '.runs', 'voice-resume') }: { store?: boolean; resumeDir?: string } = {}) {
     this.bridge = bridge; this.store = store; this.resumeStore = new ResumeStore(resumeDir);
     this.standbyTimer = setInterval(() => this.checkStandby(), 1000); this.standbyTimer.unref();
@@ -156,23 +159,30 @@ export class VoiceSessions {
       if (this.live && this.live.state !== 'closed') return;
       // Standby turned off meanwhile: voice wakes, as the setting now says.
       if (!standbyAfterMs) return this.wake('Standby was turned off', false);
-      if (this.activity.value(standbyAfterMs, price, now) >= wakeThreshold) {
-        const source = this.activity.latest(standbyAfterMs, price, now)?.source ?? 'activity';
+      // Only what happened since Standby began wakes it: the operator's goodbye doesn't.
+      if (this.activity.value(standbyAfterMs, price, now, standby.since) >= wakeThreshold) {
+        const source = this.activity.latest(standbyAfterMs, price, now, standby.since)?.source ?? 'activity';
         this.wake(source, source === 'operator');
       }
       return;
     }
     const live = this.live, run = this.run, page = this.page;
+    // Done for now, they spoke again: the conversation goes on.
+    if (this.doneAt && this.voiceAt > this.doneAt) this.doneAt = undefined;
     if (!standbyAfterMs || bridge.stopping || this.moving || !live || live.state !== 'active' || run?.live !== live || !page || page.ws.readyState !== WebSocket.OPEN) return;
-    // A voice session gets the whole window before it can go quiet.
-    if (now - (live.startedAt ?? now) < standbyAfterMs || this.activity.value(standbyAfterMs, price, now) >= wakeThreshold) return;
+    // Jev found the operator done for now: Standby once GPT Live has answered (quiet for a moment after speaking, or after
+    // 6 s if it doesn't); otherwise a voice session gets the whole window before it can go quiet.
+    const done = this.doneAt !== undefined && (this.liveSpeechAt > this.doneAt ? now - this.liveSpeechAt > 1500 : now - this.doneAt > 6000);
+    if (!done && (now - (live.startedAt ?? now) < standbyAfterMs || this.activity.value(standbyAfterMs, price, now) >= wakeThreshold)) return;
     // A request on its way to the agent keeps voice Live until the agent has it.
     if ([...bridge.outbox.values()].some(entry => entry.state === 'queued' || entry.state === 'dispatching')) return;
-    this.standby = { since: Date.now(), page };
-    bridge.log({ type: 'voice.standby', liveRun: live.reservation, afterMs: standbyAfterMs, threshold: wakeThreshold, value: this.activity.value(standbyAfterMs, price, now) });
+    this.standby = { since: Date.now(), page }; this.doneAt = undefined;
+    bridge.log({ type: 'voice.standby', liveRun: live.reservation, afterMs: standbyAfterMs, threshold: wakeThreshold, value: this.activity.value(standbyAfterMs, price, now), asked: done || undefined });
     bridge.publish({ type: 'standby', state: 'on' });
     void live.close(STANDBY);
   }
+  /** Jev found the operator done for now (their goodbye, stepping away, asking the voice to sleep): Standby follows GPT Live's answer. */
+  standbyAsked() { if (this.live?.state === 'active' && this.bridge.tuning.standbyAfterMs) { this.doneAt = Date.now(); this.bridge.log({ type: 'voice.standby_asked' }); } }
   /** Asks the page on Standby to reconnect voice. */
   wake(reason: string, operator: boolean) {
     const standby = this.standby;
@@ -198,10 +208,10 @@ export class VoiceSessions {
     publish(this.bridge.status());
   }
   /** fdc's own instructions for the voice (or others), as a short hash: which ones a session started with. */
-  prompt(text = liveInstructions(this.bridge.agent)) { return createHash('sha1').update(text).digest('hex').slice(0, 12); }
+  prompt(text = liveInstructions(this.bridge.agent, { jev: Boolean(this.bridge.jev) })) { return createHash('sha1').update(text).digest('hex').slice(0, 12); }
   instructions() {
     const additional = this.additionalInstructions.map(item => item.text).join('\n\n');
-    return liveInstructions(this.bridge.agent) + (additional ? `\n\nAdditional operator instructions:\n${additional}` : '');
+    return liveInstructions(this.bridge.agent, { jev: Boolean(this.bridge.jev) }) + (additional ? `\n\nAdditional operator instructions:\n${additional}` : '');
   }
   /** An instruction Jev learned from the operator: it joins this companion's instructions at once, under an ID the operator can remove it by. */
   async learn({ text, ...judged }: LearnedInstruction) {
@@ -418,7 +428,7 @@ export class VoiceSessions {
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator: Mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
-      audit: bridge.handOffAudit, gate: bridge.jev ? (said, id, spoken, cued) => bridge.sessionSwitch.gate(said, id, spoken, cued) : undefined,
+      audit: bridge.handOffAudit, route: bridge.jev ? (request, spoken, why) => routeTurn(bridge, request, spoken, why) : undefined,
       read: bridge.jev ? (trigger, spoken) => bridge.read({ trigger, spoken }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake };
@@ -529,9 +539,8 @@ export class VoiceSessions {
     }
     if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.bridge.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
     if (event.type === 'session.started') this.begun(run);
-    // GPT Live's words can move the page as it says them; the operator's, once they finish.
+    // GPT Live's words can move the page as it says them (the operator's, once their turn ends: the mediator's).
     if (event.type === 'session.output_transcript.delta' && this.live === live) this.bridge.presenter.heard(String(event.delta ?? ''));
-    if (event.type === 'session.input_transcript.delta' && this.live === live && String(event.delta ?? '').trim()) this.bridge.presenter.heardOperator();
     if (event.type === 'session.delegation.created') this.activity.add('request');
     // ...and to the first words it says.
     if (event.type === 'session.output_transcript.delta' && !run.spoke) { run.spoke = true; this.bridge.log({ type: 'voice.first_words', plan: run.plan, automatic: run.automatic, firstWordsMs: Date.now() - run.requested.at }); }

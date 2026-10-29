@@ -85,7 +85,7 @@ test('a learned instruction joins this companion at once under an ID; removing i
   assert.doesNotMatch(log, /jev-key/, 'the key never reaches the log');
 });
 
-test('Jev reads each request sent to the harness without a gate, in the conversation, once, and not on pauses', async t => {
+test('without the turn reading, Jev reads each request sent to the harness, in the conversation, once, and not on pauses', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const live: any = new EventEmitter(); live.state = 'active'; live.close = () => {}; live.append = async () => {};
   const observer = new ClaudeObserver({ sessionId: 'test' }), asked: any[] = [], considered: any[] = [], delivered: any[] = [];
@@ -96,7 +96,7 @@ test('Jev reads each request sent to the harness without a gate, in the conversa
   live.emit('event', { type: 'session.input_transcript.delta', delta: "From now on, don't read paths out loud.", start_ms: 1000, end_ms: 2500 });
   t.mock.timers.tick(10000); await new Promise(resolve => setImmediate(resolve));
   assert.equal(asked.length, 0, 'a pause alone asks nothing');
-  mediator.delegate('d1', 3000);
+  mediator.decide('delegation', 'd1');
   for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
   assert.equal(delivered.length, 1);
   assert.deepEqual(asked.map(({ trigger, spoken }) => [trigger, spoken.map(({ role, text }: any) => [role, text])]), [['unsent', [['intermediary', 'Claude finished the edit.'], ['operator', "From now on, don't read paths out loud."]]]]);

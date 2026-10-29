@@ -1,11 +1,11 @@
-// The hand-off audit, optional: on when TYPESAFE_API_KEY is set. For each request that reaches the harness, the record
-// says how it got there (GPT Live passed it on, voice ended with it unsent, or the voice tool sent it), next to Jev's
-// judgment of whether it needed the harness (jev.ts) and the conversation Jev read, for learning how often GPT Live and
-// Jev disagree, and in which direction. It only records: deciding what reaches the harness is GPT Live's job.
+// The hand-off audit, optional: on when TYPESAFE_API_KEY is set. For each of the operator's turns, the record says what
+// came of their words (passed on to the harness, kept from it, sent when voice ended with them unsent, or sent because the
+// page couldn't do what they meant), next to Jev's judgment of whether they needed the harness (jev.ts) and the
+// conversation Jev read: what was kept is where lost work would show. It only records.
 import fs from 'node:fs';
 
-/** Who sent the operator's words on: GPT Live, voice ending (GPT Live had kept them), or the voice tool (the page couldn't do what they meant). */
-export type HandOff = 'passed' | 'answered' | 'escalated';
+/** What came of the operator's words: passed on (by Jev, or by GPT Live without it), kept from the harness, sent when voice ended, or sent because the page couldn't do what they meant. */
+export type HandOff = 'passed' | 'kept' | 'answered' | 'escalated';
 
 export class DelegationAudit {
   file: string;

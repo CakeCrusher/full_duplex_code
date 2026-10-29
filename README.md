@@ -19,7 +19,7 @@ You don't have to stay at your desk. Hand off a task, go do something else, and 
 Every change is judged by what it does for you, the operator, on five objectives. They pull against each other, so we keep only settings that nothing beats on all five at once (the Pareto frontier), and your preferences choose among those.
 
 1. **You come first.** What you say reaches GPT Live at once and gets an answer or goes to the agent. GPT Live doesn't start talking over you, and a request for work always reaches the agent: losing work is the one error that does real damage.
-2. **Answer instead of delegating.** GPT Live answers every question it can from what it already knows, and passes on only work and the questions it can't answer. Each question sent to the agent costs you a wait and the agent's attention.
+2. **Answer instead of delegating.** GPT Live answers every question it can from what it already knows; only work and the questions it can't answer go to the agent. Each question sent to the agent costs you a wait and the agent's attention.
 3. **Synthesis, not narration.** GPT Live speaks in complete, coherent thoughts that boil a lot of activity down to what matters. Coherence bought by giving it less to say doesn't count.
 4. **Know as much as possible.** GPT Live gets as much of the agent's work as it can use: what it never receives, it can't tell you.
 5. **Fresh enough.** Everything else arrives soon enough to be useful, without getting in the way of the above.

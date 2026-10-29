@@ -26,8 +26,6 @@ export interface SpokenRequest {
   fresh: string;
   /** The voice already moved the page for some of its words (TranscriptFragment.cued). */
   cued?: boolean;
-  /** Their words before it that no earlier request took: GPT Live answered them, or they began what this finishes. */
-  earlier?: string;
 }
 // Any sample louder than this is sound; the page's gate sends exact silence, which echoes back at about 1.
 const SOUND_PEAK = 64;
@@ -98,32 +96,22 @@ export class VoiceHistory {
   }
   /** Operator words GPT Live transcribed from silence (see audible). */
   unheard(fragment: TranscriptFragment) { return fragment.role === 'operator' && !fragment.carried && this.audible(fragment.startMs, fragment.endMs) === false; }
-  // The conversation since the previous delegation: anything said before it went
-  // with the previous request, unless the agent never got it. Transcript arrival can lag the
-  // delegation event, so the caller waits briefly before taking this snapshot, and speech
-  // starting more than 3 s after the delegation is left for the next request.
-  request(offsetMs: number): SpokenRequest | null {
-    const all = this.fragments.filter(f => f.seq > this.delegatedThrough && !f.sent && !f.claim && f.startMs <= offsetMs + 3000);
+  // The conversation since the previous request: anything said before it went with the previous request, unless the agent
+  // never got it. Transcript arrival can trail the end of the operator's turn, so the caller waits briefly for it first.
+  request(): SpokenRequest | null {
+    const all = this.fragments.filter(f => f.seq > this.delegatedThrough && !f.sent && !f.claim);
     const unheard = all.filter(f => this.unheard(f));
     const spoken = utterances(all.filter(f => !unheard.includes(f)));
     if (!spoken.some(u => u.role === 'operator')) return null;
     const notes = [...new Set(all.flatMap(f => [f.note, f.cued]).filter(note => note !== undefined))];
     const said = utterances(all.filter(f => !f.note && !unheard.includes(f))).filter(u => u.role === 'operator').map(u => u.text.replace(/\s+/g, ' ').trim());
     const fresh = said.at(-1) ?? '';
-    // Only the latest words count as moved for: earlier words a cue answered (and GPT Live never delegated) don't make
-    // the gate skip the page for what the operator asks now, nor are they context for it ("highlight your
-    // recommendation" after "take me to the options" isn't the options).
+    // Only the latest words count as moved for: earlier words a cue answered (and no request took) don't make the turn
+    // skip the page for what the operator asks now ("highlight your recommendation" after "take me to the options").
     const mine = all.filter(f => f.role === 'operator' && !f.note && !unheard.includes(f)), latest: TranscriptFragment[] = [];
     for (let i = mine.length - 1; i >= 0 && (i === mine.length - 1 || mine[i + 1].startMs - mine[i].endMs <= 2000); i--) latest.unshift(mine[i]);
     const cued = latest.some(f => f.cued);
-    const earlier = utterances(mine.filter(f => !f.cued && !latest.includes(f))).map(u => u.text.replace(/\s+/g, ' ').trim()).join(' ');
-    return { utterances: spoken, through: all.at(-1)!.seq, seqs: all.map(f => f.seq), fresh, ...earlier ? { earlier } : {}, ...cued ? { cued } : {}, ...notes.length ? { notes } : {}, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
-  }
-  /** The operator's latest utterance (back to a pause of over 2 s), unless the page already moved for it. */
-  latestOperator(): string {
-    const mine = this.fragments.filter(f => f.role === 'operator'), latest: typeof mine = [];
-    for (let i = mine.length - 1; i >= 0 && (i === mine.length - 1 || mine[i + 1].startMs - mine[i].endMs <= 2000); i--) latest.unshift(mine[i]);
-    return latest.some(f => f.cued) ? '' : latest.map(f => f.text).join('').replace(/\s+/g, ' ').trim();
+    return { utterances: spoken, through: all.at(-1)!.seq, seqs: all.map(f => f.seq), fresh, ...cued ? { cued } : {}, ...notes.length ? { notes } : {}, ...unheard.length ? { unheard: unheard.map(f => f.text) } : {} };
   }
   /** Marks the operator's latest words that no request took yet: the voice moved the page for them. */
   cueLatest(note: string) {
@@ -154,17 +142,22 @@ export class VoiceHistory {
   /**
    * The conversation as it was heard, up to the operator's latest words (to fragment `through`): each speaker's words until
    * the other speaks or they pause, with when it was heard, for placing it among the agent's events (bridge.ts, read).
-   * How far back is the recent history's to decide (recent-history.ts).
+   * How far back is the recent history's to decide (recent-history.ts). With `since` (the last word read before), all of
+   * the operator's words after it are the latest, whatever was said among them: read only to its last pause, "…send it"
+   * then "over" was read as "over" and kept.
    */
-  spoken(through = Infinity): Spoken[] {
+  spoken(through = Infinity, since?: number): Spoken[] {
+    const latest = since === undefined ? [] : this.fragments.filter(f => f.seq > since && f.seq <= through && f.role === 'operator' && !this.unheard(f));
     const joined: (Spoken & { endMs: number })[] = [];
     for (const f of this.fragments) {
-      if (f.seq > through || this.unheard(f)) continue;
+      if (f.seq > through || (latest.length && f.seq >= latest[0].seq) || this.unheard(f)) continue;
       const last = joined.at(-1);
       if (last?.role === f.role && f.startMs - last.endMs <= 2000) { last.text += f.text; last.endMs = f.endMs; }
       else joined.push({ role: f.role, text: f.text, at: f.receivedAt, endMs: f.endMs });
     }
     const all = joined.map(({ role, text, at }) => ({ role, text: text.replace(/\s+/g, ' ').trim(), at })).filter(u => u.text);
+    const words = latest.map(f => f.text).join('').replace(/\s+/g, ' ').trim();
+    if (words) all.push({ role: 'operator', text: words, at: latest[0].receivedAt });
     // GPT Live answering is not part of what the operator's latest words are.
     while (all.length && all.at(-1)!.role !== 'operator') all.pop();
     return all;

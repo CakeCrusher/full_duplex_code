@@ -39,15 +39,15 @@ export class Activity {
     while (old < this.entries.length && this.entries[old].at <= at - KEPT_MS) old++;
     if (old) this.entries.splice(0, old);
   }
-  /** What happened in the last `windowMs` is worth this much. */
-  value(windowMs: number, price: Price, now = Date.now()) {
+  /** What happened in the last `windowMs` (and after `from`) is worth this much. */
+  value(windowMs: number, price: Price, now = Date.now(), from = -Infinity) {
     let total = 0;
-    for (let i = this.entries.length - 1; i >= 0 && this.entries[i].at > now - windowMs; i--) total += price(this.entries[i].source);
+    for (let i = this.entries.length - 1; i >= 0 && this.entries[i].at > Math.max(now - windowMs, from); i--) total += price(this.entries[i].source);
     return total;
   }
-  /** The newest spend in the window worth anything: what tipped it over. */
-  latest(windowMs: number, price: Price, now = Date.now()) {
-    for (let i = this.entries.length - 1; i >= 0 && this.entries[i].at > now - windowMs; i--) if (price(this.entries[i].source) > 0) return this.entries[i];
+  /** The newest spend in the window (and after `from`) worth anything: what tipped it over. */
+  latest(windowMs: number, price: Price, now = Date.now(), from = -Infinity) {
+    for (let i = this.entries.length - 1; i >= 0 && this.entries[i].at > Math.max(now - windowMs, from); i--) if (price(this.entries[i].source) > 0) return this.entries[i];
   }
   /** When the window would fall below the threshold if nothing else happened: when the oldest spend still needed leaves it. */
   stallAt(windowMs: number, threshold: number, price: Price, now = Date.now()) {

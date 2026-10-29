@@ -36,7 +36,7 @@ test('hooks are primary: all raw hooks, including assistant batches, are quiet t
   assert.doesNotMatch(content(f, 'commentary'), /Stop/);
   assert.ok(f.appends.every(e => e.delegationId === null));
   assert.equal(f.mediator.history.fragments.length, 0);
-  f.mediator.delegate('unexpected-delegation', 0);
+  f.mediator.decide('delegation', 'unexpected-delegation');
   assert.equal(f.deliveries.length, 0, 'observed input never triggers a new channel request');
 });
 
@@ -71,8 +71,8 @@ test('voice startup and restart send only new observations; earlier work goes to
 test('a delegation sends ordinary user text once, without asking Claude to use companion tools', async t => {
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
-  f.mediator.delegate('work', 1100);
-  f.mediator.delegate('duplicate', 1100);
+  f.mediator.decide('delegation', 'work');
+  f.mediator.decide('delegation', 'duplicate');
   await flush();
   assert.equal(f.deliveries.length, 1);
   assert.match(f.deliveries[0].content, /^User request \(transcribed speech\): .+\n\nuser: Make the button blue\.$/);
@@ -82,7 +82,7 @@ test('a delegation sends ordinary user text once, without asking Claude to use c
 test('when voice ends, speech not yet passed on goes to the agent, tagged with why', async t => {
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
-  f.mediator.delegate('work', 1100);
+  f.mediator.decide('delegation', 'work');
   f.live.emit('event', { type: 'session.output_transcript.delta', delta: 'Sure, passing that on.', start_ms: 1200, end_ms: 2000 });
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'And then make the header', start_ms: 5000, end_ms: 6000 });
   f.mediator.handOff('Microphone audio stream stopped');
@@ -98,7 +98,7 @@ test('when voice ends, speech not yet passed on goes to the agent, tagged with w
 test('when voice ends with everything already passed on, nothing more is sent', async t => {
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
-  f.mediator.delegate('work', 1100);
+  f.mediator.decide('delegation', 'work');
   f.live.emit('event', { type: 'session.output_transcript.delta', delta: 'Done.', start_ms: 1200, end_ms: 1600 });
   f.mediator.handOff('requested');
   await flush();
@@ -178,7 +178,7 @@ test('a failed delegation is factual context for the conversation, without a com
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the page blue.', start_ms: 0, end_ms: 1000 });
   f.mediator.deliver = () => { throw new Error('channel unavailable'); };
-  f.mediator.delegate('failed-request', 1100); await flush();
+  f.mediator.decide('delegation', 'failed-request'); await flush();
   assert.match(content(f, 'thinking'), /request was not delivered/);
   assert.equal(content(f, 'commentary'), '');
 });
@@ -200,4 +200,63 @@ test('agent updates wait while the operator talks: heard by the microphone, or b
   assert.equal(f.appends.length, 2, 'the transcript of the operator also holds updates');
   t.mock.timers.tick(2000);
   assert.equal(f.appends.length, 3);
+});
+
+test("the operator's turn ends when GPT Live starts answering, or after a moment's quiet; a backchannel doesn't end it, and the same words are read once", async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.close = () => {}; live.append = async () => {};
+  const read: string[] = [];
+  const m = new Mediator({ live, observer, deliver: () => {}, log: () => {}, publish: () => {}, clean: String, hold: null, route: async request => { read.push(request.fresh); return { send: false }; } });
+  t.after(() => { m.stop(); observer.close(); });
+  const settle = async (ms: number) => { for (let i = 0; i < ms / 100; i++) { t.mock.timers.tick(100); await new Promise(resolve => setImmediate(resolve)); } };
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the header blue.', start_ms: 0, end_ms: 900 });
+  live.emit('event', { type: 'session.output_transcript.delta', delta: ' Mm-hmm. ' });
+  await settle(1000);
+  assert.deepEqual(read, [], 'a backchannel while they pause is not an answer');
+  live.emit('event', { type: 'session.output_transcript.delta', delta: " Sure, I'll look. " });
+  await settle(1000);
+  assert.deepEqual(read, ['Make the header blue.'], 'GPT Live answering ends their turn, once their last words are in');
+  await settle(5000);
+  assert.deepEqual(read, ['Make the header blue.'], 'the quiet after it reads nothing again');
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'And the footer.', start_ms: 9000, end_ms: 9800 });
+  await settle(3000);
+  assert.equal(read.length, 1, 'a pause under 4 s is no end');
+  await settle(1500);
+  assert.deepEqual(read, ['Make the header blue.', 'And the footer.'], "a moment's quiet ends it when GPT Live doesn't answer");
+});
+
+test("with Jev, GPT Live is told the voice tool passes requests on; without it, GPT Live delegates them, as before", async () => {
+  const { liveInstructions } = await import('../src/core/prompts.ts');
+  const own = liveInstructions(claude, { jev: true }), delegating = liveInstructions(claude);
+  assert.doesNotMatch(own, /SpawnThinking/);
+  assert.match(own, /you never pass anything on yourself.*the voice tool reads their words/);
+  assert.match(delegating, /Generate <\|SpawnThinking\|> when:/);
+  assert.ok(own.length < delegating.length);
+});
+
+test('words for the agent that stop partway wait for the rest; with nothing more said for a while, they go as they are', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.close = () => {}; live.append = async () => {};
+  const delivered: VoiceRequest[] = [], read: string[] = [];
+  const m = new Mediator({ live, observer, deliver: r => delivered.push(r), log: () => {}, publish: () => {}, clean: String, hold: null,
+    route: async request => { read.push(request.fresh); return /tests\.$/.test(request.fresh) ? { send: true } : { send: false, held: true }; } });
+  t.after(() => { m.stop(); observer.close(); });
+  const settle = async (ms: number) => { for (let i = 0; i < ms / 500; i++) { t.mock.timers.tick(500); await new Promise(resolve => setImmediate(resolve)); } };
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Can you also add', start_ms: 0, end_ms: 900 });
+  m.decide('turn'); await settle(500);
+  assert.equal(delivered.length, 0, 'unfinished: held');
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ' a test for the parser, and run the tests.', start_ms: 2000, end_ms: 4000 });
+  m.decide('turn'); await settle(500);
+  assert.equal(delivered.length, 1, 'the rest came: all of it goes at once');
+  assert.match(delivered[0].content, /user: Can you also add a test for the parser, and run the tests\.$/);
+  await settle(31000);
+  assert.equal(delivered.length, 1, 'the hold that came first sends nothing more');
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'And then the', start_ms: 40000, end_ms: 41000 });
+  m.decide('turn'); await settle(29000);
+  assert.equal(delivered.length, 1);
+  await settle(2000);
+  assert.equal(delivered.length, 2, 'nothing more said for 30 s: the held words go as they are');
+  assert.match(delivered[1].content, /user: And then the$/);
 });

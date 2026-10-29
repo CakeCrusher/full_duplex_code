@@ -330,3 +330,34 @@ test("waking, the page reports the held words still going out, and when they all
   assert.equal(w.posted.filter(m => m.type === 'replayed').length, 1, 'once the held words are out and only silence is left');
   assert.equal(w.posted.filter(m => m.type === 'level').at(-1).backlogMs, 0);
 });
+
+test("the operator done for now: Standby follows GPT Live's answer, not the quiet window; their goodbye doesn't wake it, and speaking again keeps voice on", async t => {
+  const { h, lives, sent } = await quiet(t, { tuning: { standbyAfterMs: 60000, wakeThreshold: 30 } });
+  speak(h, 5);
+  h.voiceSessions.standbyAsked();
+  h.voiceSessions.checkStandby();
+  assert.equal(lives[0].state, 'active', 'GPT Live answers first');
+  for (let i = 0; i < 5; i++) h.voiceSessions.heard({ at: Date.now(), inputRms: 0, outputRms: .05 });
+  h.voiceSessions.checkStandby(later(500));
+  assert.equal(lives[0].state, 'active', 'still answering');
+  h.voiceSessions.checkStandby(later(2000));
+  await until(() => lives[0].state === 'closed');
+  h.voiceSessions.checkStandby();
+  assert.equal(sent('voice_wake').length, 0, "what was said before Standby doesn't wake it, though the window still holds it");
+  speak(h, 3); h.voiceSessions.checkStandby();
+  assert.deepEqual(sent('voice_wake').map(e => e.reason), ['operator'], 'speaking again does');
+});
+
+test("the operator done for now, then speaking on: voice stays on; with no answer from GPT Live, Standby comes after 6 s", async t => {
+  const { h, lives } = await quiet(t, { tuning: { standbyAfterMs: 60000, wakeThreshold: 30 } });
+  h.voiceSessions.standbyAsked();
+  speak(h, 3, undefined, later(5));
+  h.voiceSessions.checkStandby(later(7000));
+  assert.equal(lives[0].state, 'active', 'they went on talking');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  h.voiceSessions.standbyAsked();
+  h.voiceSessions.checkStandby(later(3000));
+  assert.equal(lives[0].state, 'active');
+  h.voiceSessions.checkStandby(later(6500));
+  await until(() => lives[0].state === 'closed');
+});
