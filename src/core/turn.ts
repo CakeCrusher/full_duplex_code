@@ -11,7 +11,8 @@ import { COMPANION_ONLY, FINISHED, NEEDS_AGENT, PAGE_WORK, STANDBY, type Trigger
 import { companionHandled, handledNote, lookingNote } from './prompts.ts';
 
 export async function routeTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], why: Trigger): Promise<Decision> {
-  const [sessions, view] = await Promise.all([bridge.sessionSwitch.sessions(800), bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
+  // Read at every turn, page moves wait on it: a companion slower than 300 ms is listed as not answering.
+  const [sessions, view] = await Promise.all([bridge.sessionSwitch.sessions(300), bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
   const reading = await bridge.read({ trigger: why, spoken, sessions, page: view });
   bridge.log({ type: 'turn.read', why, said: request.fresh.slice(-200), needsAgent: reading.needsAgent, companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions, page: reading.page });
   if ((reading.standby ?? 0) >= STANDBY) bridge.voiceSessions.standbyAsked();
