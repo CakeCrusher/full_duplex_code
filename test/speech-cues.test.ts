@@ -158,13 +158,14 @@ test("GPT Live's delegation moves the page for the operator's words; its own wor
   // The voice then answers, naming the slide it wrongly thinks comes next, and asks the voice tool to act again.
   live.emit('event', { type: 'session.output_transcript.delta', delta: " Let's look at one highlight at a time. " });
   live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd2', target: 'client' } });
-  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /changed nothing for that/.test(text)));
+  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /Nothing changed on the page/.test(text)));
   assert.deepEqual(runs, [['page_next']], "one move, once: not again for GPT Live's asking, nor for the voice's words in that answer");
   assert.equal(judged.filter(said => /continue/.test(said)).length, 2, 'asked twice, read twice: the second knows what ran');
-  // Words that ask nothing of the page, which GPT Live doesn't ask the voice tool about, only reach the job delegation.
+  // Words GPT Live doesn't ask the voice tool about are read by it as their turn ends: asking nothing of the page, they
+  // move nothing.
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Fix the parser.', start_ms: 5000, end_ms: 6000 });
   await until(() => jobs.includes('Fix the parser.'));
-  assert.equal(runs.length, 1); assert.ok(!judged.includes('Fix the parser.'));
+  assert.equal(runs.length, 1); assert.ok(judged.includes('Fix the parser.'));
 });
 
 test("a part's last step goes on to the next section; a backchannel doesn't end the operator's turn; a complaint the page can't answer reaches the agent", async t => {

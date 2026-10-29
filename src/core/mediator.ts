@@ -94,6 +94,16 @@ export class Mediator {
    * without it, a request lost in 25 rather than 33).
    */
   static REPLY_MS = 5000; static REPLY_START_MS = 2500;
+  /**
+   * With Jev: when GPT Live didn't ask the voice tool to act on the operator's words, it reads them itself as their turn
+   * ends. GPT Live asks just before it answers, but not always: on real fdc runs with the operator's pages and lines
+   * (fdc-ref-7e2a90), its asking alone put the page right on 17 of 21 lines, and with this reading 19, as many as the
+   * voice tool reading every turn's end.
+   */
+  static ROUTE_AT_TURN_END = true;
+  routeAtTurnEnd = Mediator.ROUTE_AT_TURN_END;
+  /** GPT Live's requests to act still waiting for the operator's transcript. */
+  routing = 0;
   replyMs = Mediator.REPLY_MS; replyStartMs = Mediator.REPLY_START_MS;
   /**
    * How long the operator is quiet before their turn has ended, when GPT Live doesn't answer first (a pause mid-sentence is
@@ -179,11 +189,13 @@ export class Mediator {
    * to talk about (in the probes, a part's name came seconds later if at all), so the reading doesn't wait for its words.
    * Readings act in the order asked; one for the same words knows the page commands already run for them.
    */
-  routed(delegationId: string) {
+  routed(delegationId?: string) {
     const asked = Date.now(), route = this.route!;
+    this.routing++;
     const attempt = () => {
-      if (this.live.state !== 'active') return;
+      if (this.live.state !== 'active') { this.routing--; return; }
       if (Date.now() - this.history.lastInputAt < 450 && Date.now() - asked < 1500) { this.schedule(attempt, 150); return; }
+      this.routing--;
       const spoken = this.history.spoken(), latest = spoken.at(-1);
       const last = this.history.fragments.findLast(f => f.role === 'operator')?.seq ?? -1;
       const reply = this.saidSince(latest?.at ?? Date.now() - 20000);
@@ -196,9 +208,9 @@ export class Mediator {
       this.acted = [...this.acted.slice(-19), { last, done }];
       void done.then(actions => {
         if (this.live.state === 'active') {
-          if (actions?.told) this.context.add('thinking', actions.told, delegationId);
-          // The page tells its own news; with nothing done, GPT Live hears that too, and doesn't wait on it.
-          else if (!actions?.answered) this.context.add('thinking', routeNothing, delegationId);
+          if (actions?.told) this.context.add('thinking', actions.told, delegationId ?? null);
+          // The page tells its own news; with nothing done, GPT Live hears that too when it asked, and doesn't wait on it.
+          else if (!actions?.answered && delegationId) this.context.add('thinking', routeNothing, delegationId);
         }
         if (actions?.reading) this.consider?.(actions.reading);
       });
@@ -228,6 +240,8 @@ export class Mediator {
     this.pending++;
     // What Jev reads as their latest words: all of theirs since the last reading.
     const since = this.turn?.last ?? -1, spoken = this.history.spoken(request.through, since), heardAt = this.history.lastInputAt, route = this.route;
+    // GPT Live didn't ask the voice tool to act on these words: it reads them itself, at once.
+    if (route && this.routeAtTurnEnd && !this.routing && !this.acted.some(a => a.last > since && a.last <= last)) this.routed();
     // Whether the words go to the agent, once GPT Live has replied, with what the voice tool did for them meanwhile when
     // GPT Live asked; requests reach the agent in the order they were made. Jev failing, the words go to the agent:
     // keeping work from it is the costly mistake.

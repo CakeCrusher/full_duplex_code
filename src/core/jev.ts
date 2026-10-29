@@ -211,14 +211,20 @@ const sameAs = (command: StageCommand) => {
 /**
  * The command Jev chose, if it is sure enough. Commands that do the same thing split its confidence between them, even
  * below "none": one part's (its heading, the page's own command, an annotation on it: "connecting to the server" .43, .38
- * and .11), or going back (fdc's own and the page's: "go back… I don't see it" .26 and .11, with none at .40). They count
- * as one choice, and the page's own command runs.
+ * and .11), going back (fdc's own and the page's: "go back… I don't see it" .26 and .11, with none at .40), or two that
+ * say the same ("Go to the next section", fdc's own and the page's: .42 and .33 on "Okay, next", Oct 29). They count as
+ * one choice, and the page's own command runs.
  */
 export function chosenCommand(answer: any, page: StageView): string | undefined {
   if (!answer) return;
   const likely: Record<string, number> = answer.probabilities ?? { [answer.choice]: Number(answer.confidence ?? 1) };
-  const groups = new Map<string, StageCommand[]>();
-  for (const command of page.commands) if (likely[command.id] !== undefined) groups.set(sameAs(command), [...groups.get(sameAs(command)) ?? [], command]);
+  const groups = new Map<string, StageCommand[]>(), bySay = new Map<string, string>();
+  for (const command of page.commands) {
+    const say = command.say.replace(/\s*\([^()]*\)\s*$/, '').toLowerCase().trim();
+    if (!bySay.has(say)) bySay.set(say, sameAs(command));
+    const key = bySay.get(say)!;
+    if (likely[command.id] !== undefined) groups.set(key, [...groups.get(key) ?? [], command]);
+  }
   const sum = (group: StageCommand[]) => group.reduce((total, c) => total + Number(likely[c.id] ?? 0), 0);
   const best = [...groups.values()].sort((a, b) => sum(b) - sum(a))[0];
   if (!best || sum(best) < PAGE_STEP || sum(best) < Number(likely.none ?? 0)) return;

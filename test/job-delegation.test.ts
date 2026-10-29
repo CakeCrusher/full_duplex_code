@@ -78,7 +78,28 @@ test("GPT Live asking when there is nothing to do hears so; asked again for the 
   const second = moments.filter(m => m.trigger === 'delegation')[1];
   assert.deepEqual(second.done?.map(c => c.id), ['next_section'], 'what ran for the same words');
   assert.equal(second.reply, 'Section two is about');
-  assert.deepEqual(appended.find(([, , id]) => id === 'd2'), ['thinking', 'The voice tool changed nothing for that: the page and settings are as they were.', 'd2']);
+  assert.deepEqual(appended.find(([, , id]) => id === 'd2'), ['thinking', "Nothing changed on the page or in the settings. Don't mention it unless the operator asked to see something.", 'd2']);
+});
+
+test("when GPT Live doesn't ask, the voice tool reads the operator's words itself as their turn ends; asked later for the same words, it knows what ran", async t => {
+  const { h } = await harness(t);
+  // As Jev is asked: what already ran for these words is done.
+  const moments = fakeJev(h, m => m.trigger === 'delegation' ? { page: pageReading({ command: m.done?.length ? undefined : 'next_section', only: .9 }) } : m.trigger === 'step' ? { page: pageReading() } : { needsAgent: .1 });
+  stage(h);
+  const runs: string[][] = [];
+  h.stage.run = async (ids: string[]) => { runs.push(ids); return { done: [view.commands[0]], onScreen: 'Section 2.' }; };
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  const live = h.voiceSessions.live!, appended = answers(live);
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Continue.', start_ms: 0, end_ms: 400 });
+  live.emit('event', { type: 'session.output_transcript.delta', delta: ' Sure, moving on. ' });
+  await until(() => runs.length === 1);
+  assert.deepEqual(moments.filter(m => m.trigger !== 'step').map(m => m.trigger)[0], 'delegation', "the voice tool's own reading, at the turn's end");
+  await until(() => appended.some(([, text]) => /on screen now: Section 2/.test(text)));
+  live.emit('event', { type: 'session.delegation.created', delegation: { id: 'late', type: 'delegation', target: 'client' } });
+  await until(() => appended.some(([, , id]) => id === 'late'));
+  assert.deepEqual(moments.filter(m => m.trigger === 'delegation').at(-1)!.done?.map(c => c.id), ['next_section'], 'GPT Live asking later: what already ran');
+  await settle(100);
+  assert.equal(runs.length, 1, 'not again');
 });
 
 test('with no reply, the job delegation reads after a short wait; a word of the operator ends the wait at once', async t => {

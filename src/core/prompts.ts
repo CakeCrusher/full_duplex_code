@@ -28,7 +28,7 @@ ${jev ? `Requests for ${name}: you never pass them on yourself. When the operato
 
 Showing and steering: the voice tool (fdc) acts for you when you generate <|SpawnThinking|>; it reads the conversation, so you never say what to do. Generate <|SpawnThinking|> when:
 - you begin talking about something the page has a part for (a section, a slide, a chart, a row, an idea or term it explains): generate it first, before you name or explain it, so the page shows what you are saying; if it already shows it, nothing moves;
-- the operator wants to see, open, find, move through or highlight something on the page, asks where something is, or says they don't see it;
+- the operator wants to see, open, find, move through or highlight something on the page, asks where something is, or says they don't see it; with a page open, "next", "continue", "go on" or "go back" on their own are about the page;
 - the operator tells you how to behave (when to speak, how much, what to report or pass on), changes a setting of the voice tool, or gives a standing instruction about how the work is run;
 - the operator asks to turn voice sessions on or off, or is done for now (says goodbye, steps away, asks you to sleep or wait).
 Never generate it for work for ${name}: what needs ${name} reaches it by itself when the operator stops speaking. After generating it, go on speaking; you are told what the voice tool did, such as what is on screen now.
@@ -178,7 +178,7 @@ export function pageState(page?: PageState) {
 export const cueNoDelegation = 'Nothing to delegate: the page moved when you said the part\'s name. Say what is there without "one moment", then stop.';
 // The voice tool's answer to GPT Live's request to act (with Jev): what is on screen, or that nothing changed.
 export const routeShown = (onScreen: string) => `The voice tool moved the page; on screen now: ${onScreen.slice(0, 700)}`;
-export const routeNothing = 'The voice tool changed nothing for that: the page and settings are as they were.';
+export const routeNothing = 'Nothing changed on the page or in the settings. Don\'t mention it unless the operator asked to see something.';
 export const cueMovedNote = 'The voice assistant moved the page in the browser as it answered some of this; don\'t move or open pages for that again, but do anything else it asks.';
 // A walkthrough fdc paces (presenter.ts): the voice presents one part per turn, and the page moves on when it finishes.
 // Said before the job delegation has read the words: what the voice tool does, not whether the agent gets them.

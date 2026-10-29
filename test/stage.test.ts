@@ -107,6 +107,8 @@ test("commands that do the same count as one choice, even below none: the page's
   assert.equal(chosenCommand(step({ none: .3, back: .26, page_back: .25, next_section: .19 }), deck), 'page_back', "fdc's back and the page's back together beat none");
   assert.equal(chosenCommand(step({ none: .4, back: .26, page_back: .11, next_section: .23 }), deck), undefined, 'together still unlikely: nothing runs');
   assert.equal(chosenCommand(step({ next_section: .5, page_next: .1, none: .4 }), deck), 'next_section', "a unit's own step is not the page's next");
+  const sections: StageView = { ...view, commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'page_next_section', say: 'Go to the next section' }, { id: 'page_section_3', say: 'Go to section 3', name: 'Confidence' }] };
+  assert.equal(chosenCommand(step({ next_section: .42, page_next_section: .33, none: .1 }), sections), 'page_next_section', 'two that say the same are one choice');
 });
 
 test('the page moves one command at a time until Jev wants no more: a repeated move repeats, a part reached again ends it, five at most', async t => {
