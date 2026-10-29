@@ -172,7 +172,7 @@ export class VoiceSessions {
     if (!standbyAfterMs || bridge.stopping || this.moving || !live || live.state !== 'active' || run?.live !== live || !page || page.ws.readyState !== WebSocket.OPEN) return;
     // Jev found the operator done for now: Standby once GPT Live has answered (quiet for a moment after speaking, or after
     // 6 s if it doesn't); otherwise a voice session gets the whole window before it can go quiet.
-    const done = this.doneAt !== undefined && (this.liveSpeechAt > this.doneAt ? now - this.liveSpeechAt > 1500 : now - this.doneAt > 6000);
+    const done = this.doneAt !== undefined && (this.liveSpeechAt >= this.doneAt ? now - this.liveSpeechAt > 1500 : now - this.doneAt > 6000);
     if (!done && (now - (live.startedAt ?? now) < standbyAfterMs || this.activity.value(standbyAfterMs, price, now) >= wakeThreshold)) return;
     // A request on its way to the agent keeps voice Live until the agent has it.
     if ([...bridge.outbox.values()].some(entry => entry.state === 'queued' || entry.state === 'dispatching')) return;

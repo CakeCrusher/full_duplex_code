@@ -333,12 +333,12 @@ test("waking, the page reports the held words still going out, and when they all
 
 test("the operator done for now: Standby follows GPT Live's answer, not the quiet window; their goodbye doesn't wake it, and speaking again keeps voice on", async t => {
   const { h, lives, sent } = await quiet(t, { tuning: { standbyAfterMs: 60000, wakeThreshold: 30 } });
-  speak(h, 5);
+  speak(h, 5, undefined, later(-1000));
   h.voiceSessions.standbyAsked();
   h.voiceSessions.checkStandby();
   assert.equal(lives[0].state, 'active', 'GPT Live answers first');
-  for (let i = 0; i < 5; i++) h.voiceSessions.heard({ at: Date.now(), inputRms: 0, outputRms: .05 });
-  h.voiceSessions.checkStandby(later(500));
+  for (let i = 0; i < 5; i++) h.voiceSessions.heard({ at: later(100), inputRms: 0, outputRms: .05 });
+  h.voiceSessions.checkStandby(later(600));
   assert.equal(lives[0].state, 'active', 'still answering');
   h.voiceSessions.checkStandby(later(2000));
   await until(() => lives[0].state === 'closed');
