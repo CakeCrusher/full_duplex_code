@@ -7,7 +7,7 @@
 import type { Harness } from './bridge.ts';
 import type { Decision } from './mediator.ts';
 import type { Spoken, SpokenRequest } from './voice-history.ts';
-import { COMPANION_ONLY, FINISHED, NEEDS_AGENT, PAGE_WORK, STANDBY, type Trigger } from './jev.ts';
+import { COMPANION_ONLY, NEEDS_AGENT, PAGE_WORK, STANDBY, type Trigger } from './jev.ts';
 import { companionHandled, handledNote, lookingNote } from './prompts.ts';
 
 export async function routeTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], why: Trigger): Promise<Decision> {
@@ -23,8 +23,8 @@ export async function routeTurn(bridge: Harness, request: SpokenRequest, spoken:
   if (page?.escalated) return { reading, send: true, note: page.note, told: asked?.told, moved: page.moved, escalated: true };
   if (page?.only) return { reading, send: false, note: handledNote('page'), told: asked?.told, moved: page.moved };
   if ((reading.companionOnly ?? 0) >= COMPANION_ONLY) return { reading, send: false, note: handledNote('companion'), told: companionHandled(bridge.agent) };
-  // With a page open, two independent readings of work: either one sends the words, once they are finished; unfinished,
-  // they wait for the rest (a turn reading them again with it, or a while with nothing more: turn.ts's caller).
-  const work = (reading.needsAgent ?? 1) >= NEEDS_AGENT || (reading.page?.work ?? 0) >= PAGE_WORK, send = work && (reading.finished ?? 1) >= FINISHED;
-  return { reading, send, held: work && !send, note: page?.note ?? (send && view ? lookingNote(view) : undefined), told: asked?.told, moved: page?.moved };
+  // With a page open, two independent readings of work: either one sends the words. A request made in pieces goes in
+  // pieces, each with what came before it.
+  const send = (reading.needsAgent ?? 1) >= NEEDS_AGENT || (reading.page?.work ?? 0) >= PAGE_WORK;
+  return { reading, send, note: page?.note ?? (send && view ? lookingNote(view) : undefined), told: asked?.told, moved: page?.moved };
 }

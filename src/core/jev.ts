@@ -62,10 +62,12 @@ export const PAGE_MORE = .5;
 export const PAGE_RELATIVE_ONLY = .3;
 // The learner's held-out thresholds from the offline test.
 export const BEHAVE = .6, DESIGN = .5;
-// The operator's words go to the coding agent from this likelihood that they need it (keeping work from it is the costly
-// mistake, a question it gets as well costs little), once they are likely enough finished; unfinished, they wait for the
-// rest. On the labeled sessions: .5 and .3 lost one request in 65 (GPT Live three); a finished bar of .5 lost two more.
-export const NEEDS_AGENT = .5, FINISHED = .3;
+// The operator's words go to the coding agent from this likelihood that they need it: keeping work from it is the costly
+// mistake, a question it gets as well costs little. On 235 labeled requests (fdc-ref-c41d07), .4 lost none (GPT Live 7,
+// .5 four) and left the operator 29 to chase (GPT Live 62), for 70 stretches of talk sent that needed nothing (50).
+// Asking whether the words were finished, and holding them until they were, sent fewer requests in two parts but more
+// of them late.
+export const NEEDS_AGENT = .4;
 // The operator is done for now: the companion goes on Standby as soon as it has answered.
 export const STANDBY = .7;
 
@@ -101,8 +103,6 @@ export interface Reading {
   tuning?: Record<string, unknown>;
   /** That the latest words end the conversation for now (the companion then goes on Standby). */
   standby?: number;
-  /** That the operator has finished saying what they ask, rather than stopped partway. */
-  finished?: number;
   /** Acted on already (learner and tuner): a reading reused for the same words isn't acted on twice. */
   considered?: boolean;
 }
@@ -123,17 +123,13 @@ export interface Moment {
 
 const noul = (instructions: string, yes: string, no: string) => ({ type: 'noul', instructions, criteria: { true: yes, false: no } });
 // Read at every turn's end (turn.ts), not only for words GPT Live chose to pass on: "When in doubt, true" sent noise and
-// narration as requests (101 of 112 stretches that needed nothing, on 15 labeled sessions, Oct 28). With these
-// criteria, and only finished words sent, it lost fewer requests than GPT Live (2 of 122 against 4) and left the
-// operator fewer to chase (fdc-ref-c41d07); without the exercise clause, answers in a drill the agent ran stayed unsent.
+// narration as requests (101 of 112 stretches that needed nothing, on 15 labeled sessions, Oct 28). With these criteria
+// it lost fewer requests than GPT Live and left the operator fewer to chase (fdc-ref-c41d07); without the exercise
+// clause, answers in a drill the agent ran stayed unsent.
 const GATE = {
   needs_agent: noul('Do the latest words, read with the conversation before them, ask something of the coding agent?',
     "A request for the agent or for the companion to pass on: work, a change, a fix, something to run, research, something to write or save; a correction of the agent's work or a decision it should follow (including 'don't do X' or 'stop'); a question about the work that the conversation doesn't already answer; 'send that', 'go ahead', 'yes, do it' to something asked before; or the operator's turn in an exercise, drill or walkthrough the agent is running (an answer, 'next question', 'task two', 'I\'ll go next').",
     "Talking rather than asking the agent: narrating or presenting, thinking aloud, reacting ('okay', 'interesting', 'got it'), chatting, greeting; a question the companion can answer from the conversation (status, a recap, an explanation); moving through the page; anything only about how the voice companion behaves; noise or fragments that ask nothing."),
-  // A request is sent once it is whole: at a pause mid-request, its first words went alone and the rest followed.
-  finished: noul('Have the operator finished saying what they ask, or did they stop partway?',
-    'What they ask is complete enough to act on now: a whole request or question, however short, or a reply such as "yes, do it".',
-    "They stopped partway: mid-sentence, trailing off ('and…', 'so…', 'um'), listing more to come, or still building up to what they want."),
   // Done talking for now: fdc pauses the companion (Standby) without waiting out the quiet window.
   standby: noul('Do the latest words end the conversation for now: the operator says goodbye, that they are stepping away or done for now, or asks the voice companion to go quiet, sleep or wait until they call it?',
     'They close the conversation for now or step away: "that\'s all for now", "thanks, bye", "I\'ll be back in a bit", "go to sleep", "stand by until I call you", also with a last request for the coding agent.',
@@ -258,7 +254,7 @@ export class Jev {
     if (tune) Object.assign(state, { operator_instructions: tune.instructions.join('\n').slice(0, 4000) || '(none)', earlier_sessions: tune.earlier.join('\n').slice(0, 4000) || '(none)', current_settings: JSON.stringify(tune.current) });
     const questions = {
       ...(gate || trigger === 'unsent') && { needs_agent: GATE.needs_agent },
-      ...gate && { finished: GATE.finished, companion_only: GATE.companion_only, standby: GATE.standby, ...sessions && sessionQuestions(sessions) },
+      ...gate && { companion_only: GATE.companion_only, standby: GATE.standby, ...sessions && sessionQuestions(sessions) },
       ...page && pageQuestions(page, trigger),
       ...learn && LEARNER,
       ...tune && tunerQuestions(tune.current, tune.pinned, trigger !== 'settings'),
@@ -268,7 +264,7 @@ export class Jev {
     const { answers } = await response.json();
     const p = (name: string, missing = 0) => { const value = Number(answers?.[name]?.noul); return Number.isFinite(value) ? value : missing; };
     const reading: Reading = { trigger, said, transcript: `${history}${latest ? `► ${spokenLine(latest)}` : ''}`, needsAgent: 'needs_agent' in questions ? p('needs_agent') : null };
-    if (gate) { reading.companionOnly = p('companion_only'); reading.standby = p('standby'); reading.finished = p('finished', 1); }
+    if (gate) { reading.companionOnly = p('companion_only'); reading.standby = p('standby'); }
     if (gate && sessions) {
       const chosen = (choice: string) => sessions.filter((_, index) => answers?.[`session_${index + 1}`]?.choice === choice).map(s => s.id);
       reading.sessions = { asked: p('sessions_asked'), only: p('only_sessions'), unlisted: p('unlisted_session'), turnOn: chosen('turn_on'), turnOff: chosen('turn_off') };
@@ -285,7 +281,7 @@ export class Jev {
     }
     if (learn) reading.instruction = { behave: p('behave', NaN), design: p('design_talk', NaN), lasting: answers?.lasting?.choice };
     if (tune) reading.tuning = answers;
-    this.log({ type: 'jev.read', trigger, said: said.slice(-200), questions: Object.keys(questions).length, chars: JSON.stringify(state).length, ms: Date.now() - started, needsAgent: reading.needsAgent, finished: reading.finished, companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions, instruction: reading.instruction });
+    this.log({ type: 'jev.read', trigger, said: said.slice(-200), questions: Object.keys(questions).length, chars: JSON.stringify(state).length, ms: Date.now() - started, needsAgent: reading.needsAgent, companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions, instruction: reading.instruction });
     return reading;
   }
 }

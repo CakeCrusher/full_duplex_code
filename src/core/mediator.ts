@@ -24,8 +24,6 @@ export interface Decision {
   moved?: boolean;
   /** Sent although Jev found nothing for the agent: the page failed or fell short, which the agent fixes. */
   escalated?: boolean;
-  /** For the agent but unfinished: kept for the rest, and sent if the operator says nothing more for a while. */
-  held?: boolean;
 }
 
 // What GPT Live says while the operator only pauses ("Mm-hmm", "Go on"): no answer, so not the end of their turn.
@@ -72,9 +70,9 @@ export class Mediator {
   /**
    * How long the operator is quiet before their turn has ended, when GPT Live doesn't answer first (a pause mid-sentence is
    * no end: "Take me to … tonight" was read as "Take me to"). At 2.5 s, long requests made in pieces went in pieces more
-   * often than at 4 (labeled sessions, Oct 28); and how long held words wait for the rest.
+   * often than at 4 (labeled sessions, Oct 28).
    */
-  operatorQuietMs = 4000; heldMs = 30000; holding?: NodeJS.Timeout;
+  operatorQuietMs = 4000;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
   constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, audit, route, read, consider, firstRecordId = 0 }: {
@@ -174,8 +172,7 @@ export class Mediator {
     this.order = done;
   }
   /** What came of a turn: the words go to the agent, noted with what the voice tool did; or they stay for the next request, noted with it. GPT Live hears what was done. */
-  decided(id: string, request: SpokenRequest, { reading, send, note, told, escalated, held }: Decision, delegationId?: string) {
-    clearTimeout(this.holding);
+  decided(id: string, request: SpokenRequest, { reading, send, note, told, escalated }: Decision, delegationId?: string) {
     if (told && this.live.state === 'active') this.context.add('thinking', told, delegationId ?? null);
     if (send) return this.send(id, request, this.clean(voiceRequest(request.utterances, [...request.notes ?? [], ...note ? [note] : []])), delegationId ?? null, reading, escalated ? 'escalated' : 'passed');
     this.log({ type: 'turn.kept', id, said: this.said(request).slice(-200), needsAgent: reading?.needsAgent ?? null, handled: Boolean(note) });
@@ -183,18 +180,6 @@ export class Mediator {
     this.audit?.record({ handOff: 'kept', said: this.said(request), voiceSessionId: this.live.id, delegationId: delegationId ?? null, requestId: id }, reading?.needsAgent ?? null, reading?.transcript);
     this.giveBack(id, note);
     if (delegationId && !told) this.outcome(delegationId, { send: false });
-    // Unfinished words for the agent wait for the rest; with nothing more said for a while, they go as they are.
-    if (held) this.holding = setTimeout(() => this.sendHeld(request.through), this.heldMs);
-  }
-  /** Held words, with nothing said since (by the operator, through fragment `through`), go to the agent: keeping work from it is the costly mistake. */
-  sendHeld(through: number) {
-    if (this.live.state !== 'active' || this.history.fragments.some(f => f.role === 'operator' && f.seq > through)) return;
-    const request = this.history.request();
-    if (!request) return;
-    const id = randomUUID();
-    this.history.claim(request, id);
-    this.log({ type: 'turn.held_sent', id, said: this.said(request).slice(-200) });
-    this.inTurn(() => this.send(id, request, this.clean(voiceRequest(request.utterances, request.notes)), null));
   }
   /** GPT Live asked to pass words on: what came of them (nothing new to send, sent, or kept). */
   outcome(delegationId: string, decision?: Decision) {
@@ -272,7 +257,7 @@ export class Mediator {
    */
   stop(reason?: string) {
     if (reason) this.ended ??= reason;
-    this.feed.stop(); this.context.stop(); clearTimeout(this.quiet); clearTimeout(this.holding); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();
+    this.feed.stop(); this.context.stop(); clearTimeout(this.quiet); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();
     this.live.off('event', this.onLive); this.observer.off('observation', this.onObservation);
   }
 }

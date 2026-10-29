@@ -234,29 +234,3 @@ test("with Jev, GPT Live is told the voice tool passes requests on; without it, 
   assert.match(delegating, /Generate <\|SpawnThinking\|> when:/);
   assert.ok(own.length < delegating.length);
 });
-
-test('words for the agent that stop partway wait for the rest; with nothing more said for a while, they go as they are', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
-  const observer = new ClaudeObserver({ sessionId: 'test' });
-  const live: any = new EventEmitter(); live.state = 'active'; live.close = () => {}; live.append = async () => {};
-  const delivered: VoiceRequest[] = [], read: string[] = [];
-  const m = new Mediator({ live, observer, deliver: r => delivered.push(r), log: () => {}, publish: () => {}, clean: String, hold: null,
-    route: async request => { read.push(request.fresh); return /tests\.$/.test(request.fresh) ? { send: true } : { send: false, held: true }; } });
-  t.after(() => { m.stop(); observer.close(); });
-  const settle = async (ms: number) => { for (let i = 0; i < ms / 500; i++) { t.mock.timers.tick(500); await new Promise(resolve => setImmediate(resolve)); } };
-  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Can you also add', start_ms: 0, end_ms: 900 });
-  m.decide('turn'); await settle(500);
-  assert.equal(delivered.length, 0, 'unfinished: held');
-  live.emit('event', { type: 'session.input_transcript.delta', delta: ' a test for the parser, and run the tests.', start_ms: 2000, end_ms: 4000 });
-  m.decide('turn'); await settle(500);
-  assert.equal(delivered.length, 1, 'the rest came: all of it goes at once');
-  assert.match(delivered[0].content, /user: Can you also add a test for the parser, and run the tests\.$/);
-  await settle(31000);
-  assert.equal(delivered.length, 1, 'the hold that came first sends nothing more');
-  live.emit('event', { type: 'session.input_transcript.delta', delta: 'And then the', start_ms: 40000, end_ms: 41000 });
-  m.decide('turn'); await settle(29000);
-  assert.equal(delivered.length, 1);
-  await settle(2000);
-  assert.equal(delivered.length, 2, 'nothing more said for 30 s: the held words go as they are');
-  assert.match(delivered[1].content, /user: And then the$/);
-});
