@@ -33,7 +33,7 @@ function judge(h: Harness, reading: (sessions: Session[]) => Partial<SessionsJud
   });
   return seen;
 }
-const reading = (r: Partial<Reading>): Reading => ({ trigger: 'turn', said: '', transcript: '', needsAgent: null, ...r });
+const reading = (r: Partial<Reading>): Reading => ({ trigger: 'delegation', said: '', transcript: '', needsAgent: null, ...r });
 const id = (sessions: Session[], folder: string) => sessions.find(s => s.folder === folder)!.id;
 
 test('"switch to beta": beta\'s voice starts, alpha is told, then alpha\'s voice ends; nothing reaches the harness', async t => {
@@ -225,12 +225,16 @@ test("words only about how the companion behaves are handled by fdc: the harness
   assert.equal(decided.send, false);
   assert.match(decided.told!, /The operator told you how you should behave/);
   assert.equal(decided.note, handledNote('companion'));
-  // The mediator's side: the voice tool's own reading is considered for an instruction and the settings, once, and nothing
-  // is delivered.
+  // The mediator's side: GPT Live asks the voice tool to act; its reading is considered for an instruction and the
+  // settings, once, GPT Live hears what was done, and the job delegation delivers nothing.
   const considered: Reading[] = [];
-  const m = mediator(t, async () => decided);
+  const m = mediator(t, async () => ({ reading: reading({ needsAgent: .2 }), send: false, note: decided.actions!.keptNote }));
+  m.m.route = { ...m.m.route!, actions: async () => decided.actions! };
   m.m.consider = r => considered.push(r);
-  m.m.decide('turn'); await until(() => considered.length);
+  m.m.liveEvent({ type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' } });
+  await until(() => considered.length);
+  assert.deepEqual(m.appends.at(-1), ['thinking', decided.told, 'd1']);
+  m.m.decide('turn'); await until(() => m.recorded.length);
   assert.equal(m.deliveries.length, 0);
   assert.deepEqual(considered, [decided.actions!.reading]);
   fakeJev(a.h, () => ({ needsAgent: .9, companionOnly: .3, sessions: { asked: .05, unlisted: 0, turnOn: [], turnOff: [] } }));

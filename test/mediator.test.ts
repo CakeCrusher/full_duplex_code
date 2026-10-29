@@ -227,11 +227,11 @@ test("the operator's turn ends when GPT Live starts answering, or after a moment
   assert.deepEqual(read, ['Make the header blue.', 'And the footer.'], "a moment's quiet ends it when GPT Live doesn't answer");
 });
 
-test("with Jev, GPT Live is told the voice tool passes requests on; without it, GPT Live delegates them, as before", async () => {
+test("with Jev, GPT Live is told the voice tool passes requests on and its delegation asks the voice tool to act; without it, GPT Live delegates requests, as before", async () => {
   const { liveInstructions } = await import('../src/core/prompts.ts');
   const own = liveInstructions(claude, { jev: true }), delegating = liveInstructions(claude);
-  assert.doesNotMatch(own, /SpawnThinking/);
-  assert.match(own, /you never pass anything on yourself.*the voice tool reads their words/);
-  assert.match(delegating, /Generate <\|SpawnThinking\|> when:/);
-  assert.ok(own.length < delegating.length);
+  assert.match(own, /Requests for Claude: you never pass them on yourself\. When the operator finishes speaking, the voice tool reads their words with your reply/);
+  assert.match(own, /Showing and steering: the voice tool \(fdc\) acts for you when you generate <\|SpawnThinking\|>/);
+  assert.doesNotMatch(own, /The operator asks for anything to be made, changed, fixed/);
+  assert.match(delegating, /Generate <\|SpawnThinking\|> when:\n- The operator asks for anything to be made, changed, fixed/);
 });

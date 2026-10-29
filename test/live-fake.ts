@@ -10,7 +10,7 @@ import { EventEmitter } from 'node:events';
 import type { TestContext } from 'node:test';
 import { Harness } from '../src/core/bridge.ts';
 import { claude } from '../src/adapters/claude/index.ts';
-import type { Moment, PageJudgment, Reading, Trigger } from '../src/core/jev.ts';
+import type { Moment, PageJudgment, Reading } from '../src/core/jev.ts';
 import { routeTurn } from '../src/core/turn.ts';
 import { Mediator, type Decision, type Route } from '../src/core/mediator.ts';
 import type { Spoken, SpokenRequest } from '../src/core/voice-history.ts';
@@ -111,15 +111,9 @@ export function fakeJev(h: Harness, reading: (moment: Moment) => Partial<Reading
   h.jev = { read: async (moment: Moment) => { moments.push(moment); return { trigger: moment.trigger, said: moment.latest?.text ?? '', transcript: '', needsAgent: .3, ...reading(moment) }; } } as any;
   return moments;
 }
-/** What the voice tool makes of the operator's turn with these words as the latest (turn.ts), as the mediator asks it. */
-export const turn = (h: Harness, said: string, { why = 'turn', cued }: { why?: Trigger; cued?: boolean } = {}) =>
-  routeTurn(h, { utterances: [{ role: 'operator', text: said, endMs: 0 }], through: 0, seqs: [0], fresh: said, ...cued && { cued } }, [{ role: 'operator', text: said, at: Date.now() }], why);
+/** What the voice tool makes of these words as the latest (turn.ts): GPT Live asking it to act, then the job delegation. */
+export const turn = (h: Harness, said: string, { reply, cued }: { reply?: string; cued?: boolean } = {}) =>
+  routeTurn(h, { utterances: [{ role: 'operator', text: said, endMs: 0 }], through: 0, seqs: [0], fresh: said, ...cued && { cued } }, [{ role: 'operator', text: said, at: Date.now() }], reply);
 
-/** A voice tool that decides a turn in one step (for the mediator's tests): its decision, as its two readings make it (turn.ts). */
-export const decides = (decide: (request: SpokenRequest, spoken: Spoken[], why: Trigger) => Promise<Decision>): Route => {
-  const made = new Map<SpokenRequest, Decision>();
-  return {
-    actions: async (request, spoken, why) => { const d = await decide(request, spoken, why); made.set(request, d); return { reading: d.actions?.reading, told: d.told, note: d.note, keptNote: d.send ? undefined : d.note, moved: d.moved, escalated: d.escalated }; },
-    job: async request => { const { told, ...d } = made.get(request)!; return d; },
-  };
-};
+/** A voice tool whose job delegation decides each turn in one step (for the mediator's tests); GPT Live asking it to act does nothing. */
+export const decides = (decide: (request: SpokenRequest, spoken: Spoken[]) => Promise<Decision>): Route => ({ actions: async () => ({}), job: (request, spoken) => decide(request, spoken) });

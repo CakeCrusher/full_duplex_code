@@ -428,7 +428,7 @@ export class VoiceSessions {
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator: Mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
-      audit: bridge.handOffAudit, route: bridge.jev ? { actions: (request, spoken, why) => routeActions(bridge, request, spoken, why), job: (request, spoken, reply, actions) => jobTurn(bridge, request, spoken, reply, actions) } : undefined,
+      audit: bridge.handOffAudit, route: bridge.jev ? { actions: moment => routeActions(bridge, moment), job: (request, spoken, reply, actions) => jobTurn(bridge, request, spoken, reply, actions) } : undefined,
       read: bridge.jev ? (trigger, spoken) => bridge.read({ trigger, spoken }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake };
@@ -502,7 +502,9 @@ export class VoiceSessions {
     // Every part the voice can name, up to the stage script's own cap on a page's commands (80).
     const cues = Stage.cues(view), names = cues.filter(c => c.listed).map(c => c.label).slice(0, 80);
     const others = [...this.bridge.stage.pages].filter(([tabId]) => tabId !== view.tabId).map(([, page]) => page.title);
-    const state = pageState({ title: view.title, names, others, parts: view.parts, where: view.where });
+    // The page's own controls that go to no part ("show the error bars"): with Jev, GPT Live says what the page can't do.
+    const controls = this.bridge.jev ? view.commands.filter(c => c.id.startsWith('page_') && !c.name && !/(^|_)(next|previous|prev|back|forward)(_|$)/.test(c.id)).map(c => c.say.replace(/\s*\([^()]*\)\s*$/, '').replace(/\.$/, '')).slice(0, 12) : [];
+    const state = pageState({ title: view.title, names, others, parts: view.parts, where: view.where, controls });
     // Where the operator is changes with every move, and they hear of each move: it's no change to the page.
     return { cues, state, signature: JSON.stringify([address(view.url), names, others, state.replace(/\nWhen you were told this, [^]*$/, '')]) };
   }

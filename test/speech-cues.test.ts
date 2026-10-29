@@ -132,45 +132,48 @@ test('a walkthrough asked for: the first part shows, and each time the voice fin
   await until(() => !h.presenter.walking);
 });
 
-test("the operator's words are read once when they finish, and the page moves for them, whatever the voice says or passes on", async t => {
+test("GPT Live's delegation moves the page for the operator's words; its own words in that answer move nothing again, nor does asking again", async t => {
   const { harness, page, until, fakeJev, pageReading } = await import('./live-fake.ts');
   const { h, lives } = await harness(t);
   // Jev is there before voice starts, as it is when fdc starts with a TypeSafe key.
   fakeJev(h);
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
-  const runs: string[][] = [], judged: string[] = [];
+  const runs: string[][] = [], judged: string[] = [], jobs: string[] = [];
   const deck: StageView = { ...view, where: 'Slide 24', commands: [{ id: 'page_next', say: 'Go to the next slide' }, { id: 'page_slide_27', say: 'Go to slide 27', name: 'One highlight at a time' }] };
   h.stage = { tabId: 1, view: deck, describe: async () => deck, run: async (ids: string[]) => { runs.push(ids); return { done: [{ id: ids[0], say: 'Go to the next slide' }], onScreen: 'Slide 25: Moving the page by voice' }; }, follow: async () => null, observe() {}, close() {} } as any;
   const read = { sessions: { asked: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 };
-  fakeJev(h, ({ trigger, latest }) => {
+  fakeJev(h, ({ trigger, latest, done }) => {
     if (trigger === 'step') return { page: pageReading() };
-    if (trigger === 'job') return { needsAgent: .3 };
+    if (trigger === 'job') { jobs.push(latest!.text); return { needsAgent: .3 }; }
     const said = latest!.text; judged.push(said);
-    return { ...read, page: /continue/i.test(said) ? pageReading({ command: 'page_next', only: .7, walk: .2 }) : pageReading({ only: .1 }) };
+    // As Jev is asked: what already ran for these words is done.
+    return { ...read, page: /continue/i.test(said) && !done?.length ? pageReading({ command: 'page_next', only: .7, walk: .2 }) : pageReading({ only: .1 }) };
   });
   h.voiceSessions.mediator!.operatorQuietMs = 30;
-  h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: "Okay, let's continue.", start_ms: 0, end_ms: 900 });
+  const live = h.voiceSessions.live!;
+  live.emit('event', { type: 'session.input_transcript.delta', delta: "Okay, let's continue.", start_ms: 0, end_ms: 900 });
+  live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' } });
   await until(() => runs.length === 1);
-  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /The voice tool moved the page for the operator's words.*Slide 25/.test(text)));
-  // The voice then answers, naming the slide it wrongly thinks comes next, and asks to pass the words on too.
-  h.voiceSessions.live!.emit('event', { type: 'session.output_transcript.delta', delta: " Let's look at one highlight at a time. " });
-  h.voiceSessions.live!.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' } });
-  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /already moved the page for them/.test(text)));
+  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /The voice tool moved the page; on screen now: Slide 25/.test(text)));
+  // The voice then answers, naming the slide it wrongly thinks comes next, and asks the voice tool to act again.
+  live.emit('event', { type: 'session.output_transcript.delta', delta: " Let's look at one highlight at a time. " });
+  live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd2', target: 'client' } });
+  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /changed nothing for that/.test(text)));
   assert.deepEqual(runs, [['page_next']], "one move, once: not again for GPT Live's asking, nor for the voice's words in that answer");
-  assert.equal(judged.filter(said => /continue/.test(said)).length, 1, 'read once: GPT Live asking hears what came of the same reading');
-  // Words that ask nothing of the page move nothing.
-  h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: 'Fix the parser.', start_ms: 5000, end_ms: 6000 });
-  await until(() => judged.includes('Fix the parser.'));
-  assert.equal(runs.length, 1);
+  assert.equal(judged.filter(said => /continue/.test(said)).length, 2, 'asked twice, read twice: the second knows what ran');
+  // Words that ask nothing of the page, which GPT Live doesn't ask the voice tool about, only reach the job delegation.
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Fix the parser.', start_ms: 5000, end_ms: 6000 });
+  await until(() => jobs.includes('Fix the parser.'));
+  assert.equal(runs.length, 1); assert.ok(!judged.includes('Fix the parser.'));
 });
 
-test("the operator's words come first: a part's last step goes on to the next section, a backchannel doesn't end their turn, and a complaint the page can't answer reaches the agent", async t => {
+test("a part's last step goes on to the next section; a backchannel doesn't end the operator's turn; a complaint the page can't answer reaches the agent", async t => {
   const { harness, page, until, fakeJev, pageReading } = await import('./live-fake.ts');
   const wait = <T>(label: string, check: () => T) => until(check).catch(error => { throw new Error(`${label}: ${error.message}`); });
   const { h, lives } = await harness(t);
   fakeJev(h);
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
-  const runs: string[][] = [], judged: string[] = [];
+  const runs: string[][] = [], jobs: string[] = [];
   const box: StageView = { ...view, where: 'Step 3 of 3', commands: [{ id: 'page_next_step', say: 'Next step in the box' }, { id: 'next_section', say: 'Go to the next section' }] };
   const { StageNothing } = await import('../src/core/stage.ts');
   h.stage = { tabId: 1, view: box, describe: async () => box, run: async (ids: string[]) => {
@@ -185,26 +188,27 @@ test("the operator's words come first: a part's last step goes on to the next se
     if (trigger === 'step') return { page: pageReading() };
     const said = latest!.text;
     // The job delegation: a complaint about the page needs the agent.
-    if (trigger === 'job') return { needsAgent: /wrong/.test(said) ? .9 : .1, ready: .9 };
-    judged.push(said);
+    if (trigger === 'job') { jobs.push(said); return { needsAgent: /wrong/.test(said) ? .9 : .1, ready: .9 }; }
     return { ...read, page: /next/i.test(said) ? pageReading({ command: 'page_next_step', only: .8, walk: .1 }) : /wrong/.test(said) ? pageReading({ only: .8 }) : pageReading({ only: .1 }) };
   });
   h.voiceSessions.mediator!.operatorQuietMs = 60000;
   const live = h.voiceSessions.live!;
   live.emit('event', { type: 'session.input_transcript.delta', delta: "We're continuing, next", start_ms: 0, end_ms: 900 });
-  // GPT Live's "Mm-hmm" while they pause isn't an answer: nothing is judged yet.
+  // GPT Live's "Mm-hmm" while they pause isn't an answer: the job delegation waits.
   live.emit('event', { type: 'session.output_transcript.delta', delta: ' Mm-hmm.' });
   await new Promise(resolve => setTimeout(resolve, 30));
-  assert.deepEqual(judged, [], 'a backchannel is not the end of their turn');
+  assert.deepEqual(jobs, [], 'a backchannel is not the end of their turn');
+  live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' } });
   live.emit('event', { type: 'session.output_transcript.delta', delta: ' Sure, moving on. ' });
   await wait('the move', () => runs.length === 2);
   assert.deepEqual(runs, [['page_next_step'], ['next_section']], 'the last step of a part goes on to the next section');
-  // Told quietly, or aloud when it was already answering as the page moved.
-  await wait('the note', () => lives[0].appended.some(([kind, text]) => (kind === 'thinking' && /moved the page for the operator's words.*Section 4/.test(text)) || (kind === 'commentary' && /The page now shows: Section 4/.test(text))));
+  await wait('the answer', () => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /moved the page; on screen now: Section 4/.test(text)));
   // A complaint about the page that no command answers: the job delegation sends their words to the agent, to extend the
   // page's controller.
   await new Promise(resolve => setTimeout(resolve, 1600));
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'You keep going to the wrong section.', start_ms: 5000, end_ms: 6000 });
+  live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd2', target: 'client' } });
+  await new Promise(resolve => setTimeout(resolve, 600));
   live.emit('event', { type: 'session.output_transcript.delta', delta: " I'm sorry about that. " });
   await wait('the complaint', () => delivered.some(r => /wrong section/.test(r.content) && /asked the page .* for something its controls don't do/.test(r.content)));
 });

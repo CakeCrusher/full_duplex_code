@@ -1,8 +1,9 @@
 // The presenter: fdc showing the operator the page the coding agent made, in step with GPT Live, while the agent goes
 // on producing. The operator never has to know how the page is moved:
-// - What they ask of the page is done from their own words: when they finish speaking, Jev reads their turn once (turn.ts)
-//   and the page moves at once, one command at a time until Jev wants no more; or a walkthrough starts; or a one-off
-//   action does what no command does (fast-action.ts). GPT Live is told what is on screen and talks about it.
+// - With Jev, GPT Live asks the voice tool to act (its delegation) when the operator wants to see something or as it
+//   begins talking about a part of the page; Jev reads the conversation (turn.ts) and the page moves at once, one command
+//   at a time until Jev wants no more; or a walkthrough starts; or a one-off action does what no command does
+//   (fast-action.ts). GPT Live is told what is on screen, answering its request, and talks about it.
 // - A walkthrough is paced here: GPT Live presents the part on screen, and when it has finished, the page moves on.
 // - GPT Live can point as it talks ("let's look at" a part, speech-cues.ts), and the ring follows its sentences.
 // The page itself, and how fdc reaches it, is the stage (stage.ts).
@@ -12,7 +13,7 @@ import { Stage, StageError, StageNothing, STEP_DWELL_MS, type StageCommand, type
 import { FastAction, type PageAction } from './fast-action.ts';
 import { PAGE_ONLY, PAGE_OTHER, PAGE_RELATIVE_ONLY, PAGE_WALK, type PageJudgment, type Reading } from './jev.ts';
 import type { Spoken } from './voice-history.ts';
-import { cueMovedNote, cueShown, improvisedFailedNote, oneOffDone, oneOffNote, operatorMoved, pageAtEnd, pageMoving, pageNow, pageDoneNote, pageFailed, pageFailedNote, pageNothing, walkNext, walkStarted } from './prompts.ts';
+import { cueMovedNote, cueShown, improvisedFailedNote, oneOffDone, oneOffNote, operatorMoved, pageAtEnd, pageMoving, pageNow, pageDoneNote, pageFailed, pageFailedNote, pageNothing, routeShown, walkNext, walkStarted } from './prompts.ts';
 
 /** A step forward or back: relative to where the page is. */
 const RELATIVE = /(^|_)(next|previous|prev|back|forward)(_|$)/;
@@ -23,8 +24,8 @@ const walked = (page: PageJudgment) => page.walk >= PAGE_WALK;
 // The most commands run for one request ("forward three sections" is three): Jev is asked again after each one.
 const MOST_STEPS = 5;
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
-/** What the page did for the operator's turn (act): whether it moved, whether moving it was all they asked, what the agent is told with their words, and whether they go to it because the page failed or fell short. */
-export interface PagePart { moved: boolean; only: boolean; note?: string; escalated?: boolean }
+/** What the page did (act): whether it moved and the commands run, whether moving it was all the operator asked, what the agent is told with their words, and whether they go to it because the page failed or fell short. */
+export interface PagePart { moved: boolean; only: boolean; done?: StageCommand[]; note?: string; escalated?: boolean }
 /** fdc's own step over the page's sections, for a page's own step forward or back that had nothing to do. */
 const sectionStep = (id: string) => /_section$/.test(id) ? undefined : /(^|_)(next|forward)(_|$)/.test(id) ? 'next_section' : /(^|_)(previous|prev|back)(_|$)/.test(id) ? 'previous_section' : undefined;
 
@@ -115,26 +116,33 @@ export class Presenter {
     finally { this.judging = false; }
   }
   /**
-   * What the operator's turn asks of the page, done at once (turn.ts): a walkthrough starts, the commands Jev chose run one
-   * at a time, or a one-off action does what no command does. GPT Live hears what is on screen. Undefined when they ask
-   * nothing of the page. Controls that fail send their words to the agent to fix them; a complaint about the page, or a
-   * request no command does, reaches it by the job delegation, which knows the page's commands.
+   * What the conversation asks of the page, done at once (turn.ts): a walkthrough starts, the commands Jev chose run one
+   * at a time, or a one-off action does what no command does. GPT Live hears what is on screen, answering its request to
+   * act (delegationId). Undefined when nothing is asked of the page. Controls that fail send the operator's words to the
+   * agent to fix them; a complaint about the page, or a request no command does, reaches it by the job delegation, which
+   * knows the page's commands.
    */
-  async act(reading: Reading, said: string, spoken: Spoken[], view: StageView): Promise<PagePart | undefined> {
+  async act(reading: Reading, said: string, spoken: Spoken[], view: StageView, delegationId?: string): Promise<PagePart | undefined> {
     const bridge = this.bridge, page = reading.page!, command = taken(page), only = page.only >= PAGE_ONLY;
     bridge.log({ type: 'stage.turn', said: said.slice(-200), command, walk: page.walk, only: page.only, other: page.other });
     if (walked(page)) {
       this.movedForOperatorAt = Date.now();
-      bridge.mediator?.context.add('commentary', walkStarted(bridge.agent, await this.startWalk(command)));
+      bridge.mediator?.context.add('commentary', walkStarted(bridge.agent, await this.startWalk(command)), delegationId ?? null);
       return { moved: true, only: true };
     }
-    if (command) return this.run(command, spoken, view, only);
-    if (page.other >= PAGE_OTHER && this.fastAction) return this.improvise(said, only);
+    if (command) return this.run(command, spoken, view, only, delegationId);
+    if (page.other >= PAGE_OTHER && this.fastAction) return this.improvise(said, only, delegationId);
+  }
+  /** News of the page for GPT Live: the answer to its request to act, when it asked; else at once. */
+  tell(text: string, delegationId?: string) {
+    const context = this.bridge.mediator?.context;
+    if (delegationId) context?.add('thinking', text, delegationId); else context?.now('thinking', text);
   }
   /** Runs the command Jev chose, and the next ones it wants (steps), each shown a moment; GPT Live hears what is on screen. */
-  async run(command: string, spoken: Spoken[], view: StageView, only: boolean): Promise<PagePart> {
+  async run(command: string, spoken: Spoken[], view: StageView, only: boolean, delegationId?: string): Promise<PagePart> {
     const bridge = this.bridge, context = bridge.mediator?.context, moving = this.movedForOperatorAt = Date.now();
-    context?.now('thinking', pageMoving([view.commands.find(c => c.id === command) ?? { say: command }]));
+    // GPT Live asking for it knows a move is coming: it hears only what is on screen.
+    if (!delegationId) context?.now('thinking', pageMoving([view.commands.find(c => c.id === command) ?? { say: command }]));
     let ran: StageRun | undefined;
     try { ran = await this.steps(command, spoken); }
     catch (error) {
@@ -144,23 +152,25 @@ export class Presenter {
         this.movedForOperatorAt = 0;
         if (done.length) bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen: (error as StageError).onScreen });
         bridge.log({ type: 'stage.escalated', error: message });
-        context?.now('thinking', pageFailed(bridge.agent, message, done));
+        this.tell(pageFailed(bridge.agent, message, done), delegationId);
         return { moved: false, only: false, note: pageFailedNote(failed, message, view), escalated: true };
       }
       // The page's own step had nothing to do ("Already on the last step" of a part's steps): the operator wants to go
       // on, so fdc's step over the sections does; at the very end the voice says so, and it never claims a move.
       const over = error.done.length ? undefined : sectionStep(error.failed.id);
       ran = error.done.length ? { done: error.done, onScreen: error.onScreen } : over ? await bridge.stage.run([over]).catch(() => undefined) : undefined;
-      if (!ran) { this.movedForOperatorAt = 0; context?.now('thinking', pageAtEnd(error.message)); return { moved: false, only }; }
+      if (!ran) { this.movedForOperatorAt = 0; this.tell(pageAtEnd(error.message), delegationId); return { moved: false, only }; }
     }
     const { done, onScreen } = ran;
     this.presentedAt = Date.now();
     bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });
-    // Already answering before the page moved, GPT Live can't have known what it shows: it hears it to say (only what is
-    // on screen: commentary is paraphrased aloud, instructions and all).
-    if (this.spokeAt >= moving) context?.add('commentary', pageNow(onScreen), null);
+    // GPT Live asked for it: it hears what is on screen, to talk about. Otherwise, already answering before the page moved,
+    // it can't have known what it shows: it hears it to say (only what is on screen: commentary is paraphrased aloud,
+    // instructions and all).
+    if (delegationId) context?.add('thinking', routeShown(onScreen), delegationId);
+    else if (this.spokeAt >= moving) context?.add('commentary', pageNow(onScreen), null);
     else context?.now('thinking', operatorMoved(onScreen));
-    return { moved: true, only, note: only ? undefined : pageDoneNote(done) };
+    return { moved: true, only, done, note: only ? undefined : pageDoneNote(done) };
   }
   /**
    * Runs the command Jev chose, then asks Jev, with the page as it is now and what ran, whether another should run, until it
@@ -228,8 +238,8 @@ export class Presenter {
     if (reason) this.bridge.log({ type: 'stage.walk', state: 'stopped', reason });
   }
   /** No command fits: a fast model writes a one-off action for the page, which runs at once; the agent hears of it, to add a command. */
-  async improvise(said: string, only: boolean): Promise<PagePart> {
-    const bridge = this.bridge, { agent } = bridge, context = bridge.mediator?.context, started = Date.now();
+  async improvise(said: string, only: boolean, delegationId?: string): Promise<PagePart> {
+    const bridge = this.bridge, { agent } = bridge, started = Date.now();
     let steps: PageAction[] = [];
     try {
       const { actions } = await this.fastAction!.write(said, await bridge.stage.digest());
@@ -240,13 +250,13 @@ export class Presenter {
       this.movedForOperatorAt = this.presentedAt = Date.now();
       bridge.log({ type: 'stage.improvised', said, actions, ms: Date.now() - started });
       bridge.publish({ type: 'stage', done: done.map(d => d.say), onScreen });
-      context?.now('thinking', oneOffDone(agent, onScreen));
+      this.tell(oneOffDone(agent, onScreen), delegationId);
       // Done at once, and the agent hears of it too: no command could do it, so the page's controller is what fell short.
       return { moved: true, only: false, note: `${only ? '' : `${pageDoneNote(done)} `}${oneOffNote(said, onScreen)}`, escalated: true };
     } catch (error) {
       const message = (error as Error).message;
       bridge.log({ type: 'stage.improvise_failed', said, actions: steps, message, ms: Date.now() - started });
-      context?.now('thinking', pageNothing(agent, { say: `a one-off action (${message.slice(0, 120)})` }));
+      this.tell(pageNothing(agent, { say: `a one-off action (${message.slice(0, 120)})` }), delegationId);
       return { moved: false, only: false, note: improvisedFailedNote(message), escalated: true };
     }
   }

@@ -121,6 +121,12 @@ export class VoiceHistory {
     for (let i = pending.length - 1; i >= 0 && (i === pending.length - 1 || pending[i + 1].startMs - pending[i].endMs <= 2000); i--) { pending[i].cued = note; noted++; }
     return noted;
   }
+  /** Whether the voice moved the page for the operator's latest utterance (cueLatest), taken by a request or not. */
+  latestCued() {
+    const mine = this.fragments.filter(f => f.role === 'operator');
+    for (let i = mine.length - 1; i >= 0 && (i === mine.length - 1 || mine[i + 1].startMs - mine[i].endMs <= 2000); i--) if (mine[i].cued) return true;
+    return false;
+  }
   /** The request is on its way: no other request takes its speech meanwhile. */
   claim(request: SpokenRequest, id: string) { for (const seq of request.seqs) this.fragments[seq].claim = id; }
   /** The request didn't reach the agent: its speech goes with the next one, with why. */
