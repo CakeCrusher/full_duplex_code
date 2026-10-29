@@ -63,8 +63,8 @@ export const PAGE_RELATIVE_ONLY = .3;
 // The learner's held-out thresholds from the offline test.
 export const BEHAVE = .6, DESIGN = .5;
 // The operator's words go to the coding agent from this likelihood that they need it: keeping work from it is the costly
-// mistake, a question it gets as well costs little. On 235 labeled requests (fdc-ref-c41d07), .4 lost none (GPT Live 7,
-// .5 four) and left the operator 29 to chase (GPT Live 62), for 70 stretches of talk sent that needed nothing (50).
+// mistake, a question it gets as well costs little. On 984 labeled requests (fdc-ref-c41d07), .4 lost 5 (GPT Live 31,
+// .5 eleven) and left the operator 120 to chase (GPT Live 209), for 173 stretches of talk sent that needed nothing (139).
 // Asking whether the words were finished, and holding them until they were, sent fewer requests in two parts but more
 // of them late.
 export const NEEDS_AGENT = .4;
