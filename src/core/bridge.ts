@@ -191,15 +191,16 @@ export class Harness {
   /**
    * Jev's reading of a moment (jev.ts): the latest words (the last of `spoken`), with what happened before them as fdc
    * keeps it, the agent's events and the conversation in order, as far back as the recent history keeps (the same as a new
-   * voice session starts from). Of the operator's words it also asks whether they give a standing instruction (the
-   * learner) and, with Jev's tuning on, which settings fit (the tuner), with the instructions in force.
+   * voice session starts from; the job delegation, twice as far back, nearer what the voice companion was told). Of the
+   * operator's words the voice tool's own reading also asks whether they give a standing instruction (the learner) and,
+   * with Jev's tuning on, which settings fit (the tuner), with the instructions in force.
    */
   read({ spoken = [], ...moment }: Omit<Moment, 'latest' | 'history' | 'learn' | 'tune'> & { spoken?: Spoken[] }, timeoutMs?: number): Promise<Reading> {
     if (!this.jev) return Promise.reject(new Error('Jev is not configured'));
     const words = ['turn', 'delegation', 'unsent'].includes(moment.trigger), tune = this.jevTuning && (words || moment.trigger === 'settings');
     const ask = tune ? ++this.tuneAsks : 0, latest = spoken.at(-1);
     const before = latest ? [...this.adapter.history().filter(o => o.at <= latest.at), ...spoken.slice(0, -1)].sort((a, b) => a.at - b.at) : [];
-    return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(recentHistory(this.agent, before).text) },
+    return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(recentHistory(this.agent, before, moment.trigger === 'job' ? 14000 : undefined).text) },
       learn: words || undefined, tune: tune ? { instructions: this.voiceSessions.additionalInstructions.map(item => item.text), earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined }, timeoutMs)
       .then(reading => Object.assign(reading, ask ? { tuneAsk: ask } : {}));
   }

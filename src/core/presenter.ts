@@ -10,16 +10,16 @@ import type { Harness } from './bridge.ts';
 import { CueMatcher, unglue, type SpeechCue } from './speech-cues.ts';
 import { Stage, StageError, StageNothing, STEP_DWELL_MS, type StageCommand, type StageRun, type StageView } from './stage.ts';
 import { FastAction, type PageAction } from './fast-action.ts';
-import { PAGE_ONLY, PAGE_OTHER, PAGE_RELATIVE_ONLY, PAGE_UNHAPPY, PAGE_WALK, PAGE_WORK, WALK_WORK, type PageJudgment, type Reading } from './jev.ts';
+import { PAGE_ONLY, PAGE_OTHER, PAGE_RELATIVE_ONLY, PAGE_WALK, type PageJudgment, type Reading } from './jev.ts';
 import type { Spoken } from './voice-history.ts';
-import { controllerNote, cueMovedNote, cueShown, improvisedFailedNote, oneOffDone, oneOffNote, operatorMoved, pageAtEnd, pageMoving, pageNow, pageDoneNote, pageFailed, pageFailedNote, pageNothing, unhappySent, walkNext, walkStarted } from './prompts.ts';
+import { cueMovedNote, cueShown, improvisedFailedNote, oneOffDone, oneOffNote, operatorMoved, pageAtEnd, pageMoving, pageNow, pageDoneNote, pageFailed, pageFailedNote, pageNothing, walkNext, walkStarted } from './prompts.ts';
 
 /** A step forward or back: relative to where the page is. */
 const RELATIVE = /(^|_)(next|previous|prev|back|forward)(_|$)/;
 /** The command Jev chose, if it is taken: a step forward or back only when the words are about moving the page. */
 const taken = (page: PageJudgment) => page.command && (!RELATIVE.test(page.command) || page.only >= PAGE_RELATIVE_ONLY) ? page.command : undefined;
-/** Whether the operator asks to be walked through the page, and nothing else. */
-const walked = (page: PageJudgment) => page.walk >= PAGE_WALK && page.work < WALK_WORK;
+/** Whether the operator asks to be walked through the page (work asked alongside goes to the agent by the job delegation). */
+const walked = (page: PageJudgment) => page.walk >= PAGE_WALK;
 // The most commands run for one request ("forward three sections" is three): Jev is asked again after each one.
 const MOST_STEPS = 5;
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
@@ -117,11 +117,12 @@ export class Presenter {
   /**
    * What the operator's turn asks of the page, done at once (turn.ts): a walkthrough starts, the commands Jev chose run one
    * at a time, or a one-off action does what no command does. GPT Live hears what is on screen. Undefined when they ask
-   * nothing of the page. A complaint about the page, or controls that fail, send their words to the agent to fix it.
+   * nothing of the page. Controls that fail send their words to the agent to fix them; a complaint about the page, or a
+   * request no command does, reaches it by the job delegation, which knows the page's commands.
    */
   async act(reading: Reading, said: string, spoken: Spoken[], view: StageView): Promise<PagePart | undefined> {
-    const bridge = this.bridge, page = reading.page!, command = taken(page), only = page.only >= PAGE_ONLY && page.work < PAGE_WORK;
-    bridge.log({ type: 'stage.turn', said: said.slice(-200), command, walk: page.walk, only: page.only, work: page.work, unhappy: page.unhappy, other: page.other });
+    const bridge = this.bridge, page = reading.page!, command = taken(page), only = page.only >= PAGE_ONLY;
+    bridge.log({ type: 'stage.turn', said: said.slice(-200), command, walk: page.walk, only: page.only, other: page.other });
     if (walked(page)) {
       this.movedForOperatorAt = Date.now();
       bridge.mediator?.context.add('commentary', walkStarted(bridge.agent, await this.startWalk(command)));
@@ -129,13 +130,6 @@ export class Presenter {
     }
     if (command) return this.run(command, spoken, view, only);
     if (page.other >= PAGE_OTHER && this.fastAction) return this.improvise(said, only);
-    // Unhappy with the page, and nothing on it does what they mean: a complaint about the page is the strongest sign its
-    // controls fall short, so their words go to the agent to fix how it responds.
-    if (page.unhappy >= PAGE_UNHAPPY) {
-      bridge.log({ type: 'stage.escalated', said: said.slice(-200), unhappy: page.unhappy });
-      bridge.mediator?.context.now('thinking', unhappySent(bridge.agent));
-      return { moved: false, only: false, note: controllerNote(view), escalated: true };
-    }
   }
   /** Runs the command Jev chose, and the next ones it wants (steps), each shown a moment; GPT Live hears what is on screen. */
   async run(command: string, spoken: Spoken[], view: StageView, only: boolean): Promise<PagePart> {

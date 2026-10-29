@@ -10,7 +10,7 @@ import { Stage, StageNothing, type StageView } from '../src/core/stage.ts';
 import { chosenCommand, Jev, type Line } from '../src/core/jev.ts';
 import { Mediator, type Decision } from '../src/core/mediator.ts';
 import { handledNote } from '../src/core/prompts.ts';
-import { fakeJev, harness, pageReading, turn, until } from './live-fake.ts';
+import { decides, fakeJev, harness, pageReading, turn, until } from './live-fake.ts';
 
 const view: StageView = { tabId: 7, title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"',
   commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'goto_options', say: 'Go to the section "Options"' }, { id: 'show_the_recommendation', say: 'Show and highlight: the recommendation' }], parts: [] };
@@ -62,7 +62,7 @@ test('Jev is asked for one page command at a time, in the conversation; unlikely
   const moment = { history: 'voice assistant: Want the options?\n', latest: { role: 'operator', text: 'Yes, go to the options and highlight the recommendation.' } as Line };
   const choice = (id: string, p = .95) => ({ choice: id, probabilities: { [id]: p } });
   answers = { needs_agent: { noul: .2 }, page_command: choice('goto_options'), page_only: { noul: .8 } };
-  assert.deepEqual((await jev.read({ trigger: 'turn', ...moment, page: view })).page, { command: 'goto_options', only: .8, work: 1, other: 0, walk: 0, unhappy: 0 }, 'work unanswered counts as asked');
+  assert.deepEqual((await jev.read({ trigger: 'turn', ...moment, page: view })).page, { command: 'goto_options', only: .8, other: 0, walk: 0 }, 'the command, and whether the page is what the words are about');
   assert.match(sent.state.page, /Briefing .*The viewer is at: section "Intro"/);
   assert.deepEqual([sent.state.history, sent.state.latest], ['voice assistant: Want the options?', 'user: Yes, go to the options and highlight the recommendation.'], 'the latest words, and what happened before them');
   assert.match(sent.state.why, /stopped speaking/);
@@ -73,7 +73,7 @@ test('Jev is asked for one page command at a time, in the conversation; unlikely
   answers = { page_command: choice('made_up') };
   assert.equal((await jev.read({ trigger: 'turn', ...moment, page: view })).page!.command, undefined, 'not a command of the page');
   answers = { page_command: choice('other_action', .9) };
-  assert.deepEqual((await jev.read({ trigger: 'turn', ...moment, page: view })).page, { command: undefined, only: 0, work: 1, other: .9, walk: 0, unhappy: 0 }, 'another action: a one-off does it');
+  assert.deepEqual((await jev.read({ trigger: 'turn', ...moment, page: view })).page, { command: undefined, only: 0, other: .9, walk: 0 }, 'another action: a one-off does it');
   // After a command ran, the page as it is now, and what ran: whether more is asked, and which command is next.
   answers = { page_command: choice('show_the_recommendation'), page_more: { noul: .8 } };
   assert.equal((await jev.read({ trigger: 'step', ...moment, page: view, done: [view.commands[1]] })).page!.command, 'show_the_recommendation');
@@ -128,11 +128,11 @@ test('the page moves one command at a time until Jev wants no more: a repeated m
   assert.equal(runs.length, 5, 'five at most');
 });
 
-function staged(t: any, page: { command?: string; only: number; work?: number }, run: (ids: string[]) => Promise<any>) {
+function staged(t: any, page: { command?: string; only: number }, run: (ids: string[]) => Promise<any>) {
   return harness(t).then(async ({ h, lives }) => {
     h.stage = { describe: async () => view, run, view, observe() {}, close() {} } as any;
-    // After the first command, Jev wants no other.
-    fakeJev(h, moment => moment.trigger === 'step' ? { page: pageReading() } : { needsAgent: .3, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: pageReading({ work: page.only > .5 ? .1 : .9, ...page }) });
+    // After the first command, Jev wants no other; the job delegation finds work unless the page is all they ask.
+    fakeJev(h, moment => moment.trigger === 'step' ? { page: pageReading() } : moment.trigger === 'job' ? { needsAgent: page.only > .5 ? .1 : .9 } : { sessions: { asked: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: pageReading(page) });
     await h.startLive(undefined, undefined, 'fresh');
     const told = () => lives[0].appended.map(([kind, text]) => `${kind}: ${text}`).join('\n');
     return { h, told };
@@ -148,7 +148,7 @@ test('the turn: page-only is done on the page and kept from the harness; with mo
   await until(() => /moved the page for the operator's words; on screen now: heading: Options — eleven of them\./.test(only.told()));
   const mixed = await staged(t, { command: 'goto_options', only: .1 }, async () => ({ done: [view.commands[1]], onScreen: 'heading: Options' }));
   const along = await turn(mixed.h, 'show me the options and fix the typo');
-  assert.equal(along.send, true, "page_work found work, though needs_agent didn't: either one sends");
+  assert.equal(along.send, true, 'the job delegation found work: the words go on');
   assert.match(along.note!, /already did the page part of this in the browser \(Go to the section "Options"\); don't do that again, do the rest/);
   const work = await staged(t, { only: .1 }, async () => { throw new Error('not run'); });
   const passed = await turn(work.h, 'make this title bigger');
@@ -170,7 +170,7 @@ test('the mediator tells GPT Live what the voice tool did and sends the harness 
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
   const appends: [string, string, string | null][] = []; live.append = async (kind: string, content: string, delegationId: string | null) => { appends.push([kind, content, delegationId]); };
   const deliveries: any[] = [];
-  const route = async (): Promise<Decision> => ({ send: true, note: 'The voice tool already did the page part.', told: 'On screen now: Options.' });
+  const route = decides(async (): Promise<Decision> => ({ send: true, note: 'The voice tool already did the page part.', told: 'On screen now: Options.' }));
   const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, route });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Show me the options and fix the typo.', start_ms: 0, end_ms: 900 });
@@ -212,7 +212,7 @@ test("requests reach the agent in the order made, however long each one's readin
   let release!: () => void;
   const slow = new Promise<void>(resolve => { release = resolve; });
   const started: string[] = [];
-  const route = async ({ fresh }: { fresh: string }): Promise<Decision> => { started.push(fresh); if (/bigger/.test(fresh)) await slow; return { send: true }; };
+  const route = decides(async ({ fresh }): Promise<Decision> => { started.push(fresh); if (/bigger/.test(fresh)) await slow; return { send: true }; });
   const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, route });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Go to the options and make its title bigger.', start_ms: 0, end_ms: 900 });
@@ -232,7 +232,7 @@ test("words whose turn fails aren't lost: they go with the next request", async 
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
   live.append = async () => {};
   const faults: string[] = [];
-  const m = new Mediator({ live, observer, deliver: () => {}, log: e => { if (e.type === 'bridge.fault') faults.push(String(e.message)); }, publish: () => {}, clean: String, hold: null, route: async () => ({ send: true }) });
+  const m = new Mediator({ live, observer, deliver: () => {}, log: e => { if (e.type === 'bridge.fault') faults.push(String(e.message)); }, publish: () => {}, clean: String, hold: null, route: decides(async () => ({ send: true })) });
   t.after(() => { m.stop(); observer.close(); });
   m.decided = () => { throw new Error('boom'); };
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Fix the parser.', start_ms: 0, end_ms: 900 });

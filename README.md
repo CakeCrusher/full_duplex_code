@@ -84,7 +84,7 @@ The launcher prints a phone link and a QR code once the link works. Open the pag
 
 Run `fdc` in more than one folder and one tab holds every running session: a strip at the top lists them, and a click shows one. Sessions whose voice is on keep listening while you look at another.
 
-With a TypeSafe key (`TYPESAFE_API_KEY` in `.env`), Jev turns their voices on and off when you ask: "switch to video-editing", "turn on video-editing too", "stop listening here". A request that asks only for that never reaches the agent; GPT Live tells you what changed. ([More](USAGE.md#several-sessions-at-once))
+With a TypeSafe key (`TYPESAFE_API_KEY` in `.env`), Jev turns their voices on and off when you ask: "switch to video-editing", "turn on video-editing too", "stop listening here". GPT Live tells you what changed; a request that asks for nothing else stays from the agent. ([More](USAGE.md#several-sessions-at-once))
 
 ## Everyday commands
 

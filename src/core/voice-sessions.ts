@@ -6,7 +6,7 @@ import type { OutboxEntry } from './outbox.ts';
 import type { Page } from './pages.ts';
 import { LiveSession, type CloseResult } from './live-session.ts';
 import { Mediator } from './mediator.ts';
-import { routeTurn } from './turn.ts';
+import { jobTurn, routeActions } from './turn.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { recentHistory } from './recent-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
@@ -428,7 +428,7 @@ export class VoiceSessions {
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator: Mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
-      audit: bridge.handOffAudit, route: bridge.jev ? (request, spoken, why) => routeTurn(bridge, request, spoken, why) : undefined,
+      audit: bridge.handOffAudit, route: bridge.jev ? { actions: (request, spoken, why) => routeActions(bridge, request, spoken, why), job: (request, spoken, reply, actions) => jobTurn(bridge, request, spoken, reply, actions) } : undefined,
       read: bridge.jev ? (trigger, spoken) => bridge.read({ trigger, spoken }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake };

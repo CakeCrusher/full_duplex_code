@@ -5,6 +5,7 @@ import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { recentHistory } from '../src/core/recent-history.ts';
 import { Mediator } from '../src/core/mediator.ts';
+import { decides } from './live-fake.ts';
 import type { VoiceRequest } from '../src/core/adapter.ts';
 
 type Append = { kind: string; content: string; delegationId?: string | null };
@@ -207,7 +208,7 @@ test("the operator's turn ends when GPT Live starts answering, or after a moment
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.close = () => {}; live.append = async () => {};
   const read: string[] = [];
-  const m = new Mediator({ live, observer, deliver: () => {}, log: () => {}, publish: () => {}, clean: String, hold: null, route: async request => { read.push(request.fresh); return { send: false }; } });
+  const m = new Mediator({ live, observer, deliver: () => {}, log: () => {}, publish: () => {}, clean: String, hold: null, route: decides(async request => { read.push(request.fresh); return { send: false }; }) });
   t.after(() => { m.stop(); observer.close(); });
   const settle = async (ms: number) => { for (let i = 0; i < ms / 100; i++) { t.mock.timers.tick(100); await new Promise(resolve => setImmediate(resolve)); } };
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the header blue.', start_ms: 0, end_ms: 900 });

@@ -12,6 +12,11 @@ import { Harness } from '../src/core/bridge.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import type { Moment, PageJudgment, Reading, Trigger } from '../src/core/jev.ts';
 import { routeTurn } from '../src/core/turn.ts';
+import { Mediator, type Decision, type Route } from '../src/core/mediator.ts';
+import type { Spoken, SpokenRequest } from '../src/core/voice-history.ts';
+
+// The job delegation decides at once in tests that don't wait on GPT Live's reply (those set the mediator's own).
+Mediator.REPLY_MS = 0; Mediator.REPLY_START_MS = 0;
 
 export const settle = (ms = 20) => new Promise(resolve => setTimeout(resolve, ms));
 export const until = async <T>(check: () => T) => { for (let i = 0; i < 300; i++) { const v = check(); if (v) return v; await settle(); } throw new Error('timed out'); };
@@ -99,7 +104,7 @@ export const learn = (h: Harness, text: string) => h.voiceSessions.learn({ text,
 export const disregarded = (live: Live, id: string) => live.appended.some(([kind, text]) => kind === 'instructions' && text.startsWith(`Disregard instruction ${id}`));
 
 /** A page judgment as Jev would give it: nothing asked unless the test says so. */
-export const pageReading = (page: Partial<PageJudgment> = {}): PageJudgment => ({ only: 0, work: 1, other: 0, walk: 0, unhappy: 0, ...page });
+export const pageReading = (page: Partial<PageJudgment> = {}): PageJudgment => ({ only: 0, other: 0, walk: 0, ...page });
 /** A stand-in for Jev (jev.ts): the test's reading of each moment; returns every moment it was asked about. */
 export function fakeJev(h: Harness, reading: (moment: Moment) => Partial<Reading> = () => ({})) {
   const moments: Moment[] = [];
@@ -109,3 +114,12 @@ export function fakeJev(h: Harness, reading: (moment: Moment) => Partial<Reading
 /** What the voice tool makes of the operator's turn with these words as the latest (turn.ts), as the mediator asks it. */
 export const turn = (h: Harness, said: string, { why = 'turn', cued }: { why?: Trigger; cued?: boolean } = {}) =>
   routeTurn(h, { utterances: [{ role: 'operator', text: said, endMs: 0 }], through: 0, seqs: [0], fresh: said, ...cued && { cued } }, [{ role: 'operator', text: said, at: Date.now() }], why);
+
+/** A voice tool that decides a turn in one step (for the mediator's tests): its decision, as its two readings make it (turn.ts). */
+export const decides = (decide: (request: SpokenRequest, spoken: Spoken[], why: Trigger) => Promise<Decision>): Route => {
+  const made = new Map<SpokenRequest, Decision>();
+  return {
+    actions: async (request, spoken, why) => { const d = await decide(request, spoken, why); made.set(request, d); return { reading: d.actions?.reading, told: d.told, note: d.note, keptNote: d.send ? undefined : d.note, moved: d.moved, escalated: d.escalated }; },
+    job: async request => { const { told, ...d } = made.get(request)!; return d; },
+  };
+};

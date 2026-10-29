@@ -73,12 +73,13 @@ test('the turn moves nothing again for words the voice moved the page for; only 
   const { harness, fakeJev, pageReading, turn } = await import('./live-fake.ts');
   const { h } = await harness(t);
   const runs: string[][] = [];
-  let page = pageReading({ command: 'goto_sessions', only: .9, work: 0 });
+  let page = pageReading({ command: 'goto_sessions', only: .9 });
   h.stage = { describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; }, view, observe() {}, close() {} } as any;
-  fakeJev(h, moment => ({ needsAgent: .2, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: moment.trigger === 'step' ? pageReading() : page }));
+  // The job delegation finds work only where they ask for some.
+  fakeJev(h, moment => moment.trigger === 'job' ? { needsAgent: /fix/.test(moment.latest!.text) ? .9 : .2 } : { sessions: { asked: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: moment.trigger === 'step' ? pageReading() : page });
   const only = await turn(h, 'take me to the sessions', { cued: true });
   assert.equal(only.send, false);
-  page = pageReading({ command: 'goto_sessions', only: .1, work: .9 });
+  page = pageReading({ command: 'goto_sessions', only: .1 });
   const more = await turn(h, 'show me the sessions and fix the typo', { cued: true });
   assert.equal(more.send, true);
   assert.deepEqual(runs, [], 'nothing ran twice');
@@ -107,12 +108,12 @@ test('a walkthrough asked for: the first part shows, and each time the voice fin
   const deck = (): StageView => ({ ...view, where: `Slide ${slide} of 5`, commands: [{ id: 'page_next', say: 'Go to the next slide' }, { id: 'page_slide_3', say: 'Go to slide 3', name: 'Margins' }] });
   h.stage = { describe: async () => deck(), run: async (ids: string[]) => { runs.push(ids); if (ids[0] === 'page_next' && slide < 5) slide++; return { done: [], onScreen: `Slide ${slide} of 5` }; }, follow: async () => null, view: deck(), observe() {}, close() {} } as any;
   const { fakeJev, pageReading } = await import('./live-fake.ts');
-  fakeJev(h, () => ({ needsAgent: .4, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: pageReading({ command: 'page_slide_3', only: .8, work: .3, walk: .9 }) }));
+  fakeJev(h, moment => moment.trigger === 'job' ? { needsAgent: .1 } : { sessions: { asked: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: pageReading({ command: 'page_slide_3', only: .8, walk: .9 }) });
   h.presenter.walkQuietMs = 50;
   const { turn } = await import('./live-fake.ts');
   const walked = await turn(h, 'walk me through the rest');
   assert.deepEqual([walked.send, walked.moved], [false, true]);
-  await until(() => lives[0].appended.some(([kind, text]) => kind === 'commentary' && /Nothing was sent to Claude Code: the operator asked to be walked through the page.*Slide 3 of 5.*Present this part/.test(text)));
+  await until(() => lives[0].appended.some(([kind, text]) => kind === 'commentary' && /The operator asked to be walked through the page, and the voice tool paces it.*Slide 3 of 5.*Present this part/.test(text)));
   assert.deepEqual(runs, [['page_slide_3']]);
   const commentary = () => lives[0].appended.filter(([kind, text]) => kind === 'commentary' && /The page moved on/.test(text)).map(([, text]) => text);
   await new Promise(resolve => setTimeout(resolve, 700));
@@ -140,11 +141,12 @@ test("the operator's words are read once when they finish, and the page moves fo
   const runs: string[][] = [], judged: string[] = [];
   const deck: StageView = { ...view, where: 'Slide 24', commands: [{ id: 'page_next', say: 'Go to the next slide' }, { id: 'page_slide_27', say: 'Go to slide 27', name: 'One highlight at a time' }] };
   h.stage = { tabId: 1, view: deck, describe: async () => deck, run: async (ids: string[]) => { runs.push(ids); return { done: [{ id: ids[0], say: 'Go to the next slide' }], onScreen: 'Slide 25: Moving the page by voice' }; }, follow: async () => null, observe() {}, close() {} } as any;
-  const read = { needsAgent: .3, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 };
+  const read = { sessions: { asked: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 };
   fakeJev(h, ({ trigger, latest }) => {
     if (trigger === 'step') return { page: pageReading() };
+    if (trigger === 'job') return { needsAgent: .3 };
     const said = latest!.text; judged.push(said);
-    return { ...read, page: /continue/i.test(said) ? pageReading({ command: 'page_next', only: .7, work: .1, walk: .2 }) : pageReading({ only: .1, work: .9 }) };
+    return { ...read, page: /continue/i.test(said) ? pageReading({ command: 'page_next', only: .7, walk: .2 }) : pageReading({ only: .1 }) };
   });
   h.voiceSessions.mediator!.operatorQuietMs = 30;
   h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: "Okay, let's continue.", start_ms: 0, end_ms: 900 });
@@ -176,11 +178,16 @@ test("the operator's words come first: a part's last step goes on to the next se
     if (ids[0] === 'page_next_step') throw new StageNothing('Already on the last step', [], '', { id: 'page_next_step', say: 'Next step in the box' });
     return { done: [{ id: ids[0], say: 'Go to the next section' }], onScreen: 'Section 4. Your code owns the workflow' };
   }, follow: async () => null, observe() {}, close() {} } as any;
-  const read = { needsAgent: .3, sessions: { asked: 0, only: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 };
+  const read = { sessions: { asked: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 };
+  const delivered: any[] = [];
+  h.deliver = (request: any) => { delivered.push(request); };
   fakeJev(h, ({ trigger, latest }) => {
     if (trigger === 'step') return { page: pageReading() };
-    const said = latest!.text; judged.push(said);
-    return { ...read, page: /next/i.test(said) ? pageReading({ command: 'page_next_step', only: .8, work: .1, walk: .1, unhappy: .1 }) : /wrong/.test(said) ? pageReading({ only: .2, work: .3, unhappy: .8 }) : pageReading({ only: .1, work: .9 }) };
+    const said = latest!.text;
+    // The job delegation: a complaint about the page needs the agent.
+    if (trigger === 'job') return { needsAgent: /wrong/.test(said) ? .9 : .1, ready: .9 };
+    judged.push(said);
+    return { ...read, page: /next/i.test(said) ? pageReading({ command: 'page_next_step', only: .8, walk: .1 }) : /wrong/.test(said) ? pageReading({ only: .8 }) : pageReading({ only: .1 }) };
   });
   h.voiceSessions.mediator!.operatorQuietMs = 60000;
   const live = h.voiceSessions.live!;
@@ -194,9 +201,10 @@ test("the operator's words come first: a part's last step goes on to the next se
   assert.deepEqual(runs, [['page_next_step'], ['next_section']], 'the last step of a part goes on to the next section');
   // Told quietly, or aloud when it was already answering as the page moved.
   await wait('the note', () => lives[0].appended.some(([kind, text]) => (kind === 'thinking' && /moved the page for the operator's words.*Section 4/.test(text)) || (kind === 'commentary' && /The page now shows: Section 4/.test(text))));
-  // A complaint no command answers: their words reach the agent, and GPT Live hears so.
+  // A complaint about the page that no command answers: the job delegation sends their words to the agent, to extend the
+  // page's controller.
   await new Promise(resolve => setTimeout(resolve, 1600));
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'You keep going to the wrong section.', start_ms: 5000, end_ms: 6000 });
   live.emit('event', { type: 'session.output_transcript.delta', delta: " I'm sorry about that. " });
-  await wait('the complaint', () => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /went to Claude, to fix how the page responds/.test(text)));
+  await wait('the complaint', () => delivered.some(r => /wrong section/.test(r.content) && /asked the page .* for something its controls don't do/.test(r.content)));
 });

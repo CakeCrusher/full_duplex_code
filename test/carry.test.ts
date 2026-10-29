@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
 import { Mediator } from '../src/core/mediator.ts';
-import { harness, Live, page, settle, until } from './live-fake.ts';
+import { decides, harness, Live, page, settle, until } from './live-fake.ts';
 
 const words = 'Rename the options parser to argv.';
 
@@ -73,7 +73,7 @@ test('a request fdc handles itself just after the connection drops gives its wor
   const deliveries: any[] = [];
   let handle!: () => void;
   const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null,
-    route: () => new Promise(resolve => { handle = () => resolve({ send: false, told: 'Turned on.', note: 'The voice tool turned a session on.' }); }) });
+    route: decides(() => new Promise(resolve => { handle = () => resolve({ send: false, told: 'Turned on.', note: 'The voice tool turned a session on.' }); })) });
   t.after(() => observer.close());
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Turn on the other session.', start_ms: 0, end_ms: 900 });
   m.decide('delegation', 'd1');

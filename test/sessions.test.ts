@@ -10,7 +10,7 @@ import { Mediator, type Decision } from '../src/core/mediator.ts';
 import type { Harness } from '../src/core/bridge.ts';
 import { Jev, type Reading, type Session, type SessionsJudgment } from '../src/core/jev.ts';
 import { handledNote } from '../src/core/prompts.ts';
-import { fakeJev, harness, turn, until } from './live-fake.ts';
+import { decides, fakeJev, harness, turn, until } from './live-fake.ts';
 
 // Two companions in their own folders, both registered under one root, as two fdc runs are.
 async function pair(t: TestContext) {
@@ -26,7 +26,11 @@ async function pair(t: TestContext) {
 // Jev's reading, given by the test: which of the listed sessions to turn on and off.
 function judge(h: Harness, reading: (sessions: Session[]) => Partial<SessionsJudgment>, needsAgent = .1) {
   const seen: Session[][] = [];
-  fakeJev(h, moment => { seen.push(moment.sessions!); return { needsAgent, sessions: { asked: .95, only: .95, unlisted: 0, turnOn: [], turnOff: [], ...reading(moment.sessions!) } }; });
+  fakeJev(h, moment => {
+    // The job delegation reads no sessions: only whether the words need the agent.
+    if (moment.trigger === 'job') return { needsAgent };
+    seen.push(moment.sessions!); return { sessions: { asked: .95, unlisted: 0, turnOn: [], turnOff: [], ...reading(moment.sessions!) } };
+  });
   return seen;
 }
 const reading = (r: Partial<Reading>): Reading => ({ trigger: 'turn', said: '', transcript: '', needsAgent: null, ...r });
@@ -42,7 +46,7 @@ test('"switch to beta": beta\'s voice starts, alpha is told, then alpha\'s voice
   assert.match(seen[0][0].shown, /^alpha · Claude Code · [0-9a-f]{8} · Voice on \(Claude Code .* open · started .*\)$/);
   assert.match(seen[0][1].shown, /^beta · Claude Code · [0-9a-f]{8} · Ready \(/);
   assert.equal(decided.send, false);
-  assert.match(decided.told!, /Nothing was sent to Claude Code.*Turning on the voice of beta \([0-9a-f]{8}\)\. Turning off the voice of this session once the others are on\./);
+  assert.match(decided.told!, /changing voice sessions as the operator asked: Turning on the voice of beta \([0-9a-f]{8}\)\. Turning off the voice of this session once the others are on\./);
   await until(() => b.lives[0]?.state === 'active');
   await until(() => a.lives[0].state === 'closed');
   assert.ok(a.lives[0].appended.some(([kind, text]) => kind === 'thinking' && /Voice sessions: the voice of beta \([0-9a-f]{8}\) is on; this session's voice ends/.test(text)));
@@ -89,7 +93,7 @@ test('a session named that is not running changes nothing, even when Jev picks t
   judge(a.h, sessions => ({ unlisted: .82, turnOn: [id(sessions, 'beta')], turnOff: [id(sessions, 'alpha')] }));
   await a.h.startLive(undefined, undefined, 'fresh');
   const decided = await turn(a.h, 'Switch to gamma.');
-  assert.match(decided.told!, /Nothing was sent.*The operator named a session that is not running; running now: alpha · Claude Code · [0-9a-f]{8} · Voice on \(.*\), this one; beta · Claude Code · [0-9a-f]{8} · Ready \(.*\)\./);
+  assert.match(decided.told!, /changing voice sessions as the operator asked: The operator named a session that is not running; running now: alpha · Claude Code · [0-9a-f]{8} · Voice on \(.*\), this one; beta · Claude Code · [0-9a-f]{8} · Ready \(.*\)\./);
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(b.lives.length, 0); assert.equal(a.lives[0].state, 'active');
 });
@@ -100,7 +104,7 @@ test('session changes asked together with work: the changes happen and the words
   await a.h.startLive(undefined, undefined, 'fresh');
   const decided = await turn(a.h, 'Start beta, and fix the failing parser test.');
   assert.equal(decided.send, true);
-  assert.match(decided.told!, /^Turning on the voice of beta/, 'GPT Live hears what changes');
+  assert.match(decided.told!, /changing voice sessions as the operator asked: Turning on the voice of beta/, 'GPT Live hears what changes');
   await until(() => b.lives[0]?.state === 'active');
 });
 
@@ -123,7 +127,7 @@ function mediator(t: TestContext, route: (request: any) => Promise<Decision>) {
   const appends: [string, string, string | null][] = []; live.append = async (kind: string, content: string, delegationId: string | null) => { appends.push([kind, content, delegationId]); };
   const deliveries: any[] = [], recorded: any[] = [];
   const audit = { record: (entry: any, needsAgent: number | null) => { recorded.push({ ...entry, judged: needsAgent }); } } as any;
-  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, audit, route });
+  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, audit, route: decides(route) });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Switch to beta.', start_ms: 0, end_ms: 800 });
   return { m, appends, deliveries, recorded };
@@ -216,19 +220,20 @@ test('a tab that has not been clicked, or allowed the microphone, is reported at
 
 test("words only about how the companion behaves are handled by fdc: the harness never gets them, Jev learns and tunes from them", async t => {
   const { a } = await pair(t);
-  fakeJev(a.h, () => ({ needsAgent: .2, companionOnly: .9, sessions: { asked: .05, only: .1, unlisted: 0, turnOn: [], turnOff: [] } }));
+  fakeJev(a.h, () => ({ needsAgent: .2, companionOnly: .9, sessions: { asked: .05, unlisted: 0, turnOn: [], turnOff: [] } }));
   const decided = await turn(a.h, "Stop waking up for every little thing.");
   assert.equal(decided.send, false);
-  assert.match(decided.told!, /Nothing was sent to Claude Code: the operator only asked how you, the voice companion, should behave/);
+  assert.match(decided.told!, /The operator told you how you should behave/);
   assert.equal(decided.note, handledNote('companion'));
-  // The mediator's side: what Jev read is considered for an instruction and the settings, once, and nothing is delivered.
+  // The mediator's side: the voice tool's own reading is considered for an instruction and the settings, once, and nothing
+  // is delivered.
   const considered: Reading[] = [];
   const m = mediator(t, async () => decided);
   m.m.consider = r => considered.push(r);
   m.m.decide('turn'); await until(() => considered.length);
   assert.equal(m.deliveries.length, 0);
-  assert.deepEqual(considered, [decided.reading]);
-  fakeJev(a.h, () => ({ needsAgent: .9, companionOnly: .3, sessions: { asked: .05, only: .1, unlisted: 0, turnOn: [], turnOff: [] } }));
+  assert.deepEqual(considered, [decided.actions!.reading]);
+  fakeJev(a.h, () => ({ needsAgent: .9, companionOnly: .3, sessions: { asked: .05, unlisted: 0, turnOn: [], turnOff: [] } }));
   const sent = await turn(a.h, "Make the companion pause less in the code.");
   assert.equal(sent.send, true, 'in doubt, it reaches the harness');
 });

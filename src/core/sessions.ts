@@ -8,8 +8,8 @@
 import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
 import { listCompanions, type CompanionEntry } from './companions.ts';
-import { ASKED, ONLY, UNLISTED, sessionName, type Reading, type Session } from './jev.ts';
-import { sessionsHandled, sessionsOutcome } from './prompts.ts';
+import { ASKED, UNLISTED, sessionName, type Reading, type Session } from './jev.ts';
+import { sessionsOutcome } from './prompts.ts';
 import { shownLine } from '../../web/companions.ts';
 
 type Outcome = { session: Session; ok: boolean; text: string };
@@ -47,7 +47,8 @@ export class SessionSwitch {
    * What Jev read in the operator's turn about voice sessions, carried out: undefined when they asked for none. Whether
    * session changes were all they asked (then nothing goes to the agent), and what GPT Live is told.
    */
-  act(reading: Reading, sessions: Session[]): { only: boolean; told: string } | undefined {
+  /** Turns sessions on or off as the operator asked; what changes, for GPT Live. Whether the words also go to the agent is the job delegation's. */
+  act(reading: Reading, sessions: Session[]): { told: string } | undefined {
     const bridge = this.bridge, asked = reading.sessions;
     if (!asked || asked.asked < ASKED) return;
     // A session named that isn't running: Jev still picks the nearest listed one to turn on ("switch to runta" chose
@@ -59,11 +60,9 @@ export class SessionSwitch {
       off.length ? `Turning off the voice of ${names(off)}${on.length && off.some(s => s.current) ? ' once the others are on' : ''}.` : '',
       unlisted ? `The operator named a session that is not running; running now: ${running(sessions)}.` : '',
     ].filter(Boolean).join(' ') || `Nothing to change; running now: ${running(sessions)}.`;
-    const only = asked.only >= ONLY;
-    bridge.publish({ type: 'sessions', text: plan, handled: only });
+    bridge.publish({ type: 'sessions', text: plan, handled: true });
     if (on.length || off.length) void this.carryOut(on, off);
-    // Asked together with something for the harness, the words go on, and GPT Live hears what changes.
-    return { only, told: only ? sessionsHandled(bridge.agent, plan) : plan };
+    return { told: plan };
   }
 
   async carryOut(on: Session[], off: Session[]) {

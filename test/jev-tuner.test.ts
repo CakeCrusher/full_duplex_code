@@ -45,7 +45,8 @@ test("with the operator's words, Jev reads them in the same call and keeps the c
   assert.deepEqual(tuningFrom(reading.tuning, DEFAULT_TUNING).changes, [{ name: 'wakeThreshold', from: 50, to: 100 }]);
   assert.equal(sent.state.latest, 'user: Stop waking up for every little thing.');
   assert.match(sent.state.operator_instructions, /cut in/);
-  assert.ok(sent.questions.needs_agent && sent.questions.standbyAfterMs, "the gate's questions and the tuner's, in one call");
+  assert.ok(sent.questions.companion_only && sent.questions.standbyAfterMs, "the voice tool's own questions and the tuner's, in one call");
+  assert.ok(!sent.questions.needs_agent, "whether the words go to the agent is the job delegation's call");
   assert.match(sent.questions.standbyAfterMs.instructions, /Keep the current level unless/);
   assert.deepEqual(Object.keys(sent.questions.standbyAfterMs.criteria), ['level_0', 'level_10000', 'level_15000', 'level_20000', 'level_30000', 'level_60000', 'level_120000']);
   // Every Standby setting is Jev's to choose, each level with what it was measured to cost and buy.
