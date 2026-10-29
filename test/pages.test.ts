@@ -70,6 +70,7 @@ test('every page gets Jev\'s checks of a request on the request\'s item, also a 
   const update = await until(() => laptop.of('timeline_update').find(e => e.items.some((i: any) => i.checks?.length)));
   assert.deepEqual(update.items[0].checks.map((c: any) => [c.kind, c.scores.needsAgent, c.words, c.flagged]), [['handoff', .91, 'Add a test for the parser.', false]]);
   const phone = await openPage(t, h);
+  await until(() => phone.of('timeline_history').length);
   const [request] = phone.of('timeline_history')[0].items.filter((i: any) => i.track === 'requests');
   assert.equal(request.checks.length, 1, 'a page opened later sees the checks too');
 });
