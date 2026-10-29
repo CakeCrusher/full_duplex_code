@@ -247,9 +247,9 @@ test('a fork asks only for storage, over WebSocket and WebRTC, and the Live clos
 });
 
 test("a wake resumes the paused session while fdc's own instructions are the ones it started with and its context has room", () => {
-  const record = { liveSessionId: 'live_1', stored: true, finalized: true, endedAt: Date.now() - 20000, turns: [{ role: 'operator' as const, text: 'Next.' }], prompt: 'aaa', context: .3 };
+  const record = { liveSessionId: 'live_1', stored: true, finalized: true, endedAt: Date.now() - 20000, turns: [{ role: 'operator' as const, text: 'Next.' }], prompt: 'aaa', context: .15 };
   assert.deepEqual(wakePlanFor(record, 'aaa'), ['fork']);
-  assert.deepEqual(wakePlanFor({ ...record, context: .62 }, 'aaa'), ['seed', 'its context was 62% full'], 'a fork of a fuller context starts slower');
+  assert.deepEqual(wakePlanFor({ ...record, context: .25 }, 'aaa'), ['seed', 'its context was 25% full'], 'a fork of a fuller context starts slower');
   assert.deepEqual(wakePlanFor(record, 'aaa', true), ['seed', 'a fork failed lately']);
   assert.deepEqual(wakePlanFor(record, 'bbb'), ['seed', 'not forkable'], "fdc's own instructions changed");
   assert.deepEqual(wakePlanFor({ ...record, stored: false, turns: [] }, 'aaa'), ['fresh', 'not forkable']);

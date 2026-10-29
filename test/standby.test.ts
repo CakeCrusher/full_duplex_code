@@ -92,7 +92,7 @@ test('a wake resumes the paused session whatever the page did meanwhile: the for
   assert.deepEqual(toldPage(lives[2]), [], 'it knows the page: nothing added');
 });
 
-test('an instruction learned before a wake rides along in the fork; a trim of GPT Live\'s context makes fdc tell it the page and the instructions again; past 60% full, a wake seeds, the page last in its startup input', async t => {
+test('an instruction learned before a wake rides along in the fork; a trim of GPT Live\'s context makes fdc tell it the page and the instructions again; past 20% full, a wake seeds, the page last in its startup input', async t => {
   const { h, lives, goQuiet } = await quiet(t);
   h.stage.tabId = 1; h.stage.describe = async () => PLAN;
   const wake = async (n: number) => { speak(h, 10); h.voiceSessions.checkStandby(); await h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true); await until(() => lives[n]?.state === 'active'); };
@@ -107,9 +107,9 @@ test('an instruction learned before a wake rides along in the fork; a trim of GP
   usage(lives[1], .9); usage(lives[1], .12);
   await until(() => lives[1].appended.some(([kind, text]) => kind === 'instructions' && /^I1: Keep answers under two sentences/.test(text)));
   await until(() => toldPage(lives[1]).length === 2);
-  usage(lives[1], .65);
+  usage(lives[1], .25);
   await sleep(1); await wake(2);
-  assert.equal(lives[2].options.fork, undefined, 'past 60%: a seeded session, which starts faster');
+  assert.equal(lives[2].options.fork, undefined, 'past 20%: a seeded session, which starts faster');
   assert.match(lives[2].options.instructions, /I1: Keep answers under two sentences/);
   assert.ok(!lives[2].options.instructions.includes('dark mode toggle'), 'no page in its instructions');
   const last = lives[2].options.input.at(-1);

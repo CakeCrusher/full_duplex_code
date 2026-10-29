@@ -46,11 +46,14 @@ export const planFor = (record: ResumeRecord, mode: 'resume' | 'fresh', prompt?:
 // Everything that changes during a conversation is told to GPT Live in it rather than in its instructions: the page on the
 // stage, and the operator's learned instructions, which carry over to a fork as conversation (on Oct 21 a later appended
 // instruction displaced an earlier one: "end every answer with pineapple" was dropped once "start every answer with
-// Captain" followed). Both are told again when GPT Live trims its context (voice-sessions.ts). Its startup grows with its context: a fork took 2.1 s at 15% full, 4.2 s at
-// 35%, 7.3 s at 56% and 8.5 s at 75% (Oct 21; once 17.7 s), a seeded session about 1.7 s. So a wake forks while the
-// context it continues has room (WAKE_FORK_CONTEXT); after a wake's fork fails, wakes seed for WAKE_FORK_BACKOFF_MS rather
-// than wait on another.
-export const WAKE_FORK_CONTEXT = .6, WAKE_FORK_BACKOFF_MS = 10 * 60 * 1000;
+// Captain" followed). Both are told again when GPT Live trims its context (voice-sessions.ts). A fork's startup grows with
+// its context, and the operator waits on it: over Oct 19-28, 191 wakes that forked started in a median 2.0 s under 10%
+// full, 3.1 s at 10-20%, 5.5 s at 20-30%, 7.1 s at 30-40%, 8.9 s at 40-50% and 10.0 s at 50-60%; 117 that seeded, in 1.7 s
+// (90% within 2.4 s) whatever the conversation's length. Once started, GPT Live answers as fast in a full context as in an
+// empty one (Oct 28: a median 0.1 to 0.75 s at every tenth). So a wake forks only while the context it continues is small
+// (WAKE_FORK_CONTEXT): forking up to 60%, presenting waited 5 to 11 s on each wake (Oct 28). After a wake's fork fails,
+// wakes seed for WAKE_FORK_BACKOFF_MS rather than wait on another.
+export const WAKE_FORK_CONTEXT = .2, WAKE_FORK_BACKOFF_MS = 10 * 60 * 1000;
 /**
  * A wake from Standby resumes the session it paused (a fork keeps everything GPT Live had) while fdc's own instructions
  * are the ones it started with and its context has room; otherwise it starts a new session seeded with the conversation.
