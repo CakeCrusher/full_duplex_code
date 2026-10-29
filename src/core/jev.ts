@@ -2,9 +2,9 @@
 // state, in two kinds of call that ask different questions. Optional: on when TYPESAFE_API_KEY is set.
 // - Job delegation (trigger job, turn.ts): once the operator has stopped speaking and the voice companion has replied,
 //   whether their words need the coding agent; nothing else. GPT Live passes nothing on.
-// - The voice tool's own actions, when GPT Live asks for them (its delegation; trigger delegation, turn.ts): what to show
-//   on the page, whether the operator turns voice sessions on or off (sessions.ts), speaks about how the companion
-//   behaves, or ends the conversation for now (Standby); never whether anything goes to the agent.
+// - The voice tool's own actions on the operator's turn (trigger turn or delegation, turn.ts): whether they turn voice
+//   sessions on or off (sessions.ts), are about how the companion behaves, or end the conversation for now (Standby);
+//   never whether anything goes to the agent.
 // - The page on the stage: the next command to run, and whether moving the page is all they ask (presenter.ts).
 // - The learner: whether they give the companion a standing instruction (instruction-learner.ts).
 // - The tuner: the level of each setting that fits the operator's instructions (jev-tuner.ts, with FDC_JEV_TUNING=1).
@@ -20,11 +20,11 @@ type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: 
 const URL = 'https://api.typesafe.ai/v1/systemone';
 
 /** Why Jev is asked now: its provenance, part of what it reads. */
-export type Trigger = 'delegation' | 'job' | 'unsent' | 'cue' | 'step' | 'settings';
+export type Trigger = 'turn' | 'delegation' | 'job' | 'unsent' | 'cue' | 'step' | 'settings';
 const WHY: Record<Trigger, string> = {
+  turn: 'The operator has just stopped speaking.',
   job: 'The operator has just stopped speaking and the voice companion has replied to them (`voice_reply`, what it has said so far).',
-  // GPT Live's delegation carries no words: only that it wants the voice tool to act now.
-  delegation: 'The voice companion has asked the voice tool to act, now, on the conversation: to show on the page what the operator wants to see or what the companion is about to talk about (`voice_reply`, what it has said since the operator\'s latest words), or to change how the companion behaves, its settings, voice sessions or standing instructions. It asks as it begins answering, often before it names what it will talk about. Work for the coding agent is not asked here: it reaches the agent by another reading.',
+  delegation: 'The voice companion has asked for the operator\'s latest words to be passed on.',
   unsent: 'The operator\'s latest words are going to the coding agent although the voice companion never passed them on (voice ended, or the voice tool sends them itself).',
   cue: 'The voice companion has just said it is turning to something on the page, by words that are no part\'s name.',
   step: 'The voice tool has run page commands for the latest words (`page_done`), and the page is now where `page` says.',
@@ -137,7 +137,7 @@ const JOB = {
     "They have said a whole request or question, enough to act on, and stopped: even if it trails off into filler ('um', 'yeah', 'so', 'and yeah') or they might add more later. A short cue or command is whole as soon as it is said ('show them', 'take it from here', 'carry on', 'send it').",
     "They broke off in the middle of a sentence or a list ('and the…', 'I want you to…', 'can you also'), or are still building up to what they want (setting context before the actual ask), so acting now would miss its point."),
 };
-// The voice tool's own actions when GPT Live asks (trigger delegation): never whether anything goes to the agent.
+// The voice tool's own actions on the operator's turn (triggers turn, delegation): never whether anything goes to the agent.
 const GATE = {
   // Done talking for now: fdc pauses the companion (Standby) without waiting out the quiet window.
   standby: noul('Do the latest words end the conversation for now: the operator says goodbye, that they are stepping away or done for now, or asks the voice companion to go quiet, sleep or wait until they call it?',
@@ -176,8 +176,7 @@ const COMMAND = (trigger: Trigger) => ({
     ? 'Which page command should run next to show what the latest words ask for, now that the commands in `page_done` have run and the page is where `page` says? Choose none when the page already shows it.'
     : trigger === 'cue'
     ? 'Which page command shows what the voice companion meant in the latest words? Choose none if no command shows it.'
-    // GPT Live asks before it names what it will talk about: what the operator asked, or asked about, usually says.
-    : 'Which page command should run first to show what the latest words ask to see, or the part of the page that what they ask about, or what the voice companion is saying or about to say (`voice_reply`), is on, when the page doesn\'t already show it (when several, the first in their order)? Commands already run for the latest words (`page_done`) are done: never again. Choose none if nothing should change on the page.',
+    : 'Which page command should run first to show what the latest words ask for (when they ask for several, the first in their order)? Choose none if they ask for no page command.',
   rules: 'Asking to make, add, change or fix something is work for the coding agent, never a page command; asking to explain, present or run through something that is on the page also asks to show it, and so does a part named on its own ("sessions", "issue nine") or described by what it says or by how the page labels it ("highlighting step two", "tonight, the first one"), even with how, why or where. A number said as a word names the numbered part ("move on to four" is section 4, not the next one). With a page open, "continue", "go on", "keep going" or "move on" on their own (with at most "okay" or "let\'s") ask for the page\'s next part, whatever the companion just said. A move repeated ("forward three sections") is one command at a time. When the operator says not to move or change what is on screen, there is no page command.',
 });
 const pageQuestions = (page: StageView, trigger: Trigger) => {
@@ -250,12 +249,11 @@ export class Jev {
   /** One call: everything the voice tool asks about this moment, of one kind (the job delegation, or its own actions). */
   async read(moment: Moment, timeoutMs = 3000): Promise<Reading> {
     const { trigger, latest, history = '', sessions, page, done, learn, tune, reply } = moment, started = Date.now();
-    const said = latest?.text.replace(/\s+/g, ' ').trim() ?? '', gate = trigger === 'delegation', job = trigger === 'job' || trigger === 'unsent';
+    const said = latest?.text.replace(/\s+/g, ' ').trim() ?? '', gate = trigger === 'turn' || trigger === 'delegation', job = trigger === 'job' || trigger === 'unsent';
     // The latest words in their own field: marked inside the conversation instead, Jev read plain page moves as likelier
     // work for the agent (page_work up by .1 on average, Oct 21).
     const state: Record<string, string> = { setting: SETTING + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : '') + (tune ? ` ${TUNER_SETTING}` : ''), why: WHY[trigger], history: history.trim() || '(none)', latest: latest ? spokenLine(latest) : '(none)' };
     if (trigger === 'job') state.voice_reply = reply?.trim() || '(the companion has not replied)';
-    if (trigger === 'delegation') state.voice_reply = reply?.trim() || '(the companion has said nothing since)';
     if (sessions) state.sessions = sessionLines(sessions);
     if (page) state.page = pageLine(page);
     // The job delegation knows what the page's controller can do: what it can't goes to the agent, to add it.
@@ -290,7 +288,7 @@ export class Jev {
     }
     if (learn) reading.instruction = { behave: p('behave', NaN), design: p('design_talk', NaN), lasting: answers?.lasting?.choice };
     if (tune) reading.tuning = answers;
-    this.log({ type: 'jev.read', trigger, said: said.slice(-200), questions: Object.keys(questions).length, chars: JSON.stringify(state).length, ms: Date.now() - started, needsAgent: reading.needsAgent, ready: reading.ready, ...state.voice_reply && { reply: state.voice_reply.slice(-200) }, companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions, instruction: reading.instruction });
+    this.log({ type: 'jev.read', trigger, said: said.slice(-200), questions: Object.keys(questions).length, chars: JSON.stringify(state).length, ms: Date.now() - started, needsAgent: reading.needsAgent, ready: reading.ready, ...trigger === 'job' && { reply: state.voice_reply.slice(-200) }, companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions, instruction: reading.instruction });
     return reading;
   }
 }

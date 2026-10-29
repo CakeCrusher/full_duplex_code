@@ -43,10 +43,9 @@ How the voice tool uses it, so you can write it to be used well:
 - After that command runs, it reads `where()` again and decides whether the user asked for more
   ("forward two slides", "open the options and highlight the recommendation"), one command at a time.
 - What `run()` returns is what the voice is told is now on screen, and what it says about it.
-- A command's `name` is how the voice knows the part: it asks the voice tool to show it as it starts
-  talking about it, or, without Jev, says it ("let's look at Margins") to move the page as it talks.
-  The voice is also told what the page's commands without a `name` do (other than next and previous),
-  so it can tell the user what the page can't do yet.
+- A command's `name` is a phrase the voice itself can say ("let's look at Margins") to move the page
+  as it talks. With Jev, the voice is also told what the page's commands without a `name` do (other than
+  next and previous), so it can tell the user what the page can't do yet.
 
 ```js
 window.fdcController = {
@@ -85,8 +84,8 @@ Rules that make it work well:
   keep it under about 60 commands.
 - **`say` is how it is chosen.** Write what the command does in plain words, naming its target
   the way the user would, including how the page labels it on screen ("Tonight · 1 of 7", "Step 3"). Give a command that goes to a named place (a slide, a tab, a view) a
-  `name`, the words people use for it: the voice knows the page's parts by these names and shows
-  each as it talks about it. Keep names short and distinct.
+  `name`, the words people use for it: the voice says "let's look at" and that name to go there,
+  as it talks. Only commands with a `name` can be reached that way; keep names short and distinct.
 - **Next and previous.** If the page steps (slides, stages, steps), give it commands whose ids say
   so (`next_slide`, `previous_slide`): the voice says "let's go to the next one" or "let's go back
   one" and the page takes your step.

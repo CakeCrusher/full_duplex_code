@@ -9,9 +9,8 @@ import { Floor, operatorSpeaking, type MicrophoneLevel } from './floor.ts';
 import { DEFAULT_TUNING, holdOf, type Tuning } from './tuning.ts';
 import type { DelegationAudit, HandOff } from './delegation-audit.ts';
 import type { Reading, Trigger } from './jev.ts';
-import type { StageCommand } from './stage.ts';
 import type { Actions } from './turn.ts';
-import { cueNoDelegation, nothingToSend, queueFailed, routeNothing, sessionEndRequest, turnOutcome, uncertainNote, voiceRequest } from './prompts.ts';
+import { cueNoDelegation, nothingToSend, queueFailed, sessionEndRequest, turnOutcome, uncertainNote, voiceRequest } from './prompts.ts';
 
 /** What the voice tool made of the operator's turn (turn.ts): Jev's reading, whether their words go to the agent, and what it did itself. */
 export interface Decision {
@@ -30,16 +29,12 @@ export interface Decision {
   actions?: import('./turn.ts').Actions;
 }
 
-/** What the voice tool reads when GPT Live asks it to act: the conversation, what GPT Live has said since the operator's latest words, and the page commands already run for those words. */
-export interface RouteMoment { spoken: Spoken[]; reply?: string; delegationId?: string; ran?: StageCommand[]; /** The voice's own words moved the page for the operator's latest (speech cues). */ cued?: boolean }
-/** The voice tool's two readings (turn.ts): what it does itself when GPT Live asks (its delegation); and once the operator's turn has ended and GPT Live replied, whether their words go to the agent. */
+/** The voice tool's two readings of a turn (turn.ts): what it does itself, then, with GPT Live's reply, whether the words go to the agent. */
 export interface Route {
-  actions: (moment: RouteMoment) => Promise<Actions>;
+  actions: (request: SpokenRequest, spoken: Spoken[], why: Trigger) => Promise<Actions>;
   job: (request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions) => Promise<Decision>;
 }
 
-/** Why the operator's turn ended: GPT Live answered or they were quiet (turn), or, without Jev, GPT Live asked to pass their words on. */
-export type TurnEnd = 'turn' | 'delegation';
 // What GPT Live says while the operator only pauses ("Mm-hmm", "Go on"): no answer, so not the end of their turn.
 const BACKCHANNEL = new Set(['mm', 'mmm', 'mhm', 'hm', 'hmm', 'uh', 'huh', 'um', 'ah', 'oh', 'okay', 'ok', 'yeah', 'yes', 'yep', 'right', 'sure', 'alright', 'go', 'on', 'ahead', 'i', 'see', 'got', 'it', 'so']);
 /** Whether GPT Live's words so far answer anything: a whole word beyond a backchannel. */
@@ -53,10 +48,9 @@ export interface MediatedLive extends ContextSink, Pick<EventEmitter, 'on' | 'of
 }
 
 // Wires one voice session: agent observations become Live context, and the operator's turns become requests to the
-// agent. With Jev, two readings that ask different things (turn.ts): GPT Live's delegation asks the voice tool to act on
-// the conversation (show or move the page, its settings, sessions, standing instructions); and when the operator's turn
-// ends and the companion has replied, the job delegation decides whether their words need the agent, which then gets
-// them. Without Jev, GPT Live decides, and its delegations send the operator's words.
+// agent. With Jev, each turn is read twice (turn.ts): as it ends, for what the voice tool does itself (the page, sessions,
+// how the companion behaves); and once the companion has replied, for whether their words need the agent, which then
+// gets them. Without Jev, GPT Live decides, and its delegations send the operator's words.
 export class Mediator {
   live: MediatedLive; observer: AgentObserver; agent: ObservedAgent;
   deliver: (request: VoiceRequest) => void;
@@ -81,8 +75,6 @@ export class Mediator {
   consider?: (reading: Reading, requestId?: string) => void;
   /** The operator's latest turn: its last word (fragment), when it was read, and what came of it. */
   turn?: { last: number; at: number; done: Promise<Decision | undefined> };
-  /** What the voice tool did when GPT Live asked it to act, by the operator's last word (fragment) then: the job delegation of their turn takes it. */
-  acted: { last: number; done: Promise<Actions | undefined> }[] = [];
   /** GPT Live's answer so far and when it last spoke, and whether it has begun answering; the wait for the operator's quiet. */
   answer = ''; answerAt = 0; answering = false; quiet?: NodeJS.Timeout;
   /** What GPT Live said lately, as it said it: its reply to the operator's turn, for the job delegation. */
@@ -94,16 +86,6 @@ export class Mediator {
    * without it, a request lost in 25 rather than 33).
    */
   static REPLY_MS = 5000; static REPLY_START_MS = 2500;
-  /**
-   * With Jev: when GPT Live didn't ask the voice tool to act on the operator's words, it reads them itself as their turn
-   * ends. GPT Live asks just before it answers, but not always: on real fdc runs with the operator's pages and lines
-   * (fdc-ref-7e2a90), its asking alone put the page right on 17 of 21 lines, and with this reading 19, as many as the
-   * voice tool reading every turn's end.
-   */
-  static ROUTE_AT_TURN_END = true;
-  routeAtTurnEnd = Mediator.ROUTE_AT_TURN_END;
-  /** GPT Live's requests to act still waiting for the operator's transcript. */
-  routing = 0;
   replyMs = Mediator.REPLY_MS; replyStartMs = Mediator.REPLY_START_MS;
   /**
    * How long the operator is quiet before their turn has ended, when GPT Live doesn't answer first (a pause mid-sentence is
@@ -156,8 +138,7 @@ export class Mediator {
     if (event.type === 'session.output_transcript.delta') this.answered(String(event.delta ?? ''));
     if (event.type === 'session.delegation.created' && event.delegation?.target === 'client' && !this.seenDelegations.has(event.delegation.id)) {
       this.seenDelegations.add(event.delegation.id);
-      // With Jev, GPT Live asks the voice tool to act; the operator's words reach the agent only by the job delegation.
-      if (this.route) this.routed(event.delegation.id); else this.turnEnded('delegation', event.delegation.id);
+      this.turnEnded('delegation', event.delegation.id);
     }
   }
   /** The operator said more: once they have been quiet a moment, their turn has ended. */
@@ -176,56 +157,19 @@ export class Mediator {
     if (!this.answering && answers(this.answer)) { this.answering = true; this.turnEnded('turn'); }
   }
   /** The operator's turn has ended: once the transcript of their last words is in (it can trail GPT Live's answer), their words are read. */
-  turnEnded(why: TurnEnd, delegationId?: string) {
+  turnEnded(why: Trigger, delegationId?: string) {
     clearTimeout(this.quiet);
     const ended = Date.now();
     const attempt = () => { if (Date.now() - this.history.lastInputAt < 450 && Date.now() - ended < 3000) this.schedule(attempt, 200); else this.decide(why, delegationId); };
     attempt();
   }
   /**
-   * GPT Live asked the voice tool to act (with Jev): once the transcript of the operator's words it heard is in, the voice
-   * tool reads the conversation with what GPT Live has said since their latest words, does what it can itself (turn.ts)
-   * and answers the delegation with what it did. GPT Live asks as it begins answering, before it names what it is about
-   * to talk about (in the probes, a part's name came seconds later if at all), so the reading doesn't wait for its words.
-   * Readings act in the order asked; one for the same words knows the page commands already run for them.
+   * The operator's words no request took yet, read once: with Jev, the voice tool does what it can itself and what needs
+   * the agent goes to it (turn.ts); without, GPT Live decides, and only its asking to pass words on sends them. The same
+   * words are read again only with more of theirs. Requests reach the agent, and move the page, in the order the operator
+   * made them, however long each reading takes.
    */
-  routed(delegationId?: string) {
-    const asked = Date.now(), route = this.route!;
-    this.routing++;
-    const attempt = () => {
-      if (this.live.state !== 'active') { this.routing--; return; }
-      if (Date.now() - this.history.lastInputAt < 450 && Date.now() - asked < 1500) { this.schedule(attempt, 150); return; }
-      this.routing--;
-      const spoken = this.history.spoken(), latest = spoken.at(-1);
-      const last = this.history.fragments.findLast(f => f.role === 'operator')?.seq ?? -1;
-      const reply = this.saidSince(latest?.at ?? Date.now() - 20000);
-      const earlier = this.acted.filter(a => a.last === last).map(a => a.done);
-      const done = this.actionsOrder.then(async () => {
-        const ran = (await Promise.all(earlier)).flatMap(a => a?.ran ?? []);
-        return route.actions({ spoken, reply, delegationId, ...ran.length ? { ran } : {}, ...this.history.latestCued() ? { cued: true } : {} });
-      }).catch(error => { this.log({ type: 'turn.error', message: (error as Error).message }); return undefined; });
-      this.actionsOrder = done;
-      this.acted = [...this.acted.slice(-19), { last, done }];
-      void done.then(actions => {
-        if (this.live.state === 'active') {
-          if (actions?.told) this.context.add('thinking', actions.told, delegationId ?? null);
-          // The page tells its own news; with nothing done, GPT Live hears that too when it asked, and doesn't wait on it.
-          else if (!actions?.answered && delegationId) this.context.add('thinking', routeNothing, delegationId);
-        }
-        if (actions?.reading) this.consider?.(actions.reading);
-      });
-    };
-    attempt();
-  }
-  /** What GPT Live has said since `from`, as it said it. */
-  saidSince(from: number) { return this.voiceSaid.filter(d => d.at >= from).map(d => d.text).join('').replace(/\s+/g, ' ').trim().slice(-600) || undefined; }
-  /**
-   * The operator's words no request took yet, read once: with Jev, the job delegation decides whether they go to the
-   * agent, once GPT Live has replied, with what the voice tool did for them when GPT Live asked (turn.ts); without, GPT
-   * Live decides, and only its asking to pass words on sends them. The same words are read again only with more of
-   * theirs. Requests reach the agent in the order the operator made them, however long each reading takes.
-   */
-  decide(_why: TurnEnd, delegationId?: string) {
+  decide(why: Trigger, delegationId?: string) {
     if (this.live.state !== 'active') return;
     const last = this.history.fragments.findLast(f => f.role === 'operator')?.seq ?? -1;
     // GPT Live asking to pass on words already read hears what came of them.
@@ -240,19 +184,23 @@ export class Mediator {
     this.pending++;
     // What Jev reads as their latest words: all of theirs since the last reading.
     const since = this.turn?.last ?? -1, spoken = this.history.spoken(request.through, since), heardAt = this.history.lastInputAt, route = this.route;
-    // GPT Live didn't ask the voice tool to act on these words: it reads them itself, at once.
-    if (route && this.routeAtTurnEnd && !this.routing && !this.acted.some(a => a.last > since && a.last <= last)) this.routed();
-    // Whether the words go to the agent, once GPT Live has replied, with what the voice tool did for them meanwhile when
-    // GPT Live asked; requests reach the agent in the order they were made. Jev failing, the words go to the agent:
-    // keeping work from it is the costly mistake.
-    const decided = this.order.then(async (): Promise<Decision> => {
-      if (!route) return { send: true };
-      const reply = await this.replyTo(spoken.at(-1)?.at ?? heardAt, heardAt);
-      const acted = (await Promise.all(this.acted.filter(a => a.last > since && a.last <= last).map(a => a.done))).filter(a => a !== undefined);
-      return route.job(request, spoken, reply, mergeActions(acted));
+    // The voice tool's own part, at once and in the operator's order; GPT Live hears what it did, and the learner and the
+    // tuner take the reading.
+    const actions = this.actionsOrder.then(() => route?.actions(request, spoken, why))
+      .catch(error => { this.log({ type: 'turn.error', message: (error as Error).message }); return undefined; });
+    this.actionsOrder = actions;
+    void actions.then(done => {
+      if (done?.told && this.live.state === 'active') this.context.add('thinking', done.told, delegationId ?? null);
+      if (done?.reading) this.consider?.(done.reading, id);
+    });
+    // Whether the words go to the agent, once GPT Live has replied; requests reach the agent in the order they were made.
+    // Jev failing, the words go to the agent: keeping work from it is the costly mistake.
+    const decided = Promise.all([actions, this.order]).then(async ([done]): Promise<Decision> => {
+      if (!route || !done) return { send: true };
+      return route.job(request, spoken, await this.replyTo(spoken.at(-1)?.at ?? heardAt, heardAt), done);
     }).catch(error => { this.log({ type: 'turn.error', message: (error as Error).message }); return { send: true } as Decision; });
     // What GPT Live was told about the turn stays with it: asked again to pass the words on, it hears the same.
-    const done = decided.then(decision => { this.decided(id, request, decision, delegationId); return decision; })
+    const done = decided.then(async decision => { const told = (await actions)?.told; this.decided(id, request, decision, delegationId, told); return told && !decision.told ? { ...decision, told } : decision; })
       // Whatever went wrong, the words go with the next request rather than nowhere.
       .catch(error => { this.history.release(id); this.fault(error as Error); return undefined; })
       .finally(() => { this.pending--; });
@@ -276,14 +224,14 @@ export class Mediator {
       check();
     });
   }
-  /** What came of a turn: the words go to the agent, noted with what the voice tool did; or they stay for the next request, noted with it. GPT Live hears what was done. */
-  decided(id: string, request: SpokenRequest, { reading, send, note, told, escalated }: Decision, delegationId?: string) {
+  /** What came of a turn: the words go to the agent, noted with what the voice tool did; or they stay for the next request, noted with it. GPT Live hears what was done (unless the voice tool's own reading told it already: toldBefore). */
+  decided(id: string, request: SpokenRequest, { reading, send, note, told, escalated }: Decision, delegationId?: string, toldBefore?: string) {
     if (told && this.live.state === 'active') this.context.add('thinking', told, delegationId ?? null);
     if (send) return this.send(id, request, this.clean(voiceRequest(request.utterances, [...request.notes ?? [], ...note ? [note] : []])), delegationId ?? null, reading, escalated ? 'escalated' : 'passed');
     this.log({ type: 'turn.kept', id, said: this.said(request).slice(-200), needsAgent: reading?.needsAgent ?? null, handled: Boolean(note) });
     this.audit?.record({ handOff: 'kept', said: this.said(request), voiceSessionId: this.live.id, delegationId: delegationId ?? null, requestId: id }, reading?.needsAgent ?? null, reading?.transcript);
     this.giveBack(id, note);
-    if (delegationId && !told) this.outcome(delegationId, { send: false });
+    if (delegationId && !told && !toldBefore) this.outcome(delegationId, { send: false });
   }
   /** GPT Live asked to pass words on: what came of them (nothing new to send, sent, or kept). */
   outcome(delegationId: string, decision?: Decision) {
@@ -370,10 +318,3 @@ export class Mediator {
   }
 }
 
-/** What the voice tool did for one turn's words over GPT Live's requests to act: the page moved, failed or was asked of, and the latest note on what it did. */
-export function mergeActions(all: Actions[]): Actions {
-  if (!all.length) return {};
-  const did = all.filter(a => a.moved || a.escalated || a.told), last = all.at(-1)!;
-  return { reading: last.reading, view: last.view, note: (did.at(-1) ?? last).note, keptNote: did.at(-1)?.keptNote, ran: all.flatMap(a => a.ran ?? []),
-    moved: all.some(a => a.moved), escalated: all.some(a => a.escalated), aboutPage: all.some(a => a.aboutPage) };
-}

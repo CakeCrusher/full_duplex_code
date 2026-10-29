@@ -62,18 +62,18 @@ test('Jev is asked for one page command at a time, in the conversation; unlikely
   const moment = { history: 'voice assistant: Want the options?\n', latest: { role: 'operator', text: 'Yes, go to the options and highlight the recommendation.' } as Line };
   const choice = (id: string, p = .95) => ({ choice: id, probabilities: { [id]: p } });
   answers = { needs_agent: { noul: .2 }, page_command: choice('goto_options'), page_only: { noul: .8 } };
-  assert.deepEqual((await jev.read({ trigger: 'delegation', ...moment, page: view })).page, { command: 'goto_options', only: .8, other: 0, walk: 0 }, 'the command, and whether the page is what the words are about');
+  assert.deepEqual((await jev.read({ trigger: 'turn', ...moment, page: view })).page, { command: 'goto_options', only: .8, other: 0, walk: 0 }, 'the command, and whether the page is what the words are about');
   assert.match(sent.state.page, /Briefing .*The viewer is at: section "Intro"/);
   assert.deepEqual([sent.state.history, sent.state.latest], ['voice assistant: Want the options?', 'user: Yes, go to the options and highlight the recommendation.'], 'the latest words, and what happened before them');
-  assert.match(sent.state.why, /asked the voice tool to act/);
+  assert.match(sent.state.why, /stopped speaking/);
   assert.deepEqual(Object.keys(sent.questions.page_command.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation', 'other_action']);
   assert.ok(!Object.keys(sent.questions).some(name => /^page_step|^page_steps$/.test(name)), 'one command question, no count');
   answers = { page_command: choice('next_section', .35) };
-  assert.equal((await jev.read({ trigger: 'delegation', ...moment, page: view })).page!.command, undefined, 'unlikely: nothing runs');
+  assert.equal((await jev.read({ trigger: 'turn', ...moment, page: view })).page!.command, undefined, 'unlikely: nothing runs');
   answers = { page_command: choice('made_up') };
-  assert.equal((await jev.read({ trigger: 'delegation', ...moment, page: view })).page!.command, undefined, 'not a command of the page');
+  assert.equal((await jev.read({ trigger: 'turn', ...moment, page: view })).page!.command, undefined, 'not a command of the page');
   answers = { page_command: choice('other_action', .9) };
-  assert.deepEqual((await jev.read({ trigger: 'delegation', ...moment, page: view })).page, { command: undefined, only: 0, other: .9, walk: 0 }, 'another action: a one-off does it');
+  assert.deepEqual((await jev.read({ trigger: 'turn', ...moment, page: view })).page, { command: undefined, only: 0, other: .9, walk: 0 }, 'another action: a one-off does it');
   // After a command ran, the page as it is now, and what ran: whether more is asked, and which command is next.
   answers = { page_command: choice('show_the_recommendation'), page_more: { noul: .8 } };
   assert.equal((await jev.read({ trigger: 'step', ...moment, page: view, done: [view.commands[1]] })).page!.command, 'show_the_recommendation');
