@@ -37,7 +37,7 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
   const companion = (reading.companionOnly ?? 0) >= COMPANION_ONLY;
   // A goal they set replaces the one before; one they end is gone.
   const goal = reading.goal && reading.goal.choice !== 'keep' && reading.goal.p >= GOAL ? reading.goal.choice : undefined;
-  if (goal) bridge.voiceSessions.setGoal(goal === 'new' ? request.fresh : undefined);
+  if (goal) bridge.voiceSessions.setGoal(goal === 'done' ? undefined : request.fresh, { walk: goal === 'walk' });
   // The learner and the tuner add theirs, and complete the record (bridge.ts, consider).
   bridge.jevAudit?.decided(reading.id, { standby, ...sessions && { sessions: asked?.told ?? false }, ...reading.companionOnly !== undefined && { companionOnly: companion }, ...goal && { goal } });
   const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent, bridge.features)].filter(Boolean).join(' ') || undefined;

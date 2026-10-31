@@ -30,6 +30,7 @@
     "test:fdc": "node scripts/test-fdc.ts",
     "test:pages": "node scripts/test-pages.ts",
     "test:stage-page": "node scripts/test-stage-page.ts",
+    "test:presenting": "node scripts/test-presenting.ts",
     "test:standby": "node scripts/test-standby.ts",
     "test:standby-voice": "node scripts/test-standby-voice.ts"
   },

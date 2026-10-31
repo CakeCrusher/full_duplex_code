@@ -18,7 +18,7 @@ export const REMEMBERED_MS = 7 * 24 * 60 * 60 * 1000;
 /** Browser tools that show a tab to the operator: the tab they act on becomes the stage. */
 const SHOWS = /chrome[\w-]*__(navigate|set_tab_focus|tabs_create_mcp|execute_code)$/;
 
-export interface StageCommand { id: string; say: string; /** The element id it lands on, when it has one. */ anchor?: string; /** What people call its target, for speech cues. */ name?: string; /** A whole section. */ top?: boolean }
+export interface StageCommand { id: string; say: string; /** The element id it lands on, when it has one. */ anchor?: string; /** What people call its target, for speech cues. */ name?: string; /** A whole section. */ top?: boolean; /** A part's own control, offered while that part is on screen. */ part?: boolean }
 /** Where the viewer is, in structure (stage-page.js, focusOf): the parts from the outer one in, the step within the part, the page's content revision. */
 export interface StageFocus { path?: string[]; step?: { index: number; total: number; of?: string }; revision?: string }
 export interface StageView {
@@ -56,6 +56,8 @@ export class Stage {
   file?: string;
   /** Pages remembered from an earlier run, not yet checked against the tabs open now. */
   unchecked = false;
+  /** When the agent last put another tab on stage: the voice doesn't switch away from it at once (presenter.ts). */
+  shownAt = 0;
   constructor({ log, browser = new Browser(), onChange, file }: { log: (event: Record<string, unknown>) => void; browser?: Browser; onChange?: () => void; file?: string }) {
     this.log = log; this.browser = browser; this.onChange = onChange; this.file = file;
     try {
@@ -87,7 +89,7 @@ export class Stage {
     const named = typeof input.tabId === 'number' ? input.tabId : [...String(input.code ?? '').matchAll(/(?:navigate|set_tab_focus)\(\s*\{[^}]*?tabId:\s*(\d+)/g)].at(-1)?.[1];
     const tabId = Number(created ?? named);
     if (!Number.isInteger(tabId) || tabId <= 0) return;
-    if (tabId !== this.tabId) this.log({ type: 'stage.tab', tabId, by: used.tool });
+    if (tabId !== this.tabId) { this.log({ type: 'stage.tab', tabId, by: used.tool }); this.shownAt = Date.now(); }
     this.tabId = tabId; this.view = undefined; this.remember();
     this.onChange?.();
   }
@@ -111,7 +113,7 @@ export class Stage {
     }
     // A page's own controller can return anything: keep only well-formed commands.
     const str = (v: unknown, n = 300) => typeof v === 'string' ? v.slice(0, n) : typeof v === 'number' ? String(v) : '';
-    const commands = (Array.isArray(view?.commands) ? view.commands : []).filter((c: any) => c && str(c.id) && str(c.say)).map((c: any) => ({ id: str(c.id, 60), say: str(c.say), ...str(c.anchor) ? { anchor: str(c.anchor) } : {}, ...str(c.name, 80) ? { name: str(c.name, 80) } : {}, ...c.top ? { top: true } : {} }));
+    const commands = (Array.isArray(view?.commands) ? view.commands : []).filter((c: any) => c && str(c.id) && str(c.say)).map((c: any) => ({ id: str(c.id, 60), say: str(c.say), ...str(c.anchor) ? { anchor: str(c.anchor) } : {}, ...str(c.name, 80) ? { name: str(c.name, 80) } : {}, ...c.top ? { top: true } : {}, ...c.part ? { part: true } : {} }));
     const parts = (Array.isArray((view as any)?.parts) ? (view as any).parts : []).slice(0, 60).filter((p: any) => p && str(p.text)).map((p: any) => ({ name: str(p.name, 100) || 'Untitled part', text: str(p.text, 6001) }));
     this.view = { title: str(view?.title, 200), url: str(view?.url, 500), about: str(view?.about) || null, where: str(view?.where, 600), commands, parts, tabId, ...focusOf((view as any)?.focus) && { focus: focusOf((view as any)?.focus) }, viewerAt: Number((view as any)?.viewerAt) || 0 }; this.viewAt = Date.now();
     const known = this.pages.get(tabId);

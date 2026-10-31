@@ -300,7 +300,7 @@
     // A part's own controls (its steps, its demo's buttons: `part` is the id of its element) are offered only while that
     // part is on screen: the list stays short, and "next" there is the part's own next step.
     const shown = cmd => { if (!cmd.part) return true; const el = document.getElementById(String(cmd.part)); return !!el && visible(el) && inView(el); };
-    return c.commands().filter(shown).slice(0, 80).map(cmd => ({ id: `page_${slug(String(cmd.id).replace(/([a-z0-9])([A-Z])/g, '$1_$2'))}`, say: cmd.say, name: typeof cmd.name === 'string' ? cmd.name : undefined, run: async () => {
+    return c.commands().filter(shown).slice(0, 80).map(cmd => ({ id: `page_${slug(String(cmd.id).replace(/([a-z0-9])([A-Z])/g, '$1_$2'))}`, say: cmd.say, name: typeof cmd.name === 'string' ? cmd.name : undefined, ...cmd.part ? { part: true } : {}, run: async () => {
       let out;
       // A limit thrown ("Already on the first slide") is an answer, as the guide asks controllers to return it; not a broken control.
       try { out = await c.run(cmd.id); } catch (error) { if (!LIMIT.test(String(error?.message ?? ''))) throw error; stage.limited = true; return String(error.message); }
@@ -354,7 +354,7 @@
         title: document.title, url: location.href,
         about: c?.about ?? null,
         where, focus, viewerAt: stage.viewerAt ?? 0,
-        commands: stage.commands().map(({ id, say, anchor, name, top }) => ({ id, say, ...anchor ? { anchor } : {}, ...name ? { name } : {}, ...top ? { top } : {} })),
+        commands: stage.commands().map(({ id, say, anchor, name, top, part }) => ({ id, say, ...anchor ? { anchor } : {}, ...name ? { name } : {}, ...top ? { top } : {}, ...part ? { part } : {} })),
         parts: parts(),
       };
     },

@@ -10,7 +10,7 @@ import { jobTurn, routeActions } from './turn.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { recentHistory } from './recent-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
-import { attachment, catchUp, deliveryConfirmation, disregardInstruction, goalState, greeting, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, standbyNews, standbyWake, viewerMoved } from './prompts.ts';
+import { attachment, catchUp, deliveryConfirmation, disregardInstruction, goalState, greeting, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, standbyNews, standbyWake, viewerMoved, walkOn } from './prompts.ts';
 import { focusLine, Stage, type StageCommand, type StageHere, type StageView } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
@@ -75,9 +75,13 @@ interface Run {
   perceivedInput: PerceivedEntry[]; perceiving?: boolean;
   /** Where on the page GPT Live was last told the operator is; when the viewer last moved it themselves, as last seen; the watch on it (watchViewer). */
   toldWhere?: string; viewerSeen?: number; viewerTimer?: NodeJS.Timeout; watching?: boolean;
+  /** When GPT Live was last told to go on with a walkthrough (walkOn). */
+  walkedOnAt?: number;
 }
 /** How often, while voice is on, fdc reads where the operator is on the page (watchViewer). */
 export const VIEWER_MS = 2500;
+/** How long both sides are quiet in a walkthrough before GPT Live is told to go on (walkOn). */
+export const WALK_QUIET_MS = 6000;
 interface Wake { since: number; operator: boolean; reason: string }
 /**
  * Voice on Standby: GPT Live is disconnected while the conversation is quiet, and the page that ran
@@ -491,13 +495,13 @@ export class VoiceSessions {
    * fdc. GPT Live is told it when it is set or ended and at each new session; Jev reads it with what was shown since.
    */
   get goal() { return this.current().goal; }
-  setGoal(text: string | undefined, run = this.run) {
+  setGoal(text: string | undefined, { walk = false }: { walk?: boolean } = {}, run = this.run) {
     const record = this.current();
-    if (text) record.goal = { text: this.bridge.clean(text.replace(/\s+/g, ' ').trim()).slice(0, 300), at: Date.now(), shown: [] };
+    if (text) record.goal = { text: this.bridge.clean(text.replace(/\s+/g, ' ').trim()).slice(0, 300), at: Date.now(), shown: [], ...walk && { walk } };
     else if (!record.goal) return;
     else delete record.goal;
     this.save();
-    this.bridge.log({ type: 'goal.set', text: record.goal?.text ?? null });
+    this.bridge.log({ type: 'goal.set', text: record.goal?.text ?? null, ...record.goal?.walk && { walk: true } });
     if (run && run.live.state === 'active' && this.run === run) run.mediator.context.add('thinking', goalState(record.goal));
   }
   /** The goal as Jev reads it: the operator's words, how long ago, and what the page has shown since. */
@@ -521,8 +525,24 @@ export class VoiceSessions {
    */
   watchViewer(run: Run) {
     clearInterval(run.viewerTimer);
-    run.viewerTimer = setInterval(() => void this.viewer(run), VIEWER_MS);
+    run.viewerTimer = setInterval(() => { void this.viewer(run); this.walkOn(run); }, VIEWER_MS);
     run.viewerTimer.unref?.();
+  }
+  /**
+   * A walkthrough the operator asked for goes on while they listen: once both sides have been quiet for WALK_QUIET_MS,
+   * GPT Live is told to go on, but only while it is carrying the walk itself, its words having moved the page since the
+   * operator last spoke and since it was last told. A question, a pause or a cue that brought no move leaves it waiting
+   * for the operator. On duplex.party (Oct 31) the voice presented one part and stopped: six requests for one six-step
+   * walkthrough.
+   */
+  walkOn(run: Run, now = Date.now()) {
+    const goal = this.goal, mediator = run.mediator, presented = this.bridge.presenter.presentedAt;
+    if (!goal?.walk || this.run !== run || run.live.state !== 'active' || mediator.pending) return;
+    if (presented <= Math.max(mediator.history.lastInputAt, run.walkedOnAt ?? 0, goal.at)) return;
+    if (now - mediator.history.lastInputAt < WALK_QUIET_MS || now - mediator.answerAt < WALK_QUIET_MS || now - presented < WALK_QUIET_MS) return;
+    run.walkedOnAt = now;
+    this.bridge.log({ type: 'goal.walk_on', shown: goal.shown.length });
+    mediator.context.add('commentary', walkOn(goal));
   }
   async viewer(run: Run) {
     if (this.run !== run || run.live.state !== 'active' || !this.bridge.stage.tabId || run.watching) return;

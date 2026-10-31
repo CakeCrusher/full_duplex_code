@@ -168,14 +168,16 @@ export function pageState(page?: PageState) {
 }
 // GPT Live moves the page with its own words (presenter.ts): what is on screen then, or that nothing fits what it meant.
 export const cueNoDelegation = 'Nothing to pass on: the page moved as you talked.';
-export const cueShown = (onScreen: string, focus?: StageFocus) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}${focusLine(focus) ? ` (${focusLine(focus)})` : ''}`;
+export const cueShown = (onScreen: string, focus?: StageFocus, controls: readonly string[] = []) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}${focusLine(focus) ? ` (${focusLine(focus)})` : ''}${controls.length ? `. Here its controls can: ${controls.join('; ').slice(0, 400)}` : ''}`;
 // The operator moved the page themselves (scrolled, clicked): where they now are, so the voice talks about what they see.
 export const viewerMoved = (where: string, focus?: StageFocus) => `The operator moved the page themselves; they are looking at ${where.replace(/\s+/g, ' ').slice(0, 300)}${focusLine(focus) ? ` (${focusLine(focus)})` : ''}.`;
 // The operator's goal (voice-sessions.ts): what they asked to be shown, taught or walked through, kept apart from the page.
-export interface Goal { text: string; at: number; shown: string[] }
+export interface Goal { text: string; at: number; shown: string[]; /** Several parts in turn: it goes on while the operator listens (voice-sessions.ts, walkOn). */ walk?: boolean }
 export const goalState = (goal?: Goal) => goal
   ? `The operator's goal now (this replaces any goal you were told before): "${goal.text.replace(/\s+/g, ' ').slice(0, 300)}". Keep to it through their questions, pauses and edits until it is done or they drop it.${goal.shown.length ? ` Shown for it so far: ${goal.shown.join('; ').slice(0, 400)}.` : ''}`
   : 'The operator has no goal for you to keep to now (this replaces any goal you were told before).';
+// A walkthrough the operator is listening to, after the voice went quiet: the cue to go on (as standbyNews cues news).
+export const walkOn = (goal: Goal) => `The operator is listening to the walkthrough they asked for ("${goal.text.replace(/\s+/g, ' ').slice(0, 200)}"): go on to the next part now${goal.shown.length ? ` (shown so far: ${goal.shown.join('; ').slice(0, 300)})` : ''}. If it is all covered, say so in a sentence.`;
 export const pageMissed = (meant: string) => `The page has nothing for "${meant.slice(0, 80)}"; it didn't move.`;
 export const pageAnswered = (answer: string) => `The page didn't move: "${answer.replace(/\s+/g, ' ').slice(0, 200)}"`;
 // For the agent, with the operator's words: the page beside them, and what the voice did on it.

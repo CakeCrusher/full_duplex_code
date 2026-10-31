@@ -81,6 +81,7 @@ try {
   assert.ok(!view.commands.some((c: any) => c.id === 'page_split_campaigns'), "the chart's own control waits until it is on screen");
   await stage('window.__fdcStage.run("page_go_waves")');
   assert.ok((await ids()).includes('page_split_campaigns'), 'once the chart is on screen, its control is offered');
+  assert.equal((await stage<any>('window.__fdcStage.describe()')).commands.find((c: any) => c.id === 'page_split_campaigns').part, true, "marked as the part's own, for the voice to hear of");
   assert.equal(await stage<string>('window.__fdcStage.run("page_split_campaigns")'), 'FDC split into its campaigns', "a structured answer's text is what the voice hears");
   assert.equal((await stage<any>('window.__fdcStage.here()')).where, 'FDC waves, wave 1, split by campaign');
   for (let i = 0; i < 3; i++) await stage('window.__fdcStage.run("page_next_wave")');

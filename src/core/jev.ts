@@ -92,7 +92,7 @@ export interface PageJudgment {
   more?: number; likely?: Record<string, number>;
 }
 /** Whether the operator's latest words set a new goal (what they want shown, taught or walked through), end it, or neither. */
-export interface GoalJudgment { choice: 'keep' | 'new' | 'done'; p: number }
+export interface GoalJudgment { choice: 'keep' | 'new' | 'walk' | 'done'; p: number }
 /** Whether the latest words give the companion a standing instruction, and for how long. */
 export interface InstructionJudgment { behave: number; design: number; lasting: string }
 /** Everything Jev read in one moment. */
@@ -255,7 +255,8 @@ const GOAL_QUESTION = {
   goal: { type: 'choice', instructions: 'Do the latest words set what the operator wants the voice companion to show, teach or walk them through (their goal), or end the goal in force (`goal`)?',
     criteria: {
       keep: 'Neither: a question, a reaction, an aside, a request for the coding agent, or a step within the goal in force (continue, next, go back, say more about that part).',
-      new: 'They ask to be shown, taught, walked or run through something as a whole: a page, a part of it, a diagram, a topic ("walk me through the projects by approach", "run me through who\'s engaging", "explain the graph to me", "teach me how the queue works").',
+      new: 'They ask to be shown, taught or explained something as a whole: a page, a part of it, a diagram, a topic ("explain the graph to me", "run me through who\'s engaging", "teach me how the queue works").',
+      walk: 'They ask to be walked or run through several parts in turn: a page section by section, a diagram block by block, steps one at a time, from start to end ("walk me through the report", "step through each block", "go through all of it, don\'t wait for me").',
       done: 'They end or drop the goal in force: it is enough, they are done with it, or they turn to something else for good.' } },
 };
 
@@ -324,7 +325,7 @@ export class Jev {
       if ('companion_only' in questions) reading.companionOnly = p('companion_only');
       reading.standby = p('standby');
       const goal = answers?.goal, choice = goal?.choice;
-      if (choice === 'keep' || choice === 'new' || choice === 'done') reading.goal = { choice, p: Number(goal.probabilities?.[choice] ?? goal.confidence ?? 1) };
+      if (choice === 'keep' || choice === 'new' || choice === 'walk' || choice === 'done') reading.goal = { choice, p: Number(goal.probabilities?.[choice] ?? goal.confidence ?? 1) };
     }
     if (gate && sessions) {
       const chosen = (choice: string) => sessions.filter((_, index) => answers?.[`session_${index + 1}`]?.choice === choice).map(s => s.id);
