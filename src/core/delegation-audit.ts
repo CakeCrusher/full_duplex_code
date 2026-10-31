@@ -12,7 +12,7 @@ export class DelegationAudit {
   log: (event: Record<string, unknown>) => void;
   constructor({ file, log }: { file: string; log: (event: Record<string, unknown>) => void }) { this.file = file; this.log = log; }
   /** Records what the operator said with what GPT Live did and Jev's judgment (null when Jev couldn't be asked). Never throws. */
-  record(entry: { handOff: HandOff; said: string; voiceSessionId?: string | null; delegationId?: string | null; requestId?: string }, needsAgent: number | null, transcript?: string) {
+  record(entry: { handOff: HandOff; said: string; voiceSessionId?: string | null; delegationId?: string | null; requestId?: string; /** The Jev call whose judgment this is, recorded in full in the run's jev.jsonl (jev-audit.ts). */ jevCall?: string }, needsAgent: number | null, transcript?: string) {
     this.log({ type: 'delegation.audit', handOff: entry.handOff, needsAgent, delegationId: entry.delegationId ?? null });
     // Owner-only, local: the operator's words with both judgments, for learning.
     try { fs.appendFileSync(this.file, JSON.stringify({ at: Date.now(), ...entry, needsAgent, transcript }) + '\n', { mode: 0o600 }); } catch {}

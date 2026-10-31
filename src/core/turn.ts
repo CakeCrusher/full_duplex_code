@@ -7,6 +7,7 @@
 //   read with what the companion said and what the page's commands can do, and whether they have finished saying them.
 //   Words not finished wait for the next reading, which takes them with what the operator adds; never dropped. Keeping
 //   work from the agent is the costly mistake; GPT Live passes nothing on.
+// What each reading led to is added to its call's record (jev-audit.ts).
 import type { Harness } from './bridge.ts';
 import type { Decision } from './mediator.ts';
 import type { StageView } from './stage.ts';
@@ -27,11 +28,14 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
   // delegation (what its controls can do) and for the agent (what the user was looking at).
   const orchestration = bridge.features.has('orchestration');
   const [sessions, view] = await Promise.all([orchestration ? bridge.sessionSwitch.sessions(300) : undefined, bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
-  const reading = await bridge.read({ trigger: why, spoken, sessions });
+  const reading = await bridge.read({ trigger: why, spoken, sessions, requestId: request.id });
   bridge.log({ type: 'turn.read', why, said: request.fresh.slice(-200), companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions });
-  if ((reading.standby ?? 0) >= STANDBY) bridge.voiceSessions.standbyAsked();
+  const standby = (reading.standby ?? 0) >= STANDBY;
+  if (standby) bridge.voiceSessions.standbyAsked();
   const asked = sessions && bridge.sessionSwitch.act(reading, sessions);
   const companion = (reading.companionOnly ?? 0) >= COMPANION_ONLY;
+  // The learner and the tuner add theirs, and complete the record (bridge.ts, consider).
+  bridge.jevAudit?.decided(reading.id, { standby, ...sessions && { sessions: asked?.told ?? false }, ...reading.companionOnly !== undefined && { companionOnly: companion } });
   const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent, bridge.features)].filter(Boolean).join(' ') || undefined;
   const handled = asked ? 'sessions' : companion ? 'companion' : undefined;
   return { reading, view, told, note: view ? lookingNote(view) : undefined, keptNote: handled && handledNote(handled) };
@@ -41,7 +45,7 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
 export interface Waiting { continued?: boolean; overdue?: boolean; needed?: boolean }
 
 export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions, { continued = false, overdue = false, needed: neededBefore = false }: Waiting = {}): Promise<Decision> {
-  const reading = await bridge.read({ trigger: 'job', spoken, reply, page: actions.view });
+  const reading = await bridge.read({ trigger: 'job', spoken, reply, page: actions.view, requestId: request.id });
   // Once found to need the agent, waiting words keep needing it: a later reading of the whole stretch never drops them
   // (read with the talk around them, a request was sometimes found to need nothing and waited minutes for another).
   const needed = neededBefore || (reading.needsAgent ?? 1) >= NEEDS_AGENT, ready = (reading.ready ?? 1) >= READY;
@@ -51,6 +55,7 @@ export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: S
   // they go once the conversation stays quiet (mediator.ts). There is a next time, so a pause is no reason to send half a request.
   const wait = !send && (needed || continued);
   bridge.log({ type: 'turn.job', said: request.fresh.slice(-200), reply: reply?.slice(-200) ?? null, needsAgent: reading.needsAgent, ready: reading.ready, send, ...wait && { wait }, ...continued && { continued }, ...overdue && { overdue } });
+  bridge.jevAudit?.decided(reading.id, { outcome: send ? 'send' : wait ? 'wait' : 'keep', needed, finished: ready, ...neededBefore && { neededBefore }, ...continued && { continued }, ...overdue && { overdue } }, true);
   return { reading, send, wait, needed: wait && needed, note: send ? actions.note : actions.keptNote };
 }
 

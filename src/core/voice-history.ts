@@ -26,6 +26,8 @@ export interface SpokenRequest {
   fresh: string;
   /** The voice already moved the page for some of its words (TranscriptFragment.cued). */
   cued?: boolean;
+  /** The ID it goes to the agent by, once claimed. */
+  id?: string;
 }
 // Any sample louder than this is sound; the page's gate sends exact silence, which echoes back at about 1.
 const SOUND_PEAK = 64;
@@ -122,7 +124,7 @@ export class VoiceHistory {
     return noted;
   }
   /** The request is on its way: no other request takes its speech meanwhile. */
-  claim(request: SpokenRequest, id: string) { for (const seq of request.seqs) this.fragments[seq].claim = id; }
+  claim(request: SpokenRequest, id: string) { request.id = id; for (const seq of request.seqs) this.fragments[seq].claim = id; }
   /** The request didn't reach the agent: its speech goes with the next one, with why. */
   release(id: string, note?: string) {
     let released = 0;

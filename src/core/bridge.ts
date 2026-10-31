@@ -7,6 +7,7 @@ import { redact } from './redact.ts';
 import { withoutBinary } from './context-rules.ts';
 import { InstructionLearner, LearnedLog, type LearnedInstruction } from './instruction-learner.ts';
 import { DelegationAudit } from './delegation-audit.ts';
+import { JevAudit } from './jev-audit.ts';
 import { askAgent, distillPrompt, parseDistilled } from './instruction-distiller.ts';
 import { tuningFrom, type TuningChange } from './jev-tuner.ts';
 import { HISTORY_BYTES, Jev, type Moment, type Reading } from './jev.ts';
@@ -52,8 +53,8 @@ export interface HarnessOptions {
 // It owns the shared state; each concern lives in its own module.
 export class Harness {
   agent: AgentDefinition; adapter: AgentAdapter; observer: AgentObserver;
-  /** Jev, when a TypeSafe key is set: its readings (jev.ts) decide what reaches the agent, and act for the features on. */
-  jev?: Jev; learner?: InstructionLearner; handOffAudit?: DelegationAudit; jevTuning: boolean; learned: LearnedLog;
+  /** Jev, when a TypeSafe key is set: its readings (jev.ts) decide what reaches the agent, and act for the features on; each call is recorded with what came of it (jev-audit.ts). */
+  jev?: Jev; jevAudit?: JevAudit; learner?: InstructionLearner; handOffAudit?: DelegationAudit; jevTuning: boolean; learned: LearnedLog;
   /** Jev's optional features on (features.ts). */
   features: Features;
   /** Settings the operator set by hand (FDC_TUNING), which Jev leaves alone; the latest ask for settings (only its answer counts), and the one waiting. */
@@ -104,7 +105,11 @@ export class Harness {
     this.learned = new LearnedLog(path.join(root, '.runs', 'learned-instructions.jsonl'));
     this.features = new Set(features);
     this.jevTuning = Boolean(jevKey && this.features.has('configuration'));
-    if (jevKey) { this.jev = new Jev({ apiKey: jevKey, log: this.log, agent, features: this.features }); this.handOffAudit = new DelegationAudit({ file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log }); }
+    if (jevKey) {
+      const jevAudit = this.jevAudit = new JevAudit({ file: path.join(runDir, 'jev.jsonl'), clean: this.clean });
+      this.jev = new Jev({ apiKey: jevKey, log: this.log, record: call => jevAudit.called(call), agent, features: this.features });
+      this.handOffAudit = new DelegationAudit({ file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log });
+    }
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
     this.stage = new Stage({ log: this.log, file: stageFile, onChange: () => void this.voiceSessions?.briefStage() });
     this.presenter = new Presenter(this);
@@ -212,15 +217,23 @@ export class Harness {
       tune: tune ? { earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined }, timeoutMs)
       .then(reading => Object.assign(reading, ask ? { tuneAsk: ask } : {}));
   }
-  /** What Jev read in the operator's words, acted on once: a standing instruction to learn, and the settings that fit (only the latest ask's: an older answer arriving late would undo it). */
+  /**
+   * What Jev read in the operator's words, acted on once: a standing instruction to learn, and the settings that fit (only
+   * the latest ask's: an older answer arriving late would undo it). Done last with the voice tool's own reading (turn.ts),
+   * with the tuner's alone and with that of words already sent, so the reading's record is then complete (jev-audit.ts).
+   */
   consider(reading: Reading & { tuneAsk?: number }, requestId?: string) {
     if (reading.considered) return;
     reading.considered = true;
-    this.learner?.consider(reading, requestId);
-    if (reading.tuning && reading.tuneAsk === this.tuneAsks && !this.stopping) {
+    const learned = this.learner?.consider(reading, requestId);
+    let settings: TuningChange[] | string | undefined;
+    if (reading.tuning && reading.tuneAsk !== this.tuneAsks) settings = 'superseded by a later reading';
+    else if (reading.tuning && !this.stopping) {
       const { tuning: next, changes } = tuningFrom(reading.tuning, this.tuning, this.pinned);
       if (changes.length) this.setTuning(next, changes);
+      settings = changes;
     }
+    this.jevAudit?.decided(reading.id, { ...reading.instruction && { learned: learned?.scope ?? false }, ...settings && { settings } }, true);
   }
   /** With Jev's tuning on: when the instructions change or voice starts, Jev reads them again for the settings that fit. */
   tuneFromInstructions() {
@@ -265,7 +278,7 @@ export class Harness {
     if (this.live) await this.live.close('harness stopped');
     this.voiceSessions.handOffCarried();
     this.mediator?.stop();
-    this.audit?.close(); this.stage.close(); this.saveTimeline();
+    this.audit?.close(); this.jevAudit?.close(); this.stage.close(); this.saveTimeline();
     this.pages.close();
     await this.endpoints.close();
     await agentClosed;

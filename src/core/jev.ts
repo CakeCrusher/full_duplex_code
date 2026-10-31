@@ -12,17 +12,21 @@
 // The learner, the tuner and session orchestration are optional features (features.ts). Jev gets the latest words, what
 // the voice companion had perceived before them, word for word as it got it (perceived.ts), the operator's instructions to
 // the companion in force, and why it is asked now; it judges from these, with no rule about which words each question may
-// use. Who does what is the same account the companion is given (roles.ts).
+// use. Who does what is the same account the companion is given (roles.ts). Every call is recorded with what fdc did
+// with it (jev-audit.ts).
+import { randomUUID } from 'node:crypto';
 import type { AgentProfile } from './adapter.ts';
+import type { HandOff } from './delegation-audit.ts';
+import type { JevCall } from './jev-audit.ts';
 import type { StageCommand, StageView } from './stage.ts';
 import type { Tuning } from './tuning.ts';
-import { DEFAULT_FEATURES, type Features } from './features.ts';
+import { DEFAULT_FEATURES, type Feature, type Features } from './features.ts';
 import { tunerQuestions, TUNER_SETTING } from './jev-tuner.ts';
 import { spokenLine } from './prompts.ts';
 import { roles } from './roles.ts';
 
 type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
-const URL = 'https://api.typesafe.ai/v1/systemone';
+const URL = 'https://api.typesafe.ai/v1/systemone', MODEL = 'jev-latest';
 
 /** Why Jev is asked now: its provenance, part of what it reads. */
 export type Trigger = 'turn' | 'delegation' | 'job' | 'unsent' | 'cue' | 'settings';
@@ -62,6 +66,8 @@ export const NEEDS_AGENT = .4, READY = .2;
 export const STANDBY = .7;
 // What Jev reads of what the voice companion perceived: its latest 14 KB (perceived.ts).
 export const HISTORY_BYTES = 14000;
+/** For the record (jev-audit.ts): the likelihood at which each question's answer changes what fdc does. */
+const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, standby: STANDBY, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, behave: BEHAVE, design_talk: DESIGN };
 
 /** One utterance of the conversation. */
 export interface Line { role: 'operator' | 'intermediary'; text: string }
@@ -81,6 +87,8 @@ export interface InstructionJudgment { behave: number; design: number; lasting: 
 /** Everything Jev read in one moment. */
 export interface Reading {
   trigger: Trigger;
+  /** The call it came from (jev-audit.ts). */
+  id?: string;
   /** The latest words it judged, and what it read them in (their history, then the words, marked). */
   said: string; transcript: string;
   /** Whether those words must reach the coding agent, and whether the operator has finished saying them (trigger job); null when Jev couldn't be asked. */
@@ -108,6 +116,8 @@ export interface Moment {
   learn?: boolean;
   /** Ask which settings fit (the tuner): the instructions from earlier sessions, the current settings and those set by hand. */
   tune?: { earlier: string[]; current: Tuning; pinned: (keyof Tuning)[] };
+  /** For the record only (jev-audit.ts), not sent: the request the words go to the agent by, and how words already sent went (trigger unsent). */
+  requestId?: string; handOff?: HandOff;
 }
 
 
@@ -207,14 +217,16 @@ const LEARNER = {
 export class Jev {
   apiKey: string; fetch: Fetch;
   log: (event: Record<string, unknown>) => void;
+  /** Takes every call as it ends, answered or not (jev-audit.ts). */
+  record?: (call: JevCall) => void;
   /** What Jev is told of its place (setting): the agent it serves and the optional features on. */
-  setting: string;
-  constructor({ apiKey, log, fetch = globalThis.fetch as unknown as Fetch, agent = { profile: { name: 'the coding agent' } }, features = new Set(DEFAULT_FEATURES) }: { apiKey: string; log: (event: Record<string, unknown>) => void; fetch?: Fetch; agent?: { profile: Pick<AgentProfile, 'name'> }; features?: Features }) {
-    this.apiKey = apiKey; this.log = log; this.fetch = fetch; this.setting = setting(agent, features);
+  setting: string; features: Feature[];
+  constructor({ apiKey, log, record, fetch = globalThis.fetch as unknown as Fetch, agent = { profile: { name: 'the coding agent' } }, features = new Set(DEFAULT_FEATURES) }: { apiKey: string; log: (event: Record<string, unknown>) => void; record?: (call: JevCall) => void; fetch?: Fetch; agent?: { profile: Pick<AgentProfile, 'name'> }; features?: Features }) {
+    this.apiKey = apiKey; this.log = log; this.record = record; this.fetch = fetch; this.setting = setting(agent, features); this.features = [...features];
   }
   /** One call: everything the voice tool asks about this moment, of one kind (the job delegation, or its own actions). */
   async read(moment: Moment, timeoutMs = 3000): Promise<Reading> {
-    const { trigger, latest, history = '', instructions, sessions, page, learn, tune, reply } = moment, started = Date.now();
+    const { trigger, latest, history = '', instructions, sessions, page, learn, tune, reply, requestId, handOff } = moment, started = Date.now();
     const said = latest?.text.replace(/\s+/g, ' ').trim() ?? '', gate = trigger === 'turn' || trigger === 'delegation', job = trigger === 'job' || trigger === 'unsent';
     // The latest words in their own field: marked inside the conversation instead, Jev read plain page moves as likelier
     // work for the agent (page_work up by .1 on average, Oct 21).
@@ -234,11 +246,24 @@ export class Jev {
       ...learn && LEARNER,
       ...tune && tunerQuestions(tune.current, tune.pinned, trigger !== 'settings'),
     };
-    const response = await this.fetch(URL, { method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'jev-latest', state, questions }), signal: AbortSignal.timeout(timeoutMs) });
-    if (!response.ok) throw new Error(`Jev returned HTTP ${response.status}`);
-    const { answers } = await response.json();
+    const call: JevCall = { id: randomUUID(), at: started, trigger, ...requestId && { requestId }, ...handOff && { handOff },
+      config: { url: URL, model: MODEL, timeoutMs, features: this.features, thresholds: Object.fromEntries(Object.keys(questions).filter(name => name in THRESHOLDS).map(name => [name, THRESHOLDS[name]])) },
+      state, questions, ms: 0 };
+    let answers: any;
+    try {
+      const response = await this.fetch(URL, { method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: MODEL, state, questions }), signal: AbortSignal.timeout(timeoutMs) });
+      call.status = response.status;
+      if (!response.ok) throw new Error(`Jev returned HTTP ${response.status}`);
+      ({ answers } = await response.json());
+    } catch (error) {
+      this.record?.({ ...call, ms: Date.now() - started, error: (error as Error).message });
+      throw error;
+    }
+    Object.assign(call, { ms: Date.now() - started, answers });
+    // Its record waits for what fdc does with the answers (jev-audit.ts).
+    this.record?.(call);
     const p = (name: string, missing = 0) => { const value = Number(answers?.[name]?.noul); return Number.isFinite(value) ? value : missing; };
-    const reading: Reading = { trigger, said, transcript: `${history}${latest ? `► ${spokenLine(latest)}` : ''}`, needsAgent: 'needs_agent' in questions ? p('needs_agent') : null, ...'ready' in questions && { ready: p('ready', 1) } };
+    const reading: Reading = { trigger, id: call.id, said, transcript: `${history}${latest ? `► ${spokenLine(latest)}` : ''}`, needsAgent: 'needs_agent' in questions ? p('needs_agent') : null, ...'ready' in questions && { ready: p('ready', 1) } };
     if (gate) { if ('companion_only' in questions) reading.companionOnly = p('companion_only'); reading.standby = p('standby'); }
     if (gate && sessions) {
       const chosen = (choice: string) => sessions.filter((_, index) => answers?.[`session_${index + 1}`]?.choice === choice).map(s => s.id);
@@ -253,7 +278,7 @@ export class Jev {
     }
     if (learn) reading.instruction = { behave: p('behave', NaN), design: p('design_talk', NaN), lasting: answers?.lasting?.choice };
     if (tune) reading.tuning = answers;
-    this.log({ type: 'jev.read', trigger, said: said.slice(-200), questions: Object.keys(questions).length, chars: JSON.stringify(state).length, ms: Date.now() - started, needsAgent: reading.needsAgent, ready: reading.ready, ...trigger === 'job' && { reply: state.voice_reply.slice(-200) }, companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions, instruction: reading.instruction });
+    this.log({ type: 'jev.read', id: call.id, trigger, said: said.slice(-200), questions: Object.keys(questions).length, chars: JSON.stringify(state).length, ms: Date.now() - started, needsAgent: reading.needsAgent, ready: reading.ready, ...trigger === 'job' && { reply: state.voice_reply.slice(-200) }, companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions, instruction: reading.instruction });
     return reading;
   }
 }

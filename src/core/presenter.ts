@@ -63,7 +63,8 @@ export class Presenter {
       const view = await bridge.stage.describe();
       if (!view) return;
       const spoken: Spoken[] = [...bridge.mediator?.history.spoken() ?? [], { role: 'intermediary', text: sentence, at: Date.now() }];
-      const command = (await bridge.read({ trigger: 'cue', spoken, page: view })).page?.command;
+      const reading = await bridge.read({ trigger: 'cue', spoken, page: view }), command = reading.page?.command;
+      bridge.jevAudit?.decided(reading.id, { command: command ?? null }, true);
       if (!command) { bridge.log({ type: 'stage.cue_missed', meant }); bridge.mediator?.context.now('thinking', pageMissed(meant)); return; }
       const { onScreen } = await bridge.stage.run([command]);
       this.presentedAt = Date.now();

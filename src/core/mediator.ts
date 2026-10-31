@@ -69,8 +69,8 @@ export class Mediator {
   audit?: DelegationAudit;
   /** The voice tool acting on the operator's turn (turn.ts), when Jev is configured: what it does itself, and then whether their words go to the agent. */
   route?: Route;
-  /** Jev's reading of words that reach the harness without the gate's (voice ended, or the voice tool sent them). */
-  read?: (trigger: Trigger, spoken: Spoken[]) => Promise<Reading>;
+  /** Jev's reading of words that reach the harness without the gate's (voice ended, or the voice tool sent them); its record (jev-audit.ts) says which request took them and how. */
+  read?: (trigger: Trigger, spoken: Spoken[], record?: { requestId: string; handOff: HandOff }) => Promise<Reading>;
   /** What Jev read in a request, for the learner and the tuner: each reading once. */
   consider?: (reading: Reading, requestId?: string) => void;
   /** The operator's latest turn: its last word (fragment), when it was read, and what came of it. */
@@ -110,7 +110,7 @@ export class Mediator {
   constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, audit, route, read, consider, firstRecordId = 0 }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
     publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; audit?: DelegationAudit;
-    route?: Route; read?: (trigger: Trigger, spoken: Spoken[]) => Promise<Reading>; consider?: (reading: Reading, requestId?: string) => void;
+    route?: Route; read?: Mediator['read']; consider?: (reading: Reading, requestId?: string) => void;
     /** Context records are numbered after this one: a fork's context already holds its source's. */
     firstRecordId?: number;
   }) {
@@ -252,7 +252,7 @@ export class Mediator {
     else { this.jobRead = Math.max(this.jobRead, request.through); this.undecidedSince = 0; this.undecidedNeeded = false; clearTimeout(this.heldTimer); }
     if (send) return this.send(id, request, this.clean(voiceRequest(request.utterances, [...request.notes ?? [], ...note ? [note] : []])), delegationId ?? null, reading);
     this.log({ type: 'turn.kept', id, said: this.said(request).slice(-200), needsAgent: reading?.needsAgent ?? null, handled: Boolean(note), ...wait && { waiting: true } });
-    this.audit?.record({ handOff: 'kept', said: this.said(request), voiceSessionId: this.live.id, delegationId: delegationId ?? null, requestId: id }, reading?.needsAgent ?? null, reading?.transcript);
+    this.audit?.record({ handOff: 'kept', said: this.said(request), voiceSessionId: this.live.id, delegationId: delegationId ?? null, requestId: id, jevCall: reading?.id }, reading?.needsAgent ?? null, reading?.transcript);
     this.giveBack(id, note);
     if (delegationId && !told && !toldBefore) this.outcome(delegationId, { send: false });
   }
@@ -306,12 +306,12 @@ export class Mediator {
     // Words that reach the harness without a turn's reading (voice ended) are read now, and the learner and the tuner take
     // that reading; a turn's own were taken from the voice tool's reading of it.
     if (!reading && this.read) {
-      reading = await this.read('unsent', this.history.spoken(request.through)).catch(error => { this.log({ type: 'jev.error', message: (error as Error).message }); return undefined; });
+      reading = await this.read('unsent', this.history.spoken(request.through), { requestId, handOff }).catch(error => { this.log({ type: 'jev.error', message: (error as Error).message }); return undefined; });
       if (reading) this.consider?.(reading, requestId);
     }
     if (!this.audit) return;
     const needsAgent = reading?.needsAgent ?? null;
-    this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId }, needsAgent, reading?.transcript);
+    this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId, jevCall: reading?.id }, needsAgent, reading?.transcript);
     this.publish({ type: 'jev_check', requestId, at: Date.now(), kind: 'handoff', words: said, scores: { needsAgent, handOff },
       outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${{ passed: this.route ? 'Jev passed it on' : 'GPT Live passed it on', kept: 'Kept', answered: 'Kept; sent when voice ended', held: "Waited for the operator to finish; sent once they stayed quiet" }[handOff]}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})` });
   }
