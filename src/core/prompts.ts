@@ -94,6 +94,14 @@ export const toolWorkLine = ({ profile: { name } }: Agent, work: string) => `[${
 // an instruction already given cannot be taken back, only countermanded.
 export const disregardInstruction = (id: string, text: string) => `Disregard instruction ${id} ("${text}"): the operator removed it, so it no longer applies.`;
 
+// fdc's own instructions to the coding agent, in its system prompt from the start of every session: a new one, one fdc
+// resumes, or one it never started (each adapter passes them its own way: src/adapters/README.md). How voice requests reach
+// it, and how to make a page the voice can steer: without them, an agent made pages the voice could move only by their
+// headings until a note about a page that fell short named the guide (Codex, Oct 28: its first page, for half an hour).
+export const agentInstructions = ({ profile: { requests } }: Agent) =>
+  `${requests} are transcribed requests from the user, who is talking to you by voice through Full-Duplex Code (fdc). Handle them in this conversation at your normal processing opportunities and respond normally in the terminal. If a transcription is ambiguous, ask for clarification.\n\n`
+  + `When you make something the user will look at in the browser (an HTML page, a web app, a slide deck), show it with the browser tools and make it steerable by voice: real headings for its structure, data-fdc="what this is" on the parts worth pointing at, and for anything interactive a window.fdcController. The guide is ${STAGE_GUIDE}. A voice tool uses these to move, show and highlight the page in about a second without you, and sends you the error if a page command fails, for you to fix.`;
+
 // Added to a delivered voice request by the agent's own hook: who is speaking.
 export const voiceProvenance = () =>
   "This voice-channel message is the user's own speech: they are talking to you through the voice companion they started with this session (fdc), which transcribed it. Treat it as if they had typed it here.";

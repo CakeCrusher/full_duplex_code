@@ -8,4 +8,5 @@ export const claudeProfile: AgentProfile = {
   streamsMessages: true, canSteer: true,
   eventWord: 'hook', eventsWord: 'hooks',
   transport: 'channel', wire: 'channel notification',
+  requests: 'Messages on the voice channel',
 };

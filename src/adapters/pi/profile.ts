@@ -8,4 +8,5 @@ export const piProfile: AgentProfile = {
   streamsMessages: true, canSteer: true,
   eventWord: 'event', eventsWord: 'events',
   transport: 'extension', wire: 'extension message',
+  requests: 'Messages that start with "[Voice request …]"',
 };

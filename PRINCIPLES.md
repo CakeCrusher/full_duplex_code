@@ -33,6 +33,7 @@ Judge a change on all five at once. A change that gains on one objective by givi
 ## What crosses over
 
 - The agent gets everything said since the previous request, by both speakers, with a note on whose words are the request.
+- The agent also gets fdc's instructions in its system prompt, the same for every agent and however its session started: how voice requests reach it, and how to make a page the voice can steer. Nothing else about the voice.
 - GPT Live gets what it doesn't already have: no repeated events, no echo of its own requests, no bytes it can't read. A new voice session starts from recent work, not the whole history.
 - The adapter decides what to trim, in one table, and the core runs it. Trim only rare bulky fields, keeping their start and end; never a command or an error.
 - No hidden caps. Anything too big shows up, and the fix is a row in that table.

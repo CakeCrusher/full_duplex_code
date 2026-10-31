@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // The voice channel: an MCP server Claude runs as a child process. It connects
 // back to the bridge at /channel and writes each voice request to Claude as a
-// channel notification.
-import { fileURLToPath } from 'node:url';
+// channel notification. Its instructions are fdc's, from the launcher
+// (prompts.ts, agentInstructions): Claude puts them in its system prompt.
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import WebSocket from 'ws';
@@ -11,6 +11,8 @@ import { channelNotification } from './channel-message.ts';
 // Stdout belongs exclusively to MCP JSON-RPC.
 const url = process.env.FD_BRIDGE_URL;
 const token = process.env.FD_BRIDGE_TOKEN;
+// A companion started before fdc passed them leaves them out: the channel still delivers.
+const instructions = process.env.FD_INSTRUCTIONS || undefined;
 if (!url || !token || !/^ws:\/\/127\.0\.0\.1:\d+\/channel$/.test(url)) {
   console.error('Voice channel requires its local harness connection. Start with npm start.');
   process.exit(1);
@@ -25,14 +27,7 @@ function send(event: Record<string, unknown>) {
   else if (pendingEvents.length < 1000) pendingEvents.push(event);
   else throw new Error('Voice bridge event queue is full');
 }
-// How to make a page the voice tool can steer (STAGE.md).
-const STAGE_GUIDE = fileURLToPath(new URL('../../../STAGE.md', import.meta.url));
-const mcp = new Server({ name: 'voice', version: '0.1.0' }, {
-  capabilities: { experimental: { 'claude/channel': {} } },
-  instructions: 'Messages on this channel are transcribed requests from the user. Handle them in this conversation at your normal processing opportunities and respond normally in the terminal. If a transcription is ambiguous, ask for clarification.\n\n'
-    + 'When you make something the user will look at in the browser (an HTML page, a web app, a slide deck), show it with the browser tools and make it steerable by voice: real headings for its structure, data-fdc="what this is" on the parts worth pointing at, and for anything interactive a window.fdcController. '
-    + `The guide is ${STAGE_GUIDE}. A voice tool uses these to move, show and highlight the page in about a second without you, and sends you the error if a page command fails, for you to fix.`,
-});
+const mcp = new Server({ name: 'voice', version: '0.1.0' }, { capabilities: { experimental: { 'claude/channel': {} } }, instructions });
 await mcp.connect(new StdioServerTransport());
 function connect() {
   const ws = socket = new WebSocket(url!, { headers: { Authorization: `Bearer ${token}` }, handshakeTimeout: 3000 });

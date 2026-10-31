@@ -11,6 +11,7 @@ import { PiObserver } from './observer.ts';
 import { PiDelivery } from './delivery.ts';
 import { receivedRequest, turnText } from './message.ts';
 import { piArgs } from './launch.ts';
+import { INSTRUCTIONS_VARIABLE } from './extension.ts';
 
 // Pi: observed and reached through the companion's extension, which Pi loads
 // for this run only. It forwards Pi's events to /hook and takes requests at /pi.
@@ -30,7 +31,7 @@ export class PiAdapter extends EventEmitter implements AgentAdapter {
     this.sockets = { '/pi': this.delivery };
   }
   launch({ baseUrl, token }: { baseUrl: string; token: string }): AgentLaunch {
-    return { command: 'pi', args: piArgs(this.session.root, this.session.agentArgs), env: { FD_BRIDGE_URL: baseUrl, FD_BRIDGE_TOKEN: token }, files: {} };
+    return { command: 'pi', args: piArgs(this.session.root, this.session.agentArgs), env: { FD_BRIDGE_URL: baseUrl, FD_BRIDGE_TOKEN: token, [INSTRUCTIONS_VARIABLE]: this.session.instructions }, files: {} };
   }
   deliver(request: VoiceRequest) { return this.delivery.deliver(request); }
   history() { return this.observations.observations; }

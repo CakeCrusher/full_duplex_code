@@ -10,7 +10,8 @@ import { claudeArgs, makeClaudeConfig } from './launch.ts';
 import { readClaudeArgs } from './arguments.ts';
 
 // Claude Code: observed through command hooks (and its transcript on resume),
-// reached through the voice channel MCP server.
+// reached through the voice channel MCP server, whose instructions (fdc's) are
+// in its system prompt.
 export class ClaudeAdapter extends EventEmitter implements AgentAdapter {
   readonly profile = claudeProfile;
   readonly observations: ClaudeObserver;
@@ -27,8 +28,8 @@ export class ClaudeAdapter extends EventEmitter implements AgentAdapter {
     this.sockets = { '/channel': this.delivery };
   }
   launch({ baseUrl, token }: { baseUrl: string; token: string }): AgentLaunch {
-    const { root, runDir, sessionId, agentArgs } = this.session;
-    const config = makeClaudeConfig({ root, runDir, baseUrl, channelToken: token });
+    const { root, runDir, sessionId, agentArgs, instructions } = this.session;
+    const config = makeClaudeConfig({ root, runDir, baseUrl, channelToken: token, instructions });
     // A new conversation gets the launcher's session ID; otherwise Claude's own arguments choose it.
     const assigned = readClaudeArgs(agentArgs).assignSession ? sessionId : undefined;
     return { command: 'claude', args: claudeArgs({ config, sessionId: assigned, extraArgs: agentArgs }), env: { FD_BRIDGE_TOKEN: token }, files: { ...config } };

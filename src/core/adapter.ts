@@ -25,6 +25,8 @@ export interface AgentProfile {
   eventsWord: string;
   /** How requests reach the agent: "Delivered to <transport>". */
   transport: string;
+  /** How the agent sees a voice request, in its instructions: "<requests> are transcribed requests from the user". */
+  requests: string;
   /** The message a request becomes on the way: "<Wire> JSON" in the request inspector. */
   wire: string;
 }
@@ -131,6 +133,13 @@ export interface AgentDefinition {
    */
   vouch?(event: Record<string, any>, delivered: (id: string) => boolean, note: string): unknown;
   /**
+   * What the agent's command hook answers for an event to give the agent fdc's instructions (`AgentSession.instructions`),
+   * for an agent whose system prompt they can reach only that way (Codex: its SessionStart hook, at startup, on resume and
+   * after compaction). Undefined, for this event or this agent: the hook answers nothing, and the instructions reach the
+   * agent through its launch.
+   */
+  instruct?(event: Record<string, any>, instructions: string): unknown;
+  /**
    * A one-off, non-interactive run of this agent with no tools and no saved session, for a short
    * piece of writing (a learned instruction): the command, its arguments, and how the prompt goes
    * in and the reply comes out. `outputFile` is a path the agent may write its reply to.
@@ -156,6 +165,12 @@ export interface AgentSession {
   observation: string;
   /** The agent's own command-line arguments, passed through unchanged. */
   agentArgs: string[];
+  /**
+   * fdc's instructions to the agent (prompts.ts, agentInstructions): how voice requests reach it and how to make a page the
+   * voice can steer. Every adapter puts them in the agent's system prompt, by the least invasive way the agent offers, for a
+   * session fdc starts, one it resumes and one it never started alike: through its launch, or its hook (`instruct`).
+   */
+  instructions: string;
   clean: (text: string) => string;
   log: (event: Record<string, unknown>) => void;
 }

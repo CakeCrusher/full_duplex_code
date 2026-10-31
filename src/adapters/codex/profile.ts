@@ -8,4 +8,5 @@ export const codexProfile: AgentProfile = {
   streamsMessages: true, canSteer: true,
   eventWord: 'event', eventsWord: 'events',
   transport: 'app server', wire: 'turn input',
+  requests: 'Messages that start with "[Voice request …]"',
 };

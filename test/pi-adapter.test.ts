@@ -11,7 +11,7 @@ import { readPiArgs } from '../src/adapters/pi/arguments.ts';
 import { piArgs } from '../src/adapters/pi/launch.ts';
 import { PiObserver } from '../src/adapters/pi/observer.ts';
 import { receivedRequest, turnText } from '../src/adapters/pi/message.ts';
-import companion, { OBSERVED_EVENTS } from '../src/adapters/pi/extension.ts';
+import companion, { INSTRUCTIONS_SECTION, INSTRUCTIONS_VARIABLE, OBSERVED_EVENTS } from '../src/adapters/pi/extension.ts';
 
 const until = async <T>(check: () => T, label = 'condition') => {
   for (let i = 0; i < 300; i++) { const result = check(); if (result) return result; await new Promise(r => setTimeout(r, 10)); }
@@ -43,13 +43,11 @@ test('a voice request is labeled for Pi and recognized when Pi reports it as inp
 async function bridged(t: TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-pi-'));
   const harness = await new Harness({ agent: pi, root, runDir: path.join(root, 'run'), cwd: root, apiKey: 'unused-test-key' }).start();
-  const launch = harness.agentLaunch!, saved = { url: process.env.FD_BRIDGE_URL, token: process.env.FD_BRIDGE_TOKEN };
+  const launch = harness.agentLaunch!, names = Object.keys(launch.env), saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
   Object.assign(process.env, launch.env);
-  const handlers = new Map<string, (event: Record<string, unknown>, ctx: any) => void>(), sent: { content: string; options: unknown }[] = [];
+  const handlers = new Map<string, (event: Record<string, any>, ctx: any) => unknown>(), sent: { content: string; options: unknown }[] = [];
   companion({ on: (name, handler) => handlers.set(name, handler), sendUserMessage: (content, options) => { sent.push({ content, options }); } });
-  process.env.FD_BRIDGE_URL = saved.url; process.env.FD_BRIDGE_TOKEN = saved.token;
-  if (saved.url === undefined) delete process.env.FD_BRIDGE_URL;
-  if (saved.token === undefined) delete process.env.FD_BRIDGE_TOKEN;
+  for (const name of names) if (saved[name] === undefined) delete process.env[name]; else process.env[name] = saved[name];
   let session: string = randomUUID(), file = path.join(root, `2026-10-02T00-00-00-000Z_${session}.jsonl`);
   const ctx = { sessionManager: { getSessionId: () => session, getSessionFile: () => file } };
   const fire = (name: string, event: Record<string, unknown> = {}) => handlers.get(name)!({ type: name, ...event }, ctx);
@@ -59,7 +57,7 @@ async function bridged(t: TestContext) {
 
 test('the extension forwards events in order to the bridge, which learns the session from the first one', async t => {
   const run = await bridged(t);
-  assert.deepEqual([...run.handlers.keys()], OBSERVED_EVENTS, 'it listens only to the events it forwards');
+  assert.deepEqual([...run.handlers.keys()], ['before_agent_start', ...OBSERVED_EVENTS], "it listens to the events it forwards, and adds fdc's instructions to each run's system prompt");
   run.fire('session_start', { reason: 'startup' });
   await until(() => run.harness.agentReady, 'the request socket');
   assert.equal(run.harness.sessionId, run.session);
@@ -161,4 +159,18 @@ test("a resumed session's saved messages become history in the shapes Pi forward
     other.hook({ type: 'session_start', reason: 'startup', session_id: randomUUID(), session_file: file });
     assert.equal(other.conversation.length, 0, "another session's file is never read");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the extension puts fdc's instructions in Pi's system prompt for every run, as a section beside the operator's own", async t => {
+  const run = await bridged(t);
+  const instructions = run.harness.agentLaunch!.env[INSTRUCTIONS_VARIABLE];
+  assert.equal(instructions, run.harness.agentInstructions);
+  for (let i = 0; i < 2; i++) {
+    // Pi hands each run its own copy of the prompt's options: the section is set again every run, never added twice.
+    const event = { type: 'before_agent_start', messageType: 'user', prompt: 'hi', systemPrompt: 'base', systemPromptOptions: { appendSystemPrompt: 'mine', sections: { notes: 'theirs' } } };
+    assert.equal(run.handlers.get('before_agent_start')!(event, {}), undefined, 'the prompt is changed through its options, not replaced');
+    assert.deepEqual(event.systemPromptOptions, { appendSystemPrompt: 'mine', sections: { notes: 'theirs', [INSTRUCTIONS_SECTION]: instructions } });
+  }
+  // A Pi without prompt sections: the instructions follow its prompt.
+  assert.deepEqual(run.handlers.get('before_agent_start')!({ type: 'before_agent_start', systemPrompt: 'base' }, {}), { systemPrompt: `base\n\n<${INSTRUCTIONS_SECTION}>\n${instructions}\n</${INSTRUCTIONS_SECTION}>` });
 });

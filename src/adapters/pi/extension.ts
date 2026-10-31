@@ -1,13 +1,20 @@
 // The companion's extension: Pi loads it with -e for this run only. It forwards
 // Pi's events to the bridge's /hook, as a command hook does for other agents,
-// and hands each voice request to Pi over the bridge's /pi socket. It never
-// influences Pi: every handler returns nothing and never waits on the bridge.
+// and hands each voice request to Pi over the bridge's /pi socket. The one thing
+// it adds to Pi is fdc's instructions, a section of Pi's system prompt in every
+// run of any session; otherwise its handlers return nothing and never wait on
+// the bridge.
 import { turnText } from './message.ts';
+
+/** fdc's instructions to Pi (prompts.ts, agentInstructions), from the launcher. */
+export const INSTRUCTIONS_VARIABLE = 'FD_AGENT_INSTRUCTIONS';
+/** The section of Pi's system prompt they fill (Pi wraps it as <full-duplex-code>…</full-duplex-code>). */
+export const INSTRUCTIONS_SECTION = 'full-duplex-code';
 
 // The parts of Pi's extension API this file uses.
 interface Context { sessionManager: { getSessionId(): string; getSessionFile(): string | undefined } }
 interface PiApi {
-  on(event: string, handler: (event: Record<string, unknown>, ctx: Context) => void): unknown;
+  on(event: string, handler: (event: Record<string, any>, ctx: Context) => unknown): unknown;
   sendUserMessage(content: string, options?: { deliverAs?: 'steer' | 'followUp' }): void;
 }
 
@@ -25,6 +32,14 @@ export const OBSERVED_EVENTS = [
 export default function companion(pi: PiApi) {
   const base = process.env.FD_BRIDGE_URL, token = process.env.FD_BRIDGE_TOKEN;
   if (!base || !token || !/^http:\/\/127\.0\.0\.1:\d+$/.test(base)) return;
+  // Pi builds its system prompt for every run from options a handler can change for that run alone, beside the
+  // operator's own (--system-prompt, --append-system-prompt): new, continued and resumed sessions all get the section,
+  // and compaction keeps it. A Pi without prompt sections gets the instructions at the end of its prompt instead.
+  const instructions = process.env[INSTRUCTIONS_VARIABLE];
+  if (instructions) pi.on('before_agent_start', event => {
+    if (event.systemPromptOptions?.sections) { event.systemPromptOptions.sections[INSTRUCTIONS_SECTION] = instructions; return; }
+    if (typeof event.systemPrompt === 'string') return { systemPrompt: `${event.systemPrompt}\n\n<${INSTRUCTIONS_SECTION}>\n${instructions}\n</${INSTRUCTIONS_SECTION}>` };
+  });
 
   // Events go out one at a time, in order. A handler only queues and returns.
   const queue: string[] = [];

@@ -11,6 +11,7 @@ import { askAgent, distillPrompt, parseDistilled } from './instruction-distiller
 import { tuningFrom, type TuningChange } from './jev-tuner.ts';
 import { Jev, type Moment, type Reading } from './jev.ts';
 import { recentHistory } from './recent-history.ts';
+import { agentInstructions } from './prompts.ts';
 import type { Spoken } from './voice-history.ts';
 import { Stage } from './stage.ts';
 import { Presenter } from './presenter.ts';
@@ -74,6 +75,8 @@ export class Harness {
   /** Every open companion page. */
   pages: Pages;
   agentLaunch?: AgentLaunch;
+  /** fdc's instructions to the agent, in its system prompt however the session started (prompts.ts, agentInstructions). */
+  agentInstructions: string;
   clean: (text: unknown) => string;
   statusLog: StatusLog; log: (event: BridgeEvent) => void; publish: (event: BridgeEvent, page?: Page) => void; fault: (error: Error, page?: Page) => void;
   ledger: UsageLedger; timeline: Timeline; outbox: Outbox; voiceSessions: VoiceSessions; endpoints: Endpoints;
@@ -108,7 +111,8 @@ export class Harness {
       onLearn: instruction => { this.learnInstruction(instruction).catch(error => this.fault(error as Error)); } });
     this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,
       publish: event => this.publish(event), fault: error => this.fault(error), onSent: entry => this.voiceSessions.confirmDelivery(entry), onUncertain: entry => this.voiceSessions.uncertainDelivery(entry) });
-    this.adapter = agent.create({ root, runDir, cwd, sessionId, observation, agentArgs, clean: this.clean, log: this.log });
+    this.agentInstructions = agentInstructions(agent);
+    this.adapter = agent.create({ root, runDir, cwd, sessionId, observation, agentArgs, instructions: this.agentInstructions, clean: this.clean, log: this.log });
     const observer = this.observer = this.adapter.observations;
     observer.on('input', event => { this.log({ type: 'agent.input', ...event }); this.publish({ type: 'agent_input', ...event }); });
     observer.on('text', event => { this.log({ type: 'agent.text', ...event }); this.publish({ type: 'agent_text', ...event }); });

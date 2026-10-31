@@ -6,7 +6,8 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { AddressInfo } from 'node:net';
 import { channelNotification } from '../src/adapters/claude/channel-message.ts';
 import { LineReader } from '../src/core/line-reader.ts';
-import { voiceRequest } from '../src/core/prompts.ts';
+import { agentInstructions, voiceRequest } from '../src/core/prompts.ts';
+import { claude } from '../src/adapters/claude/index.ts';
 
 const until = async <T>(check: () => T) => {
   for (let i = 0; i < 300; i++) { const result = check(); if (result) return result; await new Promise(r => setTimeout(r, 10)); }
@@ -18,7 +19,7 @@ test('real MCP channel exposes no tools and delivers each notification once', as
   const events: any[] = []; let socket!: WebSocket;
   server.on('connection', ws => { socket = ws; ws.on('message', raw => events.push(JSON.parse(raw.toString()))); });
   const child = spawn(process.execPath, [fileURLToPath(new URL('../src/adapters/claude/channel-server.ts', import.meta.url))], {
-    env: { ...process.env, FD_BRIDGE_URL: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/channel`, FD_BRIDGE_TOKEN: 'local-test-token' },
+    env: { ...process.env, FD_BRIDGE_URL: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/channel`, FD_BRIDGE_TOKEN: 'local-test-token', FD_INSTRUCTIONS: agentInstructions(claude) },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   t.after(async () => { child.kill(); for (const ws of server.clients) ws.terminate(); await new Promise(resolve => server.close(resolve)); });
@@ -29,6 +30,7 @@ test('real MCP channel exposes no tools and delivers each notification once', as
   const initialized = await until(() => messages.find(e => e.id === 1));
   assert.ok(initialized.result.capabilities.experimental['claude/channel']);
   assert.equal(initialized.result.capabilities.tools, undefined);
+  assert.equal(initialized.result.instructions, agentInstructions(claude), "fdc's instructions, which Claude puts in its system prompt");
   assert.doesNotMatch(initialized.result.instructions, /acknowledge|reply|companion|GPT Live/);
   send({ method: 'notifications/initialized' });
   await until(() => events.some(e => e.type === 'channel.ready'));

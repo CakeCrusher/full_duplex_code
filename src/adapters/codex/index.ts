@@ -13,7 +13,8 @@ import { codexArgs, TOKEN_VARIABLE } from './launch.ts';
 const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
 
 // Codex: observed through command hooks and its transcript, reached through its
-// app server, where requests steer the running turn.
+// app server, where requests steer the running turn; fdc's instructions come with
+// its SessionStart hook's answer.
 export class CodexAdapter extends EventEmitter implements AgentAdapter {
   readonly profile = codexProfile;
   readonly observations: CodexObserver;
@@ -76,6 +77,12 @@ export const codex: AgentDefinition = {
   observationModes: [],
   receivedRequest,
   toolCall: (event: string, data: any) => /^PostToolUse(Failure)?$/.test(event) && typeof data?.tool_name === 'string' ? data.tool_name : undefined,
+  // fdc's instructions come with the session's start, whichever way it started (startup, resume, or after compaction): the
+  // developer instructions of the app server's configuration reach only threads that begin there (a resumed thread that
+  // began elsewhere kept its own; tried with Codex 0.165), while a SessionStart hook's context reaches every one. Not a
+  // subagent's.
+  instruct: (event: Record<string, any>, instructions: string) => event.hook_event_name === 'SessionStart' && !event.agent_id
+    ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: instructions } } : undefined,
   wire: (request: VoiceRequest) => ({ input: turnInput(request) }),
   create: session => new CodexAdapter(session),
   doctor,

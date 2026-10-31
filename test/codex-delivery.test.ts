@@ -47,7 +47,7 @@ async function connected(t: TestContext, options?: Parameters<typeof fakeServer>
   return { server, delivery, log, connection };
 }
 const request = { id: '3f1e2d4c-5b6a-4978-8a9b-0c1d2e3f4a5b', content: 'User request (transcribed speech):\nAlso add seconds.' };
-const session = { root: '/repo', runDir: '/run', cwd: '/p', observation: '', agentArgs: [], clean: String, log: () => {} };
+const session = { root: '/repo', runDir: '/run', cwd: '/p', observation: '', agentArgs: [], instructions: 'fdc instructions', clean: String, log: () => {} };
 
 test('the app server requires the capability token; attaching to the thread makes requests deliverable', async t => {
   const server = await fakeServer(t);
