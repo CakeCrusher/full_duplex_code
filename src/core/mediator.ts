@@ -21,10 +21,6 @@ export interface Decision {
   note?: string;
   /** For GPT Live: what the voice tool did or found (the page tells it its own news). */
   told?: string;
-  /** The page moved for their words: GPT Live's own words in its answer don't move it again. */
-  moved?: boolean;
-  /** Sent although Jev found nothing for the agent: the page failed or fell short, which the agent fixes. */
-  escalated?: boolean;
   /** Not decided: the operator hasn't finished saying it, and the job delegation reads it again with what they add. */
   wait?: boolean;
   /** Waiting words a reading found to need the agent: they go to it, whatever a later reading of the whole stretch finds. */
@@ -249,12 +245,12 @@ export class Mediator {
     });
   }
   /** What came of a turn: the words go to the agent, noted with what the voice tool did; or they stay for the next request, noted with it. GPT Live hears what was done (unless the voice tool's own reading told it already: toldBefore). */
-  decided(id: string, request: SpokenRequest, { reading, send, note, told, escalated, wait, needed }: Decision, delegationId?: string, toldBefore?: string) {
+  decided(id: string, request: SpokenRequest, { reading, send, note, told, wait, needed }: Decision, delegationId?: string, toldBefore?: string) {
     if (told && this.live.state === 'active') this.context.add('thinking', told, delegationId ?? null);
     // Sent, or kept as needing nothing: the job delegation's next reading starts after these words. Not finished: they wait for it.
     if (wait) { this.undecidedSince ||= Date.now(); this.undecidedNeeded ||= Boolean(needed); this.awaitQuiet(); }
     else { this.jobRead = Math.max(this.jobRead, request.through); this.undecidedSince = 0; this.undecidedNeeded = false; clearTimeout(this.heldTimer); }
-    if (send) return this.send(id, request, this.clean(voiceRequest(request.utterances, [...request.notes ?? [], ...note ? [note] : []])), delegationId ?? null, reading, escalated ? 'escalated' : 'passed');
+    if (send) return this.send(id, request, this.clean(voiceRequest(request.utterances, [...request.notes ?? [], ...note ? [note] : []])), delegationId ?? null, reading);
     this.log({ type: 'turn.kept', id, said: this.said(request).slice(-200), needsAgent: reading?.needsAgent ?? null, handled: Boolean(note), ...wait && { waiting: true } });
     this.audit?.record({ handOff: 'kept', said: this.said(request), voiceSessionId: this.live.id, delegationId: delegationId ?? null, requestId: id }, reading?.needsAgent ?? null, reading?.transcript);
     this.giveBack(id, note);
@@ -317,7 +313,7 @@ export class Mediator {
     const needsAgent = reading?.needsAgent ?? null;
     this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId }, needsAgent, reading?.transcript);
     this.publish({ type: 'jev_check', requestId, at: Date.now(), kind: 'handoff', words: said, scores: { needsAgent, handOff },
-      outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${{ passed: this.route ? 'Jev passed it on' : 'GPT Live passed it on', kept: 'Kept', answered: 'Kept; sent when voice ended', escalated: "The voice tool passed it on: the page couldn't do what they meant", held: "Waited for the operator to finish; sent once they stayed quiet" }[handOff]}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})` });
+      outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${{ passed: this.route ? 'Jev passed it on' : 'GPT Live passed it on', kept: 'Kept', answered: 'Kept; sent when voice ended', held: "Waited for the operator to finish; sent once they stayed quiet" }[handOff]}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})` });
   }
   /** The microphone level of the page this voice session listens to. */
   // The operator's held words still going out after a wake count as their talking: GPT Live is hearing them now.

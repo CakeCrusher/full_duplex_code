@@ -137,7 +137,7 @@ test('the delivery confirmation follows channel success once, independently of h
   assert.equal(h.outbox.get('request-one')!.state, 'dispatching');
   assert.equal(appends.length, 0, 'writing to the channel socket is not channel success');
   await event({ type: 'channel.sent', id: 'request-one' });
-  assert.deepEqual(appends, [{ kind: 'thinking', content: 'The request has been delivered to Claude Code. Confirm it briefly, unless the operator asked you not to.', delegationId: 'delegation-one' }], 'quietly: GPT Live confirms as its instructions say');
+  assert.deepEqual(appends, [{ kind: 'thinking', content: 'The request has been delivered to Claude Code.', delegationId: 'delegation-one' }], 'quietly: GPT Live confirms as its instructions say');
   await event({ type: 'channel.sent', id: 'request-one' });
   assert.equal(appends.length, 1, 'a duplicate receipt cannot repeat the spoken confirmation');
   h.deliver({ id: 'old-request', content: 'Earlier request.', voiceSessionId: 'old-voice', delegationId: 'old-delegation' });
@@ -161,7 +161,7 @@ test('every delivered request is confirmed once', async t => {
   h.deliver({ id: 'build', content: 'Build.', voiceSessionId: 'voice-one' });
   channel.send(JSON.stringify({ type: 'channel.sent', id: 'build' })); await settle();
   channel.send(JSON.stringify({ type: 'channel.sent', id: 'build' })); await settle();
-  assert.deepEqual(appends.map(a => a.content), ['The request has been delivered to Claude Code. Confirm it briefly, unless the operator asked you not to.']);
+  assert.deepEqual(appends.map(a => a.content), ['The request has been delivered to Claude Code.']);
 });
 
 test('the actual command hook relays a typed prompt into observer history and browser activity', async t => {

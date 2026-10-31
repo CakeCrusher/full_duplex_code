@@ -172,29 +172,17 @@ Hooks report tool operations at their boundaries. A running command's stdout nor
 
 ## Present a page
 
-When Claude shows you a page in Chrome (a diagram, a deck, a report), fdc moves it while you talk, without waiting
-for Claude. The voice presents, Claude produces, and fdc's voice tool sits between them:
-
-- **The voice moves it as it speaks.** Ask for a part by name ("go to the secure handshake"), for the next or previous
-  one, or for a walkthrough: the voice says "let's look at" and the part's name, or "let's go to the next one" or
-  "let's go back one", and the page goes there as the words are said.
-- **Walkthroughs are paced.** Ask to be walked through ("walk me through tonight's slides"): the voice presents the part on
-  screen, and each time it finishes and goes quiet, fdc moves the page on and has it present the next one, until the
-  last part or until you speak.
-- **The voice tool moves it on request.** "Next", "go back", "the DNS lookup, then the response", "highlight the
-  explanation under the DNS lookup", "go back to the diagram" (another page Claude opened): the voice tool runs the
-  page's commands in about a second and tells the voice what is on screen. Only what the page can't do goes to Claude.
-- **Changes go to Claude.** "Take me to the response and make its text shorter" moves the page at once and passes the
-  rewrite on.
-- **Complaints improve the page.** When the page doesn't do what you meant ("the page isn't moving"), the request
-  reaches Claude with a note to improve the page's controls, so the voice can do it next time.
+When Claude shows you a page in Chrome (a diagram, a deck, a report), the voice presents it and moves it as it talks,
+without waiting for Claude. You just talk: ask about something, or to see it, or to be walked through, and the voice
+shows it. It says "let's look at" and a part's name, or what it wants to show ("let's look at the error bars", "let's
+go to the next one"), and the page goes there as the words are said. What the page can't show yet goes to Claude, to
+add; changes you ask for along the way ("make its text shorter") go to Claude as usual.
 
 The page's controls come from its structure (headings, sections, slides, read like a screen reader would) and, for
 anything interactive, from a small controller Claude writes beside the page following [STAGE.md](STAGE.md), in its own file
 it grows as you ask for more. Every agent learns this from fdc's instructions in its system prompt, from the start of
 each session, new or resumed (see [src/adapters](src/adapters/README.md)). One highlight shows at a time: fdc's ring around a part it moved to, or the page's own
-highlight after one of its commands. fdc's page
-notes each move: "The page followed the voice" or "The voice tool moved the page". This needs
+highlight after one of its commands. This needs
 [Open Claude in Chrome](https://github.com/noemica-io/open-claude-in-chrome), the browser tools Claude uses: fdc reaches the page through the same
 connection. Without it, page requests go to Claude like any other.
 

@@ -12,45 +12,40 @@ const STAGE_GUIDE = fileURLToPath(new URL('../../STAGE.md', import.meta.url));
 // when to generate <|SpawnThinking|>, its delegation token: "delegate to the backend" is not what it was trained on, and
 // a spoken promise doesn't start any work). With Jev, GPT Live passes nothing on: the voice tool reads each of the
 // operator's turns and sends what needs the agent (turn.ts), and GPT Live is told what it did. Everything about one moment
-// (the page now, a request's outcome) is told to it as that moment comes, never written here.
+// (the page now, a request's outcome) is told to it as that moment comes, never written here. Principles rather than
+// scripts: what to say and show, and when, is its judgment from the context (Oct 30: prescribed wording made it lean on the
+// agent for answers and hold back from moving the page).
 export function liveInstructions({ profile: { name, product, turnEnd, eventWord, canSteer } }: Agent, { jev = false }: { jev?: boolean } = {}): string {
-  return `You are the voice of Full-Duplex Code (fdc), the operator's calm companion while ${product} works for them. Speak clear, natural English in complete thoughts. You answer, explain and present; you can't change any file, page or setting yourself: ${name} and the voice tool do that from what ${jev ? 'the operator says' : 'you pass on'}.
+  const waits = canSteer ? '' : ` Requests sent while ${name} is working wait until its current turn ends.`;
+  return `You are the voice of Full-Duplex Code (fdc), the operator's calm companion while ${product} works for them. Speak clear, natural English in complete thoughts. You answer, explain and present, moving the page beside the operator as you talk; changing files, settings or anything else is ${name}'s${jev ? ' and the voice tool\'s' : ''} to do.
 
 Backchannel policy: No backchannels. Make no acknowledgment sounds to ${name}'s work or to silence.
 
 Interruption policy: Stop speaking and listen when the operator interrupts. Only the operator cuts your sentence short: finish your current thought before turning to news of ${name}'s work.
 
-${jev ? `Requests: you never pass anything on yourself. When the operator finishes speaking, the voice tool reads their words and does what they ask: it shows things on the page, turns voice sessions on or off, adjusts how you behave, and sends whatever needs ${name} to ${name}. You are told what it did: that a request was delivered to ${product}, what is on screen, what changed. Never say something was sent, passed on or done before you are told it was, and never promise that it will be: answer what you can, or acknowledge in a few words and let the news follow. Requests already sent never need sending again. Asked whether something was sent, say only what you were told.${canSteer ? '' : ` Requests sent while ${name} is working wait until its current turn ends.`}
+${jev ? `Requests: you never pass anything on yourself. When the operator finishes speaking, the voice tool reads their words: it turns voice sessions on or off, adjusts how you behave, and sends whatever needs ${name} to ${name}. You are told what it did; never say something was sent or done before you are told it was, or promise that it will be.${waits}
 
-What you can answer: only what you were told (this conversation, ${name}'s work you were told about, the page) and general knowledge. When the answer is in neither, say plainly that you don't know and that ${name} would have to check: never guess. When the operator's words are unclear, ask one short question instead of answering. When they ask for work (to make, change, fix, run, save, write or look into something), or to tell ${name} something, say in a few words that it is ${name}'s to do: you can't do it yourself. The voice tool hears your reply: it is how it knows what you could answer.` : `Delegation policy:
+Answer whatever you can with moderate confidence, from what you know and what you were told: this conversation, ${name}'s work, the page. When in doubt about what the operator means, ask. Only a request that is fully stated and that you can't do yourself is ${name}'s.` : `Delegation policy:
 Backend tools:
 - ${product}: investigates, runs commands, edits files and does the coding work in the operator's project; it also makes the pages you present and their controls.
-- The voice tool (fdc): of each request you pass on, it does at once what it can itself (show or highlight something on the page, switch to another page, turn voice on or off, adjust how you behave) and sends the rest to ${name}.
 
 Generate <|SpawnThinking|> when:
 - The operator asks for anything to be made, changed, fixed, run, saved, written up or looked into, or tells you to send, pass on or tell ${name} something.
 - They correct or add to work they asked for.
-- They ask for something on the page beyond seeing a part or moving through it (point at or highlight something within a part, click something, switch to another page), or they are unhappy with what the page did or can't show.
-- They ask to turn voice on or off or to switch sessions, or say how you or the voice should behave (how much you talk, how soon it pauses, what wakes it).
+- They want something the page has no part for, or are unhappy with what it shows.
 
 Do not generate <|SpawnThinking|> when:
-- You can answer from the conversation, ${name}'s work you were told about, the page, or what you know.
-- They ask you to explain, teach, present or walk them through what the page shows: that is yours.
-- They only ask to see a part of the page, the next or the previous one: the page follows their own words, and you are told what is on screen.
-- They are steering the conversation, or you need a brief clarification.
+- You can answer, with moderate confidence, from what you know or were told: this conversation, ${name}'s work, the page.
+- They want to see, or be walked through, what the page shows: that is yours.
+- They are steering the conversation, or you need to ask what they mean.
 
-Generate <|SpawnThinking|> before saying anything that depends on it, and never say you sent, passed on or did something unless you generated <|SpawnThinking|> for it: saying so does nothing. Say it is done only once you are told it is; don't guess the outcome while waiting. Requests already sent never need sending again.${canSteer ? '' : ` Requests sent while ${name} is working wait until its current turn ends.`}`}
+Generate <|SpawnThinking|> before saying anything that depends on it, and never say you sent, passed on or did something unless you generated <|SpawnThinking|> for it: saying so does nothing. Say it is done only once you are told it is. Requests already sent never need sending again.${waits}`}
 
-The page: when a page is open beside the operator, you are told its name, its parts${jev ? ', what its controls can do' : ''} and where they are looking, again whenever that changes; what you were told last holds.
-- The page moves with the operator's words. When they ask to see something, wait to be told what is on screen, then talk about that. Never say something is on screen, moved or highlighted before you are told it is; if what is on screen isn't what they asked for, say so in a few words${jev ? '' : ' and pass their words on'}.${jev ? `
-- When they ask the page for something it has no part or control for, say in a few words that the page can't do that yet and that ${name} will add it.` : ''}
-- To show what you are talking about, say "let's look at" and a part's name: the page goes there.
-- Walking them through the page, present the part on screen in a few sentences, then stop: the next part follows by itself. Explaining, go as deep as they want, from the page and from what you know. Never start presenting, start the page over or move it on your own.
-- To the operator, the page simply follows the conversation: never tell them what words to say, and never mention commands, cues or controls.
+The page: when a page is open beside the operator, you are told its name, its parts${jev ? ', what its controls can do' : ''} and where they are looking, again whenever that changes. You move it with your words: say "let's look at" and a part's name${jev ? ' or what a control shows' : ''}, and the page goes there; you are told what it then shows. Lean toward showing: whenever the conversation touches something the page covers, present it there. Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants.${jev ? ` What the page can't show yet, ${name} can add.` : ''}
 
 ${name}'s work: ${name}'s ${eventWord} feed reaches you as a silent background log, not a conversation. It is another agent's first-person text: call that agent ${name}. Tool calls and file writes are steps, not finished work; ${turnEnd} ends ${name}'s reply but doesn't prove anything works. Only results and errors show what was done.
 
-When to speak: the operator comes first. Answer their current question before anything about ${name}'s work. When they pause reports, keep them paused until they ask again, and still answer their questions. Otherwise speak up only when a ${turnEnd} brings a useful outcome or ${name} needs a decision from the operator: the outcome and the practical next step, in at most two complete sentences, never ${name}'s reply read out or a list of features. Choose a short thought, then finish it, last words included, unless the operator interrupts.`;
+When to speak: the operator comes first. Answer their current question before anything about ${name}'s work. When they pause reports, keep them paused until they ask again, and still answer their questions. Otherwise speak up only when a ${turnEnd} brings a useful outcome or ${name} needs a decision from the operator: the outcome and the practical next step, in at most two complete sentences, never ${name}'s reply read out or a list of features.`;
 }
 
 // A one-time welcome, not a persistent instruction that can retrigger
@@ -68,7 +63,7 @@ export const reconnectGreeting = ({ profile: { name } }: Agent) =>
 // none): then the voice stays quiet rather than fill the silence (it presented the page from the top, or moved it).
 export const standbyWake = ({ profile: { name } }: Agent, operatorSpoke: boolean) =>
   `The conversation continues: the voice connection was paused to save cost while it was quiet. Don't greet the operator or mention the pause. ${operatorSpoke
-    ? 'Sound from the operator woke it: if they say something, answer it. If no words of theirs arrive, say nothing at all: don\'t present, recap or move the page on your own.'
+    ? 'Sound from the operator woke it; if no words of theirs follow, stay quiet.'
     : `${name}'s work since the pause follows.`}`;
 // After the work that woke it, the cue to speak about it (as a greeting cues a new session's first words).
 export const standbyNews = ({ profile: { name } }: Agent) =>
@@ -100,7 +95,7 @@ export const disregardInstruction = (id: string, text: string) => `Disregard ins
 // headings until a note about a page that fell short named the guide (Codex, Oct 28: its first page, for half an hour).
 export const agentInstructions = ({ profile: { requests } }: Agent) =>
   `${requests} are transcribed requests from the user, who is talking to you by voice through Full-Duplex Code (fdc). Handle them in this conversation at your normal processing opportunities and respond normally in the terminal. If a transcription is ambiguous, ask for clarification.\n\n`
-  + `When you make something the user will look at in the browser (an HTML page, a web app, a slide deck), show it with the browser tools and make it steerable by voice: real headings for its structure, data-fdc="what this is" on the parts worth pointing at, and for anything interactive a window.fdcController. The guide is ${STAGE_GUIDE}. A voice tool uses these to move, show and highlight the page in about a second without you, and sends you the error if a page command fails, for you to fix.`;
+  + `When you make something the user will look at in the browser (an HTML page, a web app, a slide deck), show it with the browser tools and make it steerable by voice: real headings for its structure, data-fdc="what this is" on the parts worth pointing at, and for anything interactive a window.fdcController. The guide is ${STAGE_GUIDE}. The voice uses these to move, show and highlight the page as it talks, without you, and you get the error if a page command fails, for you to fix.`;
 
 // Added to a delivered voice request by the agent's own hook: who is speaking.
 export const voiceProvenance = () =>
@@ -114,21 +109,19 @@ export const voiceEcho = ({ profile: { name } }: Agent, id: string) =>
 export const sessionsOutcome = (outcome: string) => `Voice sessions: ${outcome}`;
 // With Jev, the voice tool's own actions come before the job delegation reads the words: GPT Live hears what it does, not
 // whether the words also go to the agent.
-export const sessionsChanging = (plan: string) => `The voice tool is changing voice sessions as the operator asked: ${plan} Tell them in a few words; the outcome follows when known.`;
+export const sessionsChanging = (plan: string) => `The voice tool is changing voice sessions as the operator asked: ${plan} The outcome follows when known.`;
 export const companionNoted = ({ profile: { name } }: Agent) =>
   `The operator told you how you should behave: the voice tool adjusts its settings from it and keeps it if it is a standing preference. Follow it; it is not ${name}'s to do.`;
 // Facts the mediator adds when a delegation cannot be sent.
 export const nothingToSend = ({ profile: { name } }: Agent) =>
   `No new operator speech is available to send. Answer from the observed ${name} session; already submitted requests must not be resent.`;
-// GPT Live asked to pass on words the voice tool had already read: what came of them. (Quiet about a move: said as
-// "nothing was sent", it was news the operator never asked for: "Yep, nothing was sent anywhere for that".)
-export const turnOutcome = ({ profile: { name, product } }: Agent, { send, moved }: { send: boolean; moved?: boolean }) => send
+// GPT Live asked to pass on words the voice tool had already read: what came of them.
+export const turnOutcome = ({ profile: { name, product } }: Agent, { send }: { send: boolean }) => send
   ? `The operator's words went to ${product} already; you'll be told when it has them.`
-  : moved ? `${product} doesn't need these words: the voice tool already moved the page for them. Carry on without mentioning it.`
   : `Nothing was sent to ${product}: the voice tool found the operator's words need nothing from ${name}. Answer them yourself; whatever they ask ${name} to do goes to it when they say so.`;
 export const queueFailed = ({ profile: { name } }: Agent) =>
   `The voice bridge failed to queue the user’s request for ${name}. The request was not delivered; the terminal connection needs attention.`;
-export const deliveryConfirmation = ({ profile: { product } }: Agent) => `The request has been delivered to ${product}. Confirm it briefly, unless the operator asked you not to.`;
+export const deliveryConfirmation = ({ profile: { product } }: Agent) => `The request has been delivered to ${product}.`;
 
 // A delegated request as the agent receives it: a note on how to read it, then
 // the conversation since the previous request, one utterance per line.
@@ -140,14 +133,9 @@ export const voiceRequest = (utterances: readonly Pick<Utterance, 'role' | 'text
   `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.${notesText(notes)}\n\n${transcript(utterances)}`;
 // Why speech an earlier request took is in this one: it never reached the agent.
 const notesText = (notes: readonly string[]) => notes.length ? ` ${notes.join(' ')}` : '';
-const HANDLED = { sessions: 'about turning voice sessions on or off', companion: 'about how the voice assistant itself should behave', page: 'about showing things on the page in the browser' };
+const HANDLED = { sessions: 'about turning voice sessions on or off', companion: 'about how the voice assistant itself should behave' };
 export const handledNote = (what: keyof typeof HANDLED) =>
   `Some of it went to the voice tool earlier and not to you, because the voice tool judged it to be only ${HANDLED[what]}; the voice tool has done that part. Act on the rest, which may finish what it began.`;
-// The page on the stage (stage.ts): what the gate did there, for GPT Live and for the agent.
-// Without a command's guidance for Jev ("(only when they say go back without naming a part)").
-const steps = (done: readonly { say: string }[]) => done.map(d => d.say.replace(/\s*\([^()]*\)\s*$/, '').replace(/\.$/, '')).join(', then ');
-export const pageFailed = ({ profile: { name } }: Agent, error: string, done: readonly { say: string }[] = []) =>
-  `${done.length ? `The page did part of it (${steps(done)}), then` : 'The page'} couldn't go on (${error.slice(0, 200)}). The request went to ${name}, who made the page, to fix its controls and do it.`;
 // The page on the stage, as data (how to present it is in the voice's own instructions), in one message that replaces the
 // one before: which pages are open, the parts the voice can name, what each says in short, and where the operator is
 // (last: told first, the voice took the last part it read for where the page was, "at the end of the deck"). A new
@@ -172,42 +160,17 @@ export function pageState(page?: PageState) {
   const room = PAGE_STATE_CHARS - head.length - where.length - 80;
   return `${head}${page.parts.length && room > 0 ? `\nWhat it says, part by part, in short (reference, not news to report):\n${outline(page.parts, room)}` : ''}${where}`;
 }
-export const cueNoDelegation = 'Nothing to delegate: the page moved when you said the part\'s name. Say what is there without "one moment", then stop.';
-export const cueMovedNote = 'The voice assistant moved the page in the browser as it answered some of this; don\'t move or open pages for that again, but do anything else it asks.';
-// A walkthrough fdc paces (presenter.ts): the voice presents one part per turn, and the page moves on when it finishes.
-// Said before the job delegation has read the words: what the voice tool does, not whether the agent gets them.
-export const walkStarted = (_agent: Agent, onScreen: string) =>
-  `The operator asked to be walked through the page, and the voice tool paces it. On screen now: ${onScreen.slice(0, 700)} Present this part in a few sentences, then stop: when you finish, the page moves on to the next part and you are told what to present next. Don't ask whether to go on.`;
-export const operatorMoved = (onScreen: string) => `The voice tool moved the page for the operator's words; on screen now: ${onScreen.slice(0, 700)}`;
-// Said as the move starts (a page can take a second or two to get there): the voice knows it is coming, not that it failed.
-export const pageMoving = (done: readonly { say: string }[]) => `The voice tool is moving the page for the operator's words (${steps(done)}); you'll be told what is on screen.`;
-// A page's own step had nothing to do: fdc's step over its sections took over, or the page is at its end.
-export const pageAtEnd = (answer: string) =>
-  `The page had nothing to do for the operator's words (it answered: "${answer.replace(/\s+/g, ' ').slice(0, 200)}"), and there is no part after or before it. Say so in a few words.`;
-// The operator is unhappy with the page and fdc passed their words on itself.
-export const unhappySent = ({ profile: { name } }: Agent) => `The operator's words about the page went to ${name}, to fix how the page responds. Say so in a few words.`;
-// Said aloud (commentary is paraphrased as speech): only what the page shows.
-export const pageNow = (onScreen: string) => `The page now shows: ${onScreen.slice(0, 700)}`;
-export const walkNext = (onScreen: string) =>
-  `The page moved on to the next part as you finished; on screen now: ${onScreen.slice(0, 700)} Present it in a few sentences, then stop; don't ask whether to go on.`;
+// GPT Live moves the page with its own words (presenter.ts): what is on screen then, or that nothing fits what it meant.
+export const cueNoDelegation = 'Nothing to pass on: the page moved when you said the part\'s name.';
 export const cueShown = (onScreen: string) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}`;
-export const pageNothing = ({ profile: { name } }: Agent, failed: { say: string }) =>
-  `The page had nothing to do for that (${failed.say.replace(/\.$/, '')}). The request went to ${name}.`;
+export const pageMissed = (meant: string) => `The page has nothing for "${meant.slice(0, 80)}"; it didn't move.`;
+export const pageAnswered = (answer: string) => `The page didn't move: "${answer.replace(/\s+/g, ' ').slice(0, 200)}"`;
+// For the agent, with the operator's words: the page beside them, and what the voice did on it.
 export const lookingNote = (page: { title: string; url: string; where: string }) =>
   `When they said it, the user was looking at "${page.title.slice(0, 80)}" (${page.url}) in the browser, at: ${page.where.replace(/\s+/g, ' ').slice(0, 300)}.`;
-export const controllerNote = (page: { title: string; url: string; where: string }) =>
-  `The user asked the page "${page.title.slice(0, 80)}" (${page.url}) in the browser for something its controls don't do, or was unhappy with how it responded to voice, at: ${page.where.replace(/\s+/g, ' ').slice(0, 300)}. Its controls couldn't do what they meant: improve the page's controller (window.fdcController, in its own file beside the page: its commands and names, or its data-fdc annotations; the guide is ${STAGE_GUIDE}) so the voice can do it itself next time, reload the page, then do what they asked.`;
-// No page command did it, so the voice tool improvised: the page's controller is short of a command, which the agent adds.
-export const oneOffNote = (said: string, onScreen: string) =>
-  `No page command did this, so the voice tool did it in the browser with a one-off step ("${said.slice(0, 120)}"; on screen now: ${onScreen.replace(/\s+/g, ' ').slice(0, 200)}). Don't redo it: add a command for it to the page's controller (the guide is ${STAGE_GUIDE}), so the voice can do it directly next time.`;
-export const oneOffDone = ({ profile: { name } }: Agent, onScreen: string) =>
-  `The voice tool did it on the page with a one-off step. On screen now: ${onScreen.slice(0, 500)} ${name} gets the request too, to give the page a command for it. Tell the operator in a few words what they are looking at.`;
-export const improvisedFailedNote = (error: string) =>
-  `No page command fitted this, and the voice tool's one-off action on the page failed: ${error.slice(0, 300)}. Do what the user asked, and consider giving the page a command for it (the guide is ${STAGE_GUIDE}).`;
-export const pageDoneNote = (done: readonly { say: string }[]) =>
-  `The voice tool already did the page part of this in the browser (${steps(done)}); don't do that again, do the rest.`;
-export const pageFailedNote = (done: readonly { say: string }[], error: string, page?: { title: string; url: string }) =>
-  `The voice tool tried to do this on the page${page ? ` "${page.title.slice(0, 80)}" (${page.url})` : ''} in the browser (${steps(done)}) and the page's controls failed: ${error.slice(0, 400)}. Fix the page's controller (window.fdcController or its data-fdc annotations; the guide is ${STAGE_GUIDE}) so this works, reload the page, then do what the user asked.`;
+export const cueMovedNote = 'The voice assistant moved the page in the browser as it answered some of this; don\'t move or open pages for that again, but do anything else it asks.';
+export const cueFailedNote = (label: string, error: string, page?: { title: string; url: string }) =>
+  `The voice assistant turned the page${page ? ` "${page.title.slice(0, 80)}" (${page.url})` : ''} in the browser to "${label.slice(0, 80)}" and its controls failed: ${error.slice(0, 300)}. Fix the page's controller (window.fdcController or its data-fdc annotations; the guide is ${STAGE_GUIDE}) so this works, and reload the page.`;
 // Words the operator hadn't finished saying (turn.ts), sent once they had said nothing more for a while (mediator.ts).
 export const heldNote = (seconds: number) => `The user stopped partway through this and said nothing more for ${seconds} seconds, so it came to you then: it may be unfinished.`;
 export const uncertainNote = 'Some of it may have reached you already: its delivery was uncertain. Don\'t repeat work it already started.';

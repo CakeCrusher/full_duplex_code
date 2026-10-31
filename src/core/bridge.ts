@@ -82,7 +82,7 @@ export class Harness {
   ledger: UsageLedger; timeline: Timeline; outbox: Outbox; voiceSessions: VoiceSessions; endpoints: Endpoints;
   /** The page the agent last showed the operator, which the gate can move (stage.ts). */
   stage: Stage;
-  /** Shows the operator the stage in step with GPT Live: speech cues, the following ring, the gate's page requests. */
+  /** Moves the stage by what GPT Live says: speech cues, the words Jev matches to a command, the following ring. */
   presenter: Presenter;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
   constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides, jevTuning = false, store = true, stageFile }: HarnessOptions) {
@@ -103,7 +103,7 @@ export class Harness {
     if (jevKey) { this.jev = new Jev({ apiKey: jevKey, log: this.log }); this.handOffAudit = new DelegationAudit({ file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log }); }
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
     this.stage = new Stage({ log: this.log, file: stageFile, onChange: () => void this.voiceSessions?.briefStage() });
-    this.presenter = new Presenter(this, apiKey);
+    this.presenter = new Presenter(this);
     this.sessionSwitch = new SessionSwitch(this);
     this.voiceSessions = new VoiceSessions(this, { store });
     if (jevKey) this.learner = new InstructionLearner({ log: this.log,

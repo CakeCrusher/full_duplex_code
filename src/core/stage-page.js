@@ -81,21 +81,6 @@
     const body = el.matches(UNITS.heading) ? text(el) + (el.nextElementSibling ? ' — ' + text(el.nextElementSibling) : '') : text(el);
     return `${kind} ${section && section !== el ? `in "${text(section).slice(0, 80)}"` : ''}: ${body.slice(0, 600)}`.replace(/\s+/g, ' ');
   };
-  // The words a one-off found are marked themselves (CSS custom highlights), not only ringed with their block; the next
-  // command or one-off clears them.
-  const unmark = () => window.CSS?.highlights?.delete('fdc-find');
-  const mark = (el, want) => {
-    if (!window.CSS?.highlights || !window.Highlight || !want) return;
-    if (!document.getElementById('__fdc_mark')) { const style = document.createElement('style'); style.id = '__fdc_mark'; style.textContent = '::highlight(fdc-find) { background-color: rgba(255, 170, 0, .45); }'; document.head.appendChild(style); }
-    const ranges = [], walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      // Lowercasing can change a text's length (rare letters): such a node is skipped, so no range lands off its words.
-      const said = (node.textContent || '').toLowerCase();
-      if (said.length !== (node.textContent || '').length) continue;
-      for (let at = said.indexOf(want); at >= 0; at = said.indexOf(want, at + want.length)) { const range = new Range(); range.setStart(node, at); range.setEnd(node, at + want.length); ranges.push(range); }
-    }
-    if (ranges.length) CSS.highlights.set('fdc-find', new Highlight(...ranges));
-  };
   const go = async (el, block = 'center') => {
     if (!el) return null;
     // Where the viewer was, even before any move (the paragraph at the top of the view): back returns there.
@@ -257,18 +242,6 @@
       return typeof out === 'string' ? out : describe(current('paragraph'));
     } }));
   };
-  // For a one-off action (fdc's fallback when no command fits): what the viewer can act on, numbered,
-  // and what is on screen. Action code reaches element [n] as el(n).
-  const ACTABLE = 'button, a[href], input, select, textarea, summary, [role=tab], [role=button], [role=menuitem], [role=checkbox], [role=switch], [role=option], [onclick], [tabindex]:not([tabindex="-1"])';
-  const digest = () => {
-    const els = [...document.querySelectorAll(ACTABLE)].filter(el => visible(el) && !el.closest('#__fdc_ring')).slice(0, 80);
-    stage.indexed = els;
-    const state = el => [el.getAttribute('aria-selected') === 'true' && 'selected', el.getAttribute('aria-expanded') === 'true' && 'expanded', el.checked && 'checked', el.disabled && 'disabled', 'value' in el && el.value && el.tagName !== 'BUTTON' && `value "${String(el.value).slice(0, 30)}"`].filter(Boolean).join(', ');
-    const lines = els.map((el, i) => `[${i + 1}] ${el.getAttribute('role') || el.tagName.toLowerCase()}${el.type && el.tagName === 'INPUT' ? `(${el.type})` : ''} "${(text(el) || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('href') || '').slice(0, 60)}"${state(el) ? ` (${state(el)})` : ''}`);
-    const headings = units('heading').slice(0, 30).map(h => `${'#'.repeat(level(h))} ${text(h).slice(0, 80)}`);
-    const seen = [...document.querySelectorAll('p, li, td, figcaption, h1, h2, h3')].filter(el => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && visible(el); }).map(text).join(' ').slice(0, 1500);
-    return `Page "${document.title}" (${location.href}), scrolled ${Math.round(scrollY)} of ${Math.max(0, document.documentElement.scrollHeight - innerHeight)} px.\nWhere: ${window.fdcController?.where?.() ?? describe(current('paragraph'))}\nHeadings:\n${headings.join('\n')}\nInteractive elements:\n${lines.join('\n')}\nOn screen now: ${seen}`;
-  };
   // Following speech: the paragraph, item or row on screen that shares the most words with GPT Live's latest sentence.
   const STOP = new Set('the and for with that this you are was its from they their what when which into about there here have has not but all can will one our your let lets look now just then than also each more most very like some any out who how why where were been being these those them his her she him had would could should does did done get got make made over only both such same other'.split(' '));
   const stem = w => w.replace(/['’]s$/, '').replace(/(ings|ing|ed|es|s)$/, '');
@@ -304,72 +277,8 @@
   // The named place a page's answer is about: 'Slide 2 of 6: "Margins"' is where the command named "Margins" goes.
   const landed = text => { const title = /["“]([^"”]{2,80})["”]/.exec(String(text ?? ''))?.[1]; return title ? stage.commands().find(c => c.name === title && !RELATIVE.test(c.id))?.id : undefined; };
   const stage = window.__fdcStage = {
-    version: VERSION, history: [], trail: [], last: {}, at: null, ringOn: false, quiet: false, indexed: [], digest, follow: followSpeech,
-    /** For action code: element [n] of the last digest, showing an element (scroll and ring), waiting. */
-    el: n => { const el = stage.indexed[n - 1]; if (!el) throw new Error(`No element [${n}]`); return el; },
-    show: async el => { if (!el) throw new Error('Nothing to show'); return go(el); },
-    wait: ms => new Promise(resolve => setTimeout(resolve, Math.min(ms, 3000))),
+    version: VERSION, history: [], trail: [], last: {}, at: null, ringOn: false, quiet: false, follow: followSpeech,
     now: () => describe(stage.at?.isConnected ? stage.at : current('paragraph')),
-    /** A one-off's steps (fast-action.ts), carried out here: only these, and never a link to another site. */
-    async perform(actions) {
-      unmark();
-      for (const a of actions) {
-        if (a.do === 'click') {
-          const el = stage.el(a.n), link = el.closest('a[href]');
-          const away = url => new URL(url, location.href).origin !== location.origin;
-          if (link && away(link.href)) throw new Error(`Won't follow a link to another site (${new URL(link.href, location.href).host})`);
-          // A control that submits sends its form to its own address or the form's: never to another site.
-          // (Attributes, not formAction or action: those fall back to this page's address when unset.)
-          const submitter = el.closest('button:not([type=button]):not([type=reset]), input[type=submit], input[type=image]');
-          if (submitter?.form && away(submitter.getAttribute('formaction') || submitter.form.getAttribute('action') || location.href)) throw new Error("Won't send a form to another site");
-          // SVG controls have no click(): a click event does it.
-          if (typeof el.click === 'function') el.click(); else el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-          await new Promise(r => setTimeout(r, 120));
-        } else if (a.do === 'show') await go(stage.el(a.n));
-        else if (a.do === 'find') {
-          // Every word, anywhere in it: "Q4 42%" is a row whose cells say Q4 and 42%. The exact phrase first.
-          const want = String(a.text).toLowerCase().replace(/\s+/g, ' ').trim(), words = want.split(' ').filter(Boolean);
-          const flat = el => (el.textContent || '').toLowerCase().replace(/\s+/g, ' ');
-          const candidates = [...document.querySelectorAll('body *')].filter(el => !el.closest('#__fdc_ring'));
-          // Every ancestor of a match matches too: keep the ones with no matching child (one pass, not pairs). The exact
-          // phrase is looked for on its own, so a child with every word ("gpt-live-1") doesn't hide its cell ("GPT Live").
-          // Words scattered over a whole section don't count: nothing far longer than what was asked for.
-          const short = el => flat(el).length <= Math.max(400, want.length * 20);
-          const smallest = says => { const all = candidates.filter(el => says(flat(el))), matched = new Set(all); return all.filter(el => ![...el.children].some(c => matched.has(c)) && visible(el) && short(el)); };
-          let hits = smallest(t => t.includes(want));
-          if (!hits.length) hits = smallest(t => words.every(w => t.includes(w)));
-          if (!hits.length) throw new Error(`Nothing on the page says "${a.text}"`);
-          // The kind of thing the operator named ("the Gemini row"), when one says it, over the first mention.
-          const kind = { row: 'tr, [role=row]', item: 'li, [role=listitem]', cell: 'td, th, [role=cell]', heading: 'h1, h2, h3, h4, h5, h6, [role=heading]', paragraph: 'p, dd, blockquote, figcaption' }[a.in];
-          // Near where the viewer is first: "now the GPT Live row", after the Gemini row, is in the same table.
-          const box = stage.at?.isConnected ? stage.at.closest('table, ul, ol, section, article') : null;
-          const near = list => box ? [...list.filter(el => box.contains(el)), ...list.filter(el => !box.contains(el))] : list;
-          // The text right under a heading or label ("the explanation under the DNS lookup"): the label itself is the
-          // short match, and what it labels is the next block with text after it, or after its container. Words found
-          // only inside text ("certificate") are that text itself.
-          const labels = a.in === 'under' ? hits.filter(el => el.closest(UNITS.heading) || flat(el).length <= want.length + 40) : [];
-          if (labels.length) {
-            const label = near(labels)[0];
-            let block = null;
-            for (let node = label.closest(UNITS.heading) ?? label; node && node !== document.body && !block; node = node.parentElement) {
-              for (let next = node.nextElementSibling; next && !block; next = next.nextElementSibling) if (visible(next) && flat(next).trim().length > 15) block = next;
-            }
-            await go(block ?? label);
-          } else {
-            const named = kind ? near(hits.map(el => el.closest(kind)).filter(Boolean)) : [], first = near(hits)[0];
-            const target = named[0] ?? first.closest('tr, li, p, td, dd, figcaption, h1, h2, h3, h4, button') ?? first;
-            await go(target);
-            mark(target, want);
-          }
-        } else if (a.do === 'scroll') {
-          if (a.to === 'top' || a.to === 'bottom') scrollTo({ top: a.to === 'top' ? 0 : document.documentElement.scrollHeight, behavior: 'smooth' });
-          else scrollBy({ top: (a.to === 'down' ? 1 : -1) * innerHeight * 0.6, behavior: 'smooth' });
-          await new Promise(r => setTimeout(r, 450));
-        } else if (a.do === 'wait') await new Promise(r => setTimeout(r, Math.min(3000, Number(a.ms) || 0)));
-        else throw new Error(`Unknown page step ${a.do}`);
-      }
-      return stage.now();
-    },
     commands: () => [...page(), ...base()],
     describe() {
       const c = window.fdcController;
@@ -384,7 +293,6 @@
     async run(id, { again = false } = {}) {
       const command = stage.commands().find(c => c.id === id);
       if (!command) throw new Error(`No command "${id}" on this page`);
-      unmark();
       stage.quiet = id === 'clear_highlight';
       // Where the viewer starts, when the page names it, is the first place back can return to.
       if (!stage.trail.length && id !== 'back') { let start; try { start = landed(window.fdcController?.where?.()); } catch {} if (start) stage.trail.push(start); }

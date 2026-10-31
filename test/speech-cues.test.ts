@@ -22,7 +22,6 @@ test("cues: the page's own names first, then section and annotation names, and a
   assert.deepEqual(cues.filter(c => c.listed).map(c => `${c.run}:${c.words.join(' ')}`), [
     'page_slide_2:margins', 'page_slide_3:highlighting after a move', 'goto_sessions:sessions', 'goto_system_map:system map', 'goto_map:map', 'show_my_recommendation:recommendation'], 'the names the voice is told');
   assert.deepEqual(cues.filter(c => !c.listed).map(c => `${c.run}:${c.label}`), ['page_slide_3:after a move'], 'the title alone, not told');
-  assert.equal(Stage.next(view), 'page_next_slide', "the page's own next step, for pacing a walkthrough");
   assert.deepEqual(cueWords("The Options!"), ['options']);
 });
 
@@ -35,7 +34,7 @@ test('a name moves the page only after a turning phrase, once, as soon as its la
   assert.deepEqual(spoken(m, [' and', ' the', ' sessions', ' again.']), [], 'the same cue does not fire again for later words');
   assert.deepEqual(spoken(m, [" Let's", ' go', ' back', ' to', ' the', ' system', ' map.']), ['goto_system_map'], 'the longer name wins');
   assert.deepEqual(spoken(m, [' Claude', ' will', ' look', ' at', ' the', ' sessions', ' code', ' next.']), [], "relaying the agent's work moves nothing");
-  assert.deepEqual(spoken(m, [" Let's", ' go', ' to', ' the', ' next', ' slide.']), [], "next and back are the operator's to ask: the voice tool takes them from their words");
+  assert.deepEqual(spoken(m, [" Let's", ' go', ' to', ' the', ' next', ' slide.']), [], "next and back are no names: Jev finds the page's step (presenter.ts)");
   assert.deepEqual(spoken(m, [" Let's", ' look', ' at', ' after', ' a', ' move.']), ['page_slide_3'], "a titled name's title alone");
   assert.deepEqual(spoken(m, [' Okay,', ' now', " we're", ' on', ' the', ' system', ' map.']), ['goto_system_map'], "now we're on");
   assert.deepEqual(spoken(m, [' In', ' your', ' words,', " “let's", ' look', ' at', ' the', ' system', ' map”.']), [], 'quoting the page or the operator moves nothing');
@@ -69,22 +68,48 @@ test("the operator's latest words that the voice answered by moving the page are
   assert.deepEqual(next.notes, ['moved'], 'though the note still goes with the earlier words');
 });
 
-test('the turn moves nothing again for words the voice moved the page for; only the page asked for, nothing goes to the agent', async t => {
-  const { harness, fakeJev, pageReading, turn } = await import('./live-fake.ts');
-  const { h } = await harness(t);
+test("the voice moves the page: a part's name at once, other turning words through Jev, and never the operator's words", async t => {
+  const { harness, page, until, fakeJev, pageReading, turn } = await import('./live-fake.ts');
+  const { h, lives } = await harness(t);
   const runs: string[][] = [];
-  let page = pageReading({ command: 'goto_sessions', only: .9 });
-  h.stage = { describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; }, view, observe() {}, close() {} } as any;
-  // The job delegation finds work only where they ask for some.
-  fakeJev(h, moment => moment.trigger === 'job' ? { needsAgent: /fix/.test(moment.latest!.text) ? .9 : .2 } : { sessions: { asked: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: moment.trigger === 'step' ? pageReading() : page });
-  const only = await turn(h, 'take me to the sessions', { cued: true });
-  assert.equal(only.send, false);
-  page = pageReading({ command: 'goto_sessions', only: .1 });
-  const more = await turn(h, 'show me the sessions and fix the typo', { cued: true });
-  assert.equal(more.send, true);
-  assert.deepEqual(runs, [], 'nothing ran twice');
+  h.stage = { tabId: 1, view, pages: new Map(), describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: `at ${ids[0]}` }; }, follow: async () => null, observe() {}, close() {} } as any;
+  const moments = fakeJev(h, m => m.trigger === 'cue' ? { page: pageReading({ command: 'page_next_slide' }) } : m.trigger === 'job' ? { needsAgent: .1 } : {});
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  h.presenter.speechCues.set(Stage.cues(view));
   await turn(h, 'take me to the sessions');
-  assert.deepEqual(runs, [['goto_sessions']], 'without a cue, the turn moves the page');
+  assert.deepEqual(runs, [], "the operator's words move nothing");
+  h.presenter.heard(" Let's look at the sessions.");
+  await until(() => runs.length === 1);
+  assert.deepEqual(runs[0], ['goto_sessions']);
+  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /You moved the page; on screen now: at goto_sessions/.test(text)));
+  h.presenter.heard(" Let's go to the next slide.");
+  await until(() => runs.length === 2);
+  assert.deepEqual(runs[1], ['page_next_slide'], 'no name: Jev finds the command for what the voice meant');
+  assert.ok(moments.some(m => m.trigger === 'cue' && /next slide/.test(m.latest!.text)));
+  h.presenter.heard(" Let's move on to the next one.");
+  await until(() => runs.length === 3);
+});
+
+test("where the voice turns and the page can't go: its answer is the voice's to hear, a failure goes to the agent with the operator's words, and nothing found is said", async t => {
+  const { harness, page, until, fakeJev, pageReading } = await import('./live-fake.ts');
+  const { StageNothing } = await import('../src/core/stage.ts');
+  const { h, lives } = await harness(t);
+  let fail: Error | undefined;
+  h.stage = { tabId: 1, view, pages: new Map(), describe: async () => view, run: async () => { if (fail) throw fail; return { done: [], onScreen: '' }; }, follow: async () => null, observe() {}, close() {} } as any;
+  fakeJev(h, m => m.trigger === 'cue' ? { page: pageReading(/error bars/.test(m.latest!.text) ? {} : { command: 'page_next_slide' }) } : {});
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  h.presenter.speechCues.set(Stage.cues(view));
+  const thinking = () => lives[0].appended.filter(([kind]) => kind === 'thinking').map(([, text]) => text).join('\n');
+  fail = new StageNothing('Already on the last slide', [], '', { id: 'page_next_slide', say: 'Go to the next slide' });
+  h.presenter.heard(" Let's go to the next slide.");
+  await until(() => /The page didn't move: "Already on the last slide"/.test(thinking()));
+  h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: 'Show me the margins.', start_ms: 0, end_ms: 800 });
+  fail = new Error('fdcController.run: no element #m');
+  h.presenter.heard(" Let's look at Margins.");
+  await until(() => h.voiceSessions.mediator!.history.request()?.notes?.some(note => /controls failed: fdcController\.run: no element #m\. Fix the page's controller/.test(note)));
+  fail = undefined;
+  h.presenter.heard(" Let's look at the error bars.");
+  await until(() => /The page has nothing for "the error bars"; it didn't move\./.test(thinking()));
 });
 
 test("GPT Live is briefed on the page once it can be read: a new tab's blank page is read again shortly", async t => {
@@ -98,113 +123,4 @@ test("GPT Live is briefed on the page once it can be read: a new tab's blank pag
   await new Promise(resolve => setTimeout(resolve, 1700));
   assert.ok(lives[0].appended.some(([kind, text]) => kind === 'thinking' && /The page open beside the operator now \(this replaces any page you were told about before\): "Deck"/.test(text)), 'briefed on the second read');
   assert.ok(reads >= 2);
-});
-
-test('a walkthrough asked for: the first part shows, and each time the voice finishes one and goes quiet, the page moves on; the operator speaking ends it', async t => {
-  const { harness, page, until } = await import('./live-fake.ts');
-  const { h, lives } = await harness(t);
-  await h.voiceSessions.start('sdp', page('p'), 'fresh');
-  let slide = 3; const runs: string[][] = [];
-  const deck = (): StageView => ({ ...view, where: `Slide ${slide} of 5`, commands: [{ id: 'page_next', say: 'Go to the next slide' }, { id: 'page_slide_3', say: 'Go to slide 3', name: 'Margins' }] });
-  h.stage = { describe: async () => deck(), run: async (ids: string[]) => { runs.push(ids); if (ids[0] === 'page_next' && slide < 5) slide++; return { done: [], onScreen: `Slide ${slide} of 5` }; }, follow: async () => null, view: deck(), observe() {}, close() {} } as any;
-  const { fakeJev, pageReading } = await import('./live-fake.ts');
-  fakeJev(h, moment => moment.trigger === 'job' ? { needsAgent: .1 } : { sessions: { asked: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0, page: pageReading({ command: 'page_slide_3', only: .8, walk: .9 }) });
-  h.presenter.walkQuietMs = 50;
-  const { turn } = await import('./live-fake.ts');
-  const walked = await turn(h, 'walk me through the rest');
-  assert.deepEqual([walked.send, walked.moved], [false, true]);
-  await until(() => lives[0].appended.some(([kind, text]) => kind === 'commentary' && /The operator asked to be walked through the page, and the voice tool paces it.*Slide 3 of 5.*Present this part/.test(text)));
-  assert.deepEqual(runs, [['page_slide_3']]);
-  const commentary = () => lives[0].appended.filter(([kind, text]) => kind === 'commentary' && /The page moved on/.test(text)).map(([, text]) => text);
-  await new Promise(resolve => setTimeout(resolve, 700));
-  assert.deepEqual(runs, [['page_slide_3']], 'nothing moves before the voice has presented the part');
-  h.presenter.heard('Margins are up three points. ');
-  await until(() => commentary().length === 1);
-  assert.match(commentary()[0], /Slide 4 of 5.*Present it in a few sentences/);
-  h.presenter.heard('Costs fell. ');
-  await until(() => commentary().length === 2);
-  h.presenter.heard('That is the last one. ');
-  await until(() => !h.presenter.walking);
-  assert.equal(slide, 5); assert.equal(commentary().length, 2, 'the last part ends it: a step that goes nowhere is not presented');
-  // Asked again, and the operator speaks up meanwhile: it stops.
-  slide = 3; await turn(h, 'walk me through the rest');
-  h.voiceSessions.mediator!.history.lastInputAt = Date.now() + 10000;
-  await until(() => !h.presenter.walking);
-});
-
-test("the operator's words are read once when they finish, and the page moves for them, whatever the voice says or passes on", async t => {
-  const { harness, page, until, fakeJev, pageReading } = await import('./live-fake.ts');
-  const { h, lives } = await harness(t);
-  // Jev is there before voice starts, as it is when fdc starts with a TypeSafe key.
-  fakeJev(h);
-  await h.voiceSessions.start('sdp', page('p'), 'fresh');
-  const runs: string[][] = [], judged: string[] = [];
-  const deck: StageView = { ...view, where: 'Slide 24', commands: [{ id: 'page_next', say: 'Go to the next slide' }, { id: 'page_slide_27', say: 'Go to slide 27', name: 'One highlight at a time' }] };
-  h.stage = { tabId: 1, view: deck, describe: async () => deck, run: async (ids: string[]) => { runs.push(ids); return { done: [{ id: ids[0], say: 'Go to the next slide' }], onScreen: 'Slide 25: Moving the page by voice' }; }, follow: async () => null, observe() {}, close() {} } as any;
-  const read = { sessions: { asked: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 };
-  fakeJev(h, ({ trigger, latest }) => {
-    if (trigger === 'step') return { page: pageReading() };
-    if (trigger === 'job') return { needsAgent: .3 };
-    const said = latest!.text; judged.push(said);
-    return { ...read, page: /continue/i.test(said) ? pageReading({ command: 'page_next', only: .7, walk: .2 }) : pageReading({ only: .1 }) };
-  });
-  h.voiceSessions.mediator!.operatorQuietMs = 30;
-  h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: "Okay, let's continue.", start_ms: 0, end_ms: 900 });
-  await until(() => runs.length === 1);
-  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /The voice tool moved the page for the operator's words.*Slide 25/.test(text)));
-  // The voice then answers, naming the slide it wrongly thinks comes next, and asks to pass the words on too.
-  h.voiceSessions.live!.emit('event', { type: 'session.output_transcript.delta', delta: " Let's look at one highlight at a time. " });
-  h.voiceSessions.live!.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' } });
-  await until(() => lives[0].appended.some(([kind, text]) => kind === 'thinking' && /already moved the page for them/.test(text)));
-  assert.deepEqual(runs, [['page_next']], "one move, once: not again for GPT Live's asking, nor for the voice's words in that answer");
-  assert.equal(judged.filter(said => /continue/.test(said)).length, 1, 'read once: GPT Live asking hears what came of the same reading');
-  // Words that ask nothing of the page move nothing.
-  h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: 'Fix the parser.', start_ms: 5000, end_ms: 6000 });
-  await until(() => judged.includes('Fix the parser.'));
-  assert.equal(runs.length, 1);
-});
-
-test("the operator's words come first: a part's last step goes on to the next section, a backchannel doesn't end their turn, and a complaint the page can't answer reaches the agent", async t => {
-  const { harness, page, until, fakeJev, pageReading } = await import('./live-fake.ts');
-  const wait = <T>(label: string, check: () => T) => until(check).catch(error => { throw new Error(`${label}: ${error.message}`); });
-  const { h, lives } = await harness(t);
-  fakeJev(h);
-  await h.voiceSessions.start('sdp', page('p'), 'fresh');
-  const runs: string[][] = [], judged: string[] = [];
-  const box: StageView = { ...view, where: 'Step 3 of 3', commands: [{ id: 'page_next_step', say: 'Next step in the box' }, { id: 'next_section', say: 'Go to the next section' }] };
-  const { StageNothing } = await import('../src/core/stage.ts');
-  h.stage = { tabId: 1, view: box, describe: async () => box, run: async (ids: string[]) => {
-    runs.push(ids);
-    if (ids[0] === 'page_next_step') throw new StageNothing('Already on the last step', [], '', { id: 'page_next_step', say: 'Next step in the box' });
-    return { done: [{ id: ids[0], say: 'Go to the next section' }], onScreen: 'Section 4. Your code owns the workflow' };
-  }, follow: async () => null, observe() {}, close() {} } as any;
-  const read = { sessions: { asked: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 };
-  const delivered: any[] = [];
-  h.deliver = (request: any) => { delivered.push(request); };
-  fakeJev(h, ({ trigger, latest }) => {
-    if (trigger === 'step') return { page: pageReading() };
-    const said = latest!.text;
-    // The job delegation: a complaint about the page needs the agent.
-    if (trigger === 'job') return { needsAgent: /wrong/.test(said) ? .9 : .1, ready: .9 };
-    judged.push(said);
-    return { ...read, page: /next/i.test(said) ? pageReading({ command: 'page_next_step', only: .8, walk: .1 }) : /wrong/.test(said) ? pageReading({ only: .8 }) : pageReading({ only: .1 }) };
-  });
-  h.voiceSessions.mediator!.operatorQuietMs = 60000;
-  const live = h.voiceSessions.live!;
-  live.emit('event', { type: 'session.input_transcript.delta', delta: "We're continuing, next", start_ms: 0, end_ms: 900 });
-  // GPT Live's "Mm-hmm" while they pause isn't an answer: nothing is judged yet.
-  live.emit('event', { type: 'session.output_transcript.delta', delta: ' Mm-hmm.' });
-  await new Promise(resolve => setTimeout(resolve, 30));
-  assert.deepEqual(judged, [], 'a backchannel is not the end of their turn');
-  live.emit('event', { type: 'session.output_transcript.delta', delta: ' Sure, moving on. ' });
-  await wait('the move', () => runs.length === 2);
-  assert.deepEqual(runs, [['page_next_step'], ['next_section']], 'the last step of a part goes on to the next section');
-  // Told quietly, or aloud when it was already answering as the page moved.
-  await wait('the note', () => lives[0].appended.some(([kind, text]) => (kind === 'thinking' && /moved the page for the operator's words.*Section 4/.test(text)) || (kind === 'commentary' && /The page now shows: Section 4/.test(text))));
-  // A complaint about the page that no command answers: the job delegation sends their words to the agent, to extend the
-  // page's controller.
-  await new Promise(resolve => setTimeout(resolve, 1600));
-  live.emit('event', { type: 'session.input_transcript.delta', delta: 'You keep going to the wrong section.', start_ms: 5000, end_ms: 6000 });
-  live.emit('event', { type: 'session.output_transcript.delta', delta: " I'm sorry about that. " });
-  await wait('the complaint', () => delivered.some(r => /wrong section/.test(r.content) && /asked the page .* for something its controls don't do/.test(r.content)));
 });

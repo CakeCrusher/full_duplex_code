@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 
 /** What came of the operator's words: passed on (by Jev, or by GPT Live without it), kept from the harness, sent when voice ended, or sent because the page couldn't do what they meant. */
-export type HandOff = 'passed' | 'kept' | 'answered' | 'escalated' | 'held';
+export type HandOff = 'passed' | 'kept' | 'answered' | 'held';
 
 export class DelegationAudit {
   file: string;

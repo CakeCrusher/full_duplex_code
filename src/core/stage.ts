@@ -1,13 +1,12 @@
 // The stage: the page the coding agent last showed the operator in the browser. fdc runs the
 // stage script there (stage-page.js) through its own connection to Open Claude in Chrome, so
-// the gate can move the page, highlight and read it without the agent.
+// what GPT Live says can move the page, highlight and read it without the agent (presenter.ts).
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { Observation } from './adapter.ts';
 import { Browser } from './browser.ts';
 import { cueWords, type SpeechCue } from './speech-cues.ts';
-import type { PageAction } from './fast-action.ts';
 
 const RAW = fs.readFileSync(new URL('./stage-page.js', import.meta.url), 'utf8');
 // A page keeps the script it was given until the script changes: its version is its content's hash.
@@ -161,32 +160,6 @@ export class Stage {
       if (title !== command.name && cueWords(title).length >= 2) cues.push({ run: command.id, label: title, words: cueWords(title) });
     }
     return cues;
-  }
-  /** The page's own step to its next part (a deck's next slide), or the next section. */
-  static next(view: StageView) {
-    return view.commands.find(c => c.id.startsWith('page_') && /(^|_)(next|forward)(_|$)/.test(c.id))?.id ?? ['next_slide', 'next_section'].find(id => view.commands.some(c => c.id === id));
-  }
-  /** What the viewer can act on, numbered, and what is on screen: for a one-off action. */
-  async digest(): Promise<string> {
-    if (!this.tabId) throw new Error('No page is on the stage');
-    return this.browser.evaluate<string>(this.tabId, `${SCRIPT}\n;window.__fdcStage.digest()`, 5000);
-  }
-  /** Carries out a one-off's steps (fast-action.ts) in the page; resolves to what is on screen. */
-  async act(actions: PageAction[]): Promise<string> {
-    if (!this.tabId) throw new Error('No page is on the stage');
-    const started = Date.now();
-    let out: string;
-    // The steps' own waits (3 s at most, fast-action.ts) and 5 s for the rest.
-    const waits = actions.reduce((sum, a) => sum + (a.do === 'wait' ? a.ms : 0), 0);
-    try { out = await this.browser.evaluate<string>(this.tabId, `${SCRIPT}\n;window.__fdcStage.perform(${JSON.stringify(actions)})`, 5000 + waits); }
-    catch (error) {
-      // A click that opened another page of this site ends the old page's script: done, not failed.
-      if (!/context was destroyed|navigated|Cannot find context|Execution context/i.test((error as Error).message)) throw error;
-      out = 'The page opened another page of this site.';
-    }
-    this.viewAt = 0;
-    this.log({ type: 'stage.acted', tabId: this.tabId, actions, ms: Date.now() - started });
-    return out;
   }
   /** Moves the ring to what GPT Live's sentence is about, among what is on screen; resolves to it, or null. */
   async follow(sentence: string): Promise<{ on: string; score: number } | null> {

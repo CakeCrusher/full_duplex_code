@@ -21,8 +21,8 @@ test("two calls over the same state that ask different questions: the job delega
   assert.match(bodies[0].state.page_commands, /^- Go to the next section\n- Go to the section "Options"$/);
   assert.match(bodies[0].state.why, /the voice companion has replied/);
   assert.ok(!('needs_agent' in bodies[1].questions), "the voice tool's own reading never asks whether the words go to the agent");
-  assert.ok('page_command' in bodies[1].questions && 'companion_only' in bodies[1].questions && 'standby' in bodies[1].questions);
-  assert.ok(!('page_work' in bodies[1].questions) && !('page_unhappy' in bodies[1].questions), 'what the page falls short of is the job delegation\'s');
+  assert.ok('companion_only' in bodies[1].questions && 'standby' in bodies[1].questions);
+  assert.ok(!('page_command' in bodies[1].questions), "the operator's words never move the page: only the voice's do");
   assert.equal(bodies[1].state.voice_reply, undefined);
   assert.deepEqual([job.needsAgent, job.ready, own.needsAgent], [.8, .6, null]);
   const silent = await jev.read({ trigger: 'job', latest });
@@ -31,7 +31,7 @@ test("two calls over the same state that ask different questions: the job delega
   assert.equal(silent.needsAgent, .8);
 });
 
-test("the job delegation decides once the voice has said its first sentence, and reads what it said; the page moves before", async t => {
+test("the job delegation decides once the voice has said its first sentence, and reads what it said", async t => {
   const { h } = await harness(t);
   const moments = fakeJev(h, m => m.trigger === 'job' ? { needsAgent: /don't know/.test(m.reply ?? '') ? .9 : .1, ready: .9 } : { page: pageReading() });
   stage(h);
@@ -73,34 +73,36 @@ test('with no reply, the job delegation reads after a short wait; a word of the 
   await until(() => moments.filter(m => m.trigger === 'job').length >= 2);
 });
 
-test("words about the page that no command does reach the agent to extend the page's controller", async t => {
+test("with a page open, the job delegation knows what its controls can do, and the agent hears what the user was looking at; the page itself doesn't move", async t => {
   const { h } = await harness(t);
   stage(h);
-  fakeJev(h, m => m.trigger === 'job' ? { needsAgent: .9 } : { page: pageReading({ only: .8 }) });
+  const runs: string[][] = []; h.stage.run = async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; };
+  const moments = fakeJev(h, m => m.trigger === 'job' ? { needsAgent: .9, ready: .9 } : {});
   const decided = await turn(h, 'Show me the error bars on that chart.');
   assert.equal(decided.send, true);
-  assert.match(decided.note!, /asked the page "Briefing" \(http:\/\/localhost\/b\.html\) in the browser for something its controls don't do.*improve the page's controller/);
-  // The page moved for words the job delegation also sends: the agent hears the page part is done.
-  fakeJev(h, m => m.trigger === 'job' ? { needsAgent: .9 } : m.trigger === 'step' ? { page: pageReading() } : { page: pageReading({ command: 'goto_options', only: .3 }) });
-  h.stage.run = async () => ({ done: [view.commands[1]], onScreen: 'Options' }) as any;
-  const both = await turn(h, 'Go to the options and fix the typo there.');
-  assert.match(both.note!, /already did the page part of this in the browser/);
+  assert.match(decided.note!, /^When they said it, the user was looking at "Briefing" \(http:\/\/localhost\/b\.html\) in the browser, at: section "Intro"\.$/);
+  assert.equal(moments.find(m => m.trigger === 'job')!.page, view, "the job delegation reads the page's commands: what they can't do goes to the agent, to add");
+  assert.equal(moments.find(m => m.trigger === 'turn')!.page, undefined);
+  assert.deepEqual(runs, []);
 });
 
-test("the voice answers from what it was told and general knowledge, says when it doesn't know, and says work is the agent's", () => {
+test("the voice answers what it can with moderate confidence, asks when in doubt, and leaves to the agent only what it can't do", () => {
   const text = liveInstructions(claude, { jev: true });
-  assert.match(text, /What you can answer: only what you were told \(this conversation, Claude's work you were told about, the page\) and general knowledge\. When the answer is in neither, say plainly that you don't know and that Claude would have to check: never guess\./);
-  assert.match(text, /When the operator's words are unclear, ask one short question instead of answering\./);
-  assert.doesNotMatch(liveInstructions(claude), /What you can answer/, 'without Jev, GPT Live delegates as before');
+  assert.match(text, /Answer whatever you can with moderate confidence, from what you know and what you were told: this conversation, Claude's work, the page\. When in doubt about what the operator means, ask\. Only a request that is fully stated and that you can't do yourself is Claude's\./);
+  assert.doesNotMatch(text, /never guess|would have to check|What you can answer/, 'no script for not knowing: it leaned on the agent');
+  assert.match(liveInstructions(claude), /You can answer, with moderate confidence/, 'without Jev, the same principle in its delegation policy');
 });
 
-test("GPT Live is told what the page's controls can do besides going to its parts, and says what the page can't do yet", () => {
+test("the voice moves the page with its own words and leans toward showing; how is its own judgment", () => {
   const state = pageState({ title: 'Briefing', names: ['Intro', 'Options'], others: [], parts: [], where: 'section "Intro"', controls: ['Show the error bars', 'Switch to the table view'] });
   assert.match(state, /Its parts, by name: Intro, Options\. Besides showing its parts, its controls can: Show the error bars; Switch to the table view\./);
   assert.doesNotMatch(pageState({ title: 'Briefing', names: ['Intro'], others: [], parts: [], where: '' }), /controls/);
-  const text = liveInstructions(claude, { jev: true });
-  assert.match(text, /you are told its name, its parts, what its controls can do and where they are looking/);
-  assert.match(text, /say in a few words that the page can't do that yet and that Claude will add it/);
-  assert.match(text, /say "let's look at" and a part's name/, 'the voice still moves the page as it talks');
-  assert.doesNotMatch(liveInstructions(claude), /can't do that yet/, 'without Jev, GPT Live passes the request on');
+  for (const text of [liveInstructions(claude, { jev: true }), liveInstructions(claude)]) {
+    assert.match(text, /You move it with your words: say "let's look at" and a part's name/);
+    assert.match(text, /Lean toward showing: whenever the conversation touches something the page covers, present it there\./);
+    assert.match(text, /Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants\./);
+    assert.doesNotMatch(text, /moves with the operator's words|follows their own words|Never start presenting|next part follows by itself|say so in a few words|commands, cues or controls/, "no operator page control, no script for after a move");
+    assert.doesNotMatch(text, /can't change any file, page or setting/, 'the voice does move the page');
+  }
+  assert.match(liveInstructions(claude, { jev: true }), /or what a control shows, and the page goes there/);
 });

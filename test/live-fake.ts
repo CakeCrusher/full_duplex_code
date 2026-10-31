@@ -103,8 +103,8 @@ export async function harness(t: TestContext, extra: Record<string, unknown> = {
 export const learn = (h: Harness, text: string) => h.voiceSessions.learn({ text, scope: 'session', behave: .9, design: .1, lasting: 'this_session' });
 export const disregarded = (live: Live, id: string) => live.appended.some(([kind, text]) => kind === 'instructions' && text.startsWith(`Disregard instruction ${id}`));
 
-/** A page judgment as Jev would give it: nothing asked unless the test says so. */
-export const pageReading = (page: Partial<PageJudgment> = {}): PageJudgment => ({ only: 0, other: 0, walk: 0, ...page });
+/** A page judgment as Jev would give it for the voice's words: no command unless the test says so. */
+export const pageReading = (page: Partial<PageJudgment> = {}): PageJudgment => ({ ...page });
 /** A stand-in for Jev (jev.ts): the test's reading of each moment; returns every moment it was asked about. */
 export function fakeJev(h: Harness, reading: (moment: Moment) => Partial<Reading> = () => ({})) {
   const moments: Moment[] = [];
@@ -119,7 +119,7 @@ export const turn = (h: Harness, said: string, { why = 'turn', cued }: { why?: T
 export const decides = (decide: (request: SpokenRequest, spoken: Spoken[], why: Trigger) => Promise<Decision>): Route => {
   const made = new Map<SpokenRequest, Decision>();
   return {
-    actions: async (request, spoken, why) => { const d = await decide(request, spoken, why); made.set(request, d); return { reading: d.actions?.reading, told: d.told, note: d.note, keptNote: d.send ? undefined : d.note, moved: d.moved, escalated: d.escalated }; },
+    actions: async (request, spoken, why) => { const d = await decide(request, spoken, why); made.set(request, d); return { reading: d.actions?.reading, told: d.told, note: d.note, keptNote: d.send ? undefined : d.note }; },
     job: async request => { const { told, ...d } = made.get(request)!; return d; },
   };
 };
