@@ -4,7 +4,7 @@
 // conversation Jev read: what was kept is where lost work would show. It only records.
 import fs from 'node:fs';
 
-/** What came of the operator's words: passed on (by Jev, or by GPT Live without it), kept from the harness, sent when voice ended, or sent because the page couldn't do what they meant. */
+/** What came of the operator's words: passed on (by Jev, or by GPT Live without it), kept from the harness, sent when voice ended, or sent once the operator, having stopped partway, stayed quiet (held). */
 export type HandOff = 'passed' | 'kept' | 'answered' | 'held';
 
 export class DelegationAudit {
