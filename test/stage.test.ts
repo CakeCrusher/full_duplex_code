@@ -266,3 +266,24 @@ test('the page on stage is remembered across restarts of fdc, and forgotten once
   assert.equal(again.tabId, undefined, 'its tab closed meanwhile: no stage');
   assert.equal(new Stage({ log: () => {}, file }).tabId, undefined, 'and the next start knows it');
 });
+
+test('the other pages the agent showed are remembered too, for a week; on restart only those still open are offered', async () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'fd-stage-')), 'stage', 'x.json');
+  const read = (tabId: number) => ({ title: `Page ${tabId}`, url: `http://localhost/${tabId}.html`, about: null, where: 'top', commands: [], parts: [] });
+  const browser = (open: number[]) => ({ evaluate: async (tabId: number) => read(tabId), tabs: async () => open.map(tabId => ({ tabId, title: '', url: '' })), close() {} }) as any;
+  const first = new Stage({ log: () => {}, browser: browser([41, 42, 43]), file });
+  for (const tabId of [41, 42, 43]) { first.observe(posted('mcp__open-claude-in-chrome-hybrid__navigate', { url: `http://localhost/${tabId}.html`, tabId })); await first.describe(0); }
+  assert.deepEqual([...first.pages.keys()], [41, 42, 43]);
+  // fdc restarts; meanwhile the operator closed the first page's tab.
+  const again = new Stage({ log: () => {}, browser: browser([42, 43]), file });
+  assert.equal(again.tabId, 43);
+  const view = await again.describe(0);
+  assert.deepEqual([...again.pages.keys()], [42, 43], 'the closed tab is no page to switch back to');
+  assert.deepEqual(view!.commands.filter(c => c.id.startsWith('tab_')).map(c => c.id), ['tab_42'], 'the voice can switch back to the page still open');
+  // Three days later the page is still picked up; after more than a week it is not.
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  fs.writeFileSync(file, JSON.stringify({ ...saved, at: Date.now() - 3 * 86400000 }));
+  assert.equal(new Stage({ log: () => {}, file }).tabId, 43);
+  fs.writeFileSync(file, JSON.stringify({ ...saved, at: Date.now() - 8 * 86400000 }));
+  assert.equal(new Stage({ log: () => {}, file }).tabId, undefined);
+});

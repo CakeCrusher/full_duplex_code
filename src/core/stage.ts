@@ -14,6 +14,8 @@ const RAW = fs.readFileSync(new URL('./stage-page.js', import.meta.url), 'utf8')
 const SCRIPT = RAW.replace('__FDC_STAGE_VERSION__', createHash('sha1').update(RAW).digest('hex').slice(0, 12));
 /** A pause between the steps of a sequence, so each one is seen ("the DNS lookup, then the response"). */
 export const STEP_DWELL_MS = 1000;
+/** How long the stage is remembered across restarts of fdc. */
+export const REMEMBERED_MS = 7 * 24 * 60 * 60 * 1000;
 /** Browser tools that show a tab to the operator: the tab they act on becomes the stage. */
 const SHOWS = /chrome[\w-]*__(navigate|set_tab_focus|tabs_create_mcp|execute_code)$/;
 
@@ -38,19 +40,31 @@ export class Stage {
   pages = new Map<number, { title: string; url: string; about: string | null }>();
   /** The stage moved to another tab. */
   onChange?: () => void;
-  /** Where the tab on stage is remembered across restarts of fdc (a day at most); describe() drops it if it is gone. */
+  /**
+   * Where the tab on stage and the other pages the agent showed are remembered across restarts of fdc, for a week: a
+   * conversation resumed the next day lost its page with a day's limit. A remembered tab that is gone (closed, or Chrome
+   * restarted) is dropped when it is first read (describe).
+   */
   file?: string;
+  /** Pages remembered from an earlier run, not yet checked against the tabs open now. */
+  unchecked = false;
   constructor({ log, browser = new Browser(), onChange, file }: { log: (event: Record<string, unknown>) => void; browser?: Browser; onChange?: () => void; file?: string }) {
     this.log = log; this.browser = browser; this.onChange = onChange; this.file = file;
     try {
       const saved = file ? JSON.parse(fs.readFileSync(file, 'utf8')) : undefined;
-      if (Number.isInteger(saved?.tabId) && saved.tabId > 0 && Date.now() - saved.at < 86400000) { this.tabId = saved.tabId; log({ type: 'stage.restored', tabId: saved.tabId, url: saved.url }); }
+      if (Number.isInteger(saved?.tabId) && saved.tabId > 0 && Date.now() - saved.at < REMEMBERED_MS) {
+        this.tabId = saved.tabId;
+        for (const page of Array.isArray(saved.pages) ? saved.pages : []) if (Number.isInteger(page?.tabId) && typeof page.title === 'string' && typeof page.url === 'string') this.pages.set(page.tabId, { title: page.title, url: page.url, about: typeof page.about === 'string' ? page.about : null });
+        this.unchecked = this.pages.size > 0;
+        log({ type: 'stage.restored', tabId: saved.tabId, url: saved.url, pages: this.pages.size });
+      }
     } catch {}
   }
-  /** Remembers the tab on stage (or that there is none) for the next start of fdc. */
+  /** Remembers the tab on stage (or that there is none) and the other pages shown, for the next start of fdc. */
   remember() {
     if (!this.file) return;
-    try { fs.mkdirSync(path.dirname(this.file), { recursive: true }); fs.writeFileSync(this.file, JSON.stringify({ tabId: this.tabId ?? null, url: this.view?.url ?? this.pages.get(this.tabId ?? 0)?.url ?? null, at: Date.now() })); } catch {}
+    const pages = [...this.pages].slice(-10).map(([tabId, page]) => ({ tabId, ...page }));
+    try { fs.mkdirSync(path.dirname(this.file), { recursive: true }); fs.writeFileSync(this.file, JSON.stringify({ tabId: this.tabId ?? null, url: this.view?.url ?? this.pages.get(this.tabId ?? 0)?.url ?? null, at: Date.now(), pages })); } catch {}
   }
   /**
    * The agent's own browser tool calls say which tab it showed the operator. At the end of each of its turns the page is
@@ -74,6 +88,11 @@ export class Stage {
     if (!tabId) return;
     if (this.view?.tabId === tabId && Date.now() - this.viewAt < maxAgeMs) return this.view;
     const started = Date.now();
+    // Pages remembered from the run before: the voice can switch back only to those still open.
+    if (this.unchecked) {
+      this.unchecked = false;
+      try { const open = new Set((await this.browser.tabs()).map(tab => tab.tabId)); for (const id of [...this.pages.keys()]) if (!open.has(id)) this.pages.delete(id); } catch {}
+    }
     let view: Omit<StageView, 'tabId'>;
     try { view = await this.browser.evaluate<Omit<StageView, 'tabId'>>(tabId, `${SCRIPT}\n;window.__fdcStage.describe()`, 3000); }
     catch (error) {
@@ -86,7 +105,10 @@ export class Stage {
     const commands = (Array.isArray(view?.commands) ? view.commands : []).filter((c: any) => c && str(c.id) && str(c.say)).map((c: any) => ({ id: str(c.id, 60), say: str(c.say), ...str(c.anchor) ? { anchor: str(c.anchor) } : {}, ...str(c.name, 80) ? { name: str(c.name, 80) } : {}, ...c.top ? { top: true } : {} }));
     const parts = (Array.isArray((view as any)?.parts) ? (view as any).parts : []).slice(0, 60).filter((p: any) => p && str(p.text)).map((p: any) => ({ name: str(p.name, 100) || 'Untitled part', text: str(p.text, 6001) }));
     this.view = { title: str(view?.title, 200), url: str(view?.url, 500), about: str(view?.about) || null, where: str(view?.where, 600), commands, parts, tabId }; this.viewAt = Date.now();
+    const known = this.pages.get(tabId);
     this.pages.delete(tabId); this.pages.set(tabId, { title: this.view.title, url: this.view.url, about: this.view.about });
+    // A new title or address is remembered (a move within the page, its #fragment, is not news).
+    if (known?.title !== this.view.title || known.url.replace(/#.*$/, '') !== this.view.url.replace(/#.*$/, '')) this.remember();
     // The other pages the agent showed are commands too, named by title, file and the page's own description, since people
     // name pages by what they are ("the diagram"); the page left last comes first.
     const others = [...this.pages].filter(([id]) => id !== tabId).reverse();

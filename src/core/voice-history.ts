@@ -10,10 +10,10 @@ export interface TranscriptFragment {
   /** The voice moved the page as it answered these words: this goes with them, and the gate still judges them. */
   cued?: string;
 }
-/** One speaker's speech until they pause for over 2 seconds. */
-export type Utterance = Pick<TranscriptFragment, 'role' | 'text' | 'endMs'>;
-/** A spoken turn as kept for resuming the conversation. */
-export type Turn = Pick<Utterance, 'role' | 'text'>;
+/** One speaker's speech until they pause for over 2 seconds, and when its first words were heard (wall clock). */
+export type Utterance = Pick<TranscriptFragment, 'role' | 'text' | 'endMs'> & { at?: number };
+/** A spoken turn as kept for resuming the conversation, with when it was heard (kept since Oct 30). */
+export type Turn = Pick<Utterance, 'role' | 'text' | 'at'>;
 /** An utterance with when it was heard (wall clock). */
 export type Spoken = Turn & { at: number };
 export interface SpokenRequest {
@@ -34,10 +34,10 @@ const SOUND_PEAK = 64;
 // backchannels never split it.
 function utterances(fragments: readonly TranscriptFragment[]): Utterance[] {
   const joined: Utterance[] = [], open = new Map<Utterance['role'], Utterance>();
-  for (const { role, text, startMs, endMs } of fragments) {
+  for (const { role, text, startMs, endMs, receivedAt } of fragments) {
     const last = open.get(role);
     if (last && startMs - last.endMs <= 2000) { last.text += text; last.endMs = endMs; }
-    else { const next = { role, text, endMs }; joined.push(next); open.set(role, next); }
+    else { const next = { role, text, endMs, at: receivedAt }; joined.push(next); open.set(role, next); }
   }
   return joined.filter(u => u.text.trim());
 }
@@ -138,19 +138,20 @@ export class VoiceHistory {
     while (this.fragments[this.delegatedThrough + 1]?.sent) this.delegatedThrough++;
   }
   /** This connection's own conversation, for resuming it in a later one. */
-  turns(): Turn[] { return utterances(this.fragments.filter(f => !f.carried && !this.unheard(f))).map(({ role, text }) => ({ role, text: text.replace(/\s+/g, ' ').trim() })); }
+  turns(): Turn[] { return utterances(this.fragments.filter(f => !f.carried && !this.unheard(f))).map(({ role, text, at }) => ({ role, text: text.replace(/\s+/g, ' ').trim(), at })); }
   /**
    * The conversation as it was heard, up to the operator's latest words (to fragment `through`): each speaker's words until
    * the other speaks or they pause, with when it was heard, for placing it among the agent's events (bridge.ts, read).
    * How far back is the recent history's to decide (recent-history.ts). With `since` (the last word read before), all of
    * the operator's words after it are the latest, whatever was said among them: read only to its last pause, "…send it"
-   * then "over" was read as "over" and kept.
+   * then "over" was read as "over" and kept. Words carried over from the connection before are its conversation, which the
+   * caller has already (VoiceSessions.earlierTurns), unless they are among the latest.
    */
   spoken(through = Infinity, since?: number): Spoken[] {
     const latest = since === undefined ? [] : this.fragments.filter(f => f.seq > since && f.seq <= through && f.role === 'operator' && !this.unheard(f));
     const joined: (Spoken & { endMs: number })[] = [];
     for (const f of this.fragments) {
-      if (f.seq > through || (latest.length && f.seq >= latest[0].seq) || this.unheard(f)) continue;
+      if (f.seq > through || (latest.length && f.seq >= latest[0].seq) || this.unheard(f) || f.carried) continue;
       const last = joined.at(-1);
       if (last?.role === f.role && f.startMs - last.endMs <= 2000) { last.text += f.text; last.endMs = f.endMs; }
       else joined.push({ role: f.role, text: f.text, at: f.receivedAt, endMs: f.endMs });

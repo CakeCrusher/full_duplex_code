@@ -15,6 +15,7 @@ import { Stage, type StageView } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
 import { operatorVoice, type MicrophoneLevel } from './floor.ts';
+import type { Spoken } from './voice-history.ts';
 
 export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean; /** Set for an instruction Jev learned: its short ID, such as I3, and the agent session it was learned in. */ learned?: string; learnedIn?: string }
 /** The latest voice session's span and GPT Live's usage reports, for the page's meters. */
@@ -275,6 +276,12 @@ export class VoiceSessions {
     catch (error) { this.bridge.log({ type: 'voice.resume_save_failed', message: (error as Error).message }); }
   }
   // A voice session's record is saved under its own agent session, even if the agent moved on to another meanwhile.
+  /**
+   * What was said in this conversation's earlier voice connections (since the last Start fresh), in order: Jev reads the
+   * operator's words among them as it did then, however many Standby wakes, resumes and restarts of fdc came between. A turn
+   * kept before turns had times reads as older than anything else.
+   */
+  earlierTurns(): Spoken[] { return this.current().turns.map(({ role, text, at }) => ({ role, text, at: at ?? 0 })); }
   saveRun(run: Run) { this.save(run.recordId ?? (run.record === this.record ? this.recordFor : undefined), run.record); }
   rememberInstructions() { const record = this.current(); record.instructions = this.additionalInstructions.map(saved); record.learnedCount = Math.max(record.learnedCount ?? 0, this.learnedCount); this.save(); }
   /** The instructions in force in a running session, for a fork of it to inherit. */
