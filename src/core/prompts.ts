@@ -3,6 +3,8 @@
 import { fileURLToPath } from 'node:url';
 import type { AgentProfile } from './adapter.ts';
 import type { Utterance } from './voice-history.ts';
+import { DEFAULT_FEATURES, type Features } from './features.ts';
+import { roles } from './roles.ts';
 
 type Agent = { profile: AgentProfile };
 // How the agent makes a page the voice tool can steer: named in what fdc asks of it about a page's controls, so any agent can find it.
@@ -11,21 +13,21 @@ const STAGE_GUIDE = fileURLToPath(new URL('../../STAGE.md', import.meta.url));
 // GPT Live's own instructions, in the shape OpenAI recommends for gpt-live-1 (role, backchannels, interruptions, then
 // when to generate <|SpawnThinking|>, its delegation token: "delegate to the backend" is not what it was trained on, and
 // a spoken promise doesn't start any work). With Jev, GPT Live passes nothing on: the voice tool reads each of the
-// operator's turns and sends what needs the agent (turn.ts), and GPT Live is told what it did. Everything about one moment
-// (the page now, a request's outcome) is told to it as that moment comes, never written here. Principles rather than
-// scripts: what to say and show, and when, is its judgment from the context (Oct 30: prescribed wording made it lean on the
-// agent for answers and hold back from moving the page).
-export function liveInstructions({ profile: { name, product, turnEnd, eventWord, canSteer } }: Agent, { jev = false }: { jev?: boolean } = {}): string {
+// operator's turns and sends what needs the agent (turn.ts), and GPT Live is told what it did; who does what is the same
+// account Jev reads (roles.ts), by the features on. Everything about one moment (the page now, a request's outcome) is
+// told to it as that moment comes, never written here. Principles rather than scripts: what to say and show, and when, is
+// its judgment from the context (Oct 30: prescribed wording made it lean on the agent for answers and hold back from
+// moving the page).
+export function liveInstructions(agent: Agent, { jev = false, features = new Set(DEFAULT_FEATURES) }: { jev?: boolean; features?: Features } = {}): string {
+  const { profile: { name, product, turnEnd, eventWord, canSteer } } = agent;
   const waits = canSteer ? '' : ` Requests sent while ${name} is working wait until its current turn ends.`;
-  return `You are the voice of Full-Duplex Code (fdc), the operator's calm companion while ${product} works for them. Speak clear, natural English in complete thoughts. You answer, explain and present, moving the page beside the operator as you talk; changing files, settings or anything else is ${name}'s${jev ? ' and the voice tool\'s' : ''} to do.
+  return `${jev ? `You are the voice companion of Full-Duplex Code (fdc): the operator's calm voice while ${product} works for them. Speak clear, natural English in complete thoughts.` : `You are the voice of Full-Duplex Code (fdc), the operator's calm companion while ${product} works for them. Speak clear, natural English in complete thoughts. You answer, explain and present, moving the page beside the operator as you talk; changing files, settings or anything else is ${name}'s to do.`}
 
 Backchannel policy: No backchannels. Make no acknowledgment sounds to ${name}'s work or to silence.
 
 Interruption policy: Stop speaking and listen when the operator interrupts. Only the operator cuts your sentence short: finish your current thought before turning to news of ${name}'s work.
 
-${jev ? `Requests: you never pass anything on yourself. When the operator finishes speaking, the voice tool reads their words: it turns voice sessions on or off, adjusts how you behave, and sends whatever needs ${name} to ${name}. You are told what it did; never say something was sent or done before you are told it was, or promise that it will be.${waits}
-
-Answer whatever you can with moderate confidence, from what you know and what you were told: this conversation, ${name}'s work, the page. When in doubt about what the operator means, ask. Only a request that is fully stated and that you can't do yourself is ${name}'s.` : `Delegation policy:
+${jev ? `${roles(agent, features)} You are told what the voice tool did; never say something was sent or done before you are told it was, or promise that it will be.${waits}` : `Delegation policy:
 Backend tools:
 - ${product}: investigates, runs commands, edits files and does the coding work in the operator's project; it also makes the pages you present and their controls.
 
@@ -110,8 +112,11 @@ export const sessionsOutcome = (outcome: string) => `Voice sessions: ${outcome}`
 // With Jev, the voice tool's own actions come before the job delegation reads the words: GPT Live hears what it does, not
 // whether the words also go to the agent.
 export const sessionsChanging = (plan: string) => `The voice tool is changing voice sessions as the operator asked: ${plan} The outcome follows when known.`;
-export const companionNoted = ({ profile: { name } }: Agent) =>
-  `The operator told you how you should behave: the voice tool adjusts its settings from it and keeps it if it is a standing preference. Follow it; it is not ${name}'s to do.`;
+// Asked only while the voice tool keeps instructions or adjusts settings (features.ts): what it does with these words.
+export function companionNoted({ profile: { name } }: Agent, features: Features) {
+  const kept = [features.has('instructions') && 'keeps it if it is a standing preference', features.has('configuration') && 'adjusts your settings to it'].filter(Boolean);
+  return `The operator told you how you should behave: follow it; it is not ${name}'s to do.${kept.length ? ` The voice tool ${kept.join(' and ')}.` : ''}`;
+}
 // Facts the mediator adds when a delegation cannot be sent.
 export const nothingToSend = ({ profile: { name } }: Agent) =>
   `No new operator speech is available to send. Answer from the observed ${name} session; already submitted requests must not be resent.`;

@@ -12,6 +12,7 @@ import qrcode from 'qrcode-terminal';
 import { Harness } from './core/bridge.ts';
 import { resolveCommand, type Command } from './core/command.ts';
 import { UsageLedger } from './core/usage-ledger.ts';
+import { DEFAULT_FEATURES, FEATURES, featuresFrom, type Feature } from './core/features.ts';
 import type { AgentArguments, AgentDefinition } from './core/adapter.ts';
 import { agents } from './adapters/index.ts';
 import { parseLaunchArgs, UsageError, type LaunchCommand } from './launcher/options.ts';
@@ -50,6 +51,9 @@ Options, before the agent's name:
                         Cloudflare tunnel this launcher starts and stops (needs cloudflared)
   --no-store            Don't ask OpenAI to keep voice sessions (kept 30 days) for
                         Resume voice; it then continues from the conversation's text
+  --features LIST       Turn Jev's optional features on or off, after FDC_FEATURES:
+                        a name turns one on, "no-" before it turns it off
+${Object.entries(FEATURES).map(([name, about]) => `                          ${name}${DEFAULT_FEATURES.includes(name as Feature) ? ' (on)' : ''}: ${about}`).join('\n')}
   -h, --help            Show this help
 Commands:
   fdc doctor [agent]    Check local prerequisites without API spending
@@ -64,6 +68,12 @@ billing and leaves the agent running.
 
 ${list.map(agent => agent.usage.notes).join('\n\n')}`);
   process.exit(0);
+}
+// Jev's optional features (src/core/features.ts): FDC_JEV_TUNING=1 still turns configuration on, as it did before there
+// were features.
+function features() {
+  try { return featuresFrom([...DEFAULT_FEATURES, ...process.env.FDC_JEV_TUNING === '1' ? ['configuration' as const] : []], process.env.FDC_FEATURES, values.features); }
+  catch (error) { refuse((error as Error).message); }
 }
 // Settings set by hand for how agent updates reach GPT Live (src/core/tuning.ts).
 function tuningOverrides() {
@@ -116,7 +126,7 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
   const sessionId = session.sessionId ?? (session.assignSession ? randomUUID() : undefined);
   const runDir = path.join(root, '.runs', `${new Date().toISOString().replaceAll(':', '-')}-${sessionId?.slice(0, 8) ?? (session.resume ? 'resumed' : agent.profile.id)}`);
   let harness: Harness;
-  try { harness = await new Harness({ agent, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe, agentArgs, jevKey: process.env.TYPESAFE_API_KEY, tuning: tuningOverrides(), jevTuning: process.env.FDC_JEV_TUNING === '1', store: !values['no-store'],
+  try { harness = await new Harness({ agent, root, runDir, cwd, sessionId, apiKey: process.env.OPENAI_API_KEY!, port, portFallback: values.port === undefined, voice: values.voice, observation: values.observe, agentArgs, jevKey: process.env.TYPESAFE_API_KEY, tuning: tuningOverrides(), features: features(), store: !values['no-store'],
     // The page being presented, per folder: a restart picks it up again, however the agent session is resumed (keyed by
     // session too, "--resume" with the session picked in Claude's list lost it on Oct 21, and every page move went to
     // the agent until it showed the page again).

@@ -98,21 +98,6 @@ test("Jev is asked which page command shows what the voice meant; unlikely or un
   }
 });
 
-test("Jev reads the latest words with what happened before them, as a new voice session starts from: the agent's events and the conversation, in order", async t => {
-  const { h, sessionId } = await harness(t);
-  const moments = fakeJev(h), hook = (command: string) => h.observer.hook({ session_id: sessionId, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command }, tool_response: { stdout: 'ok' } });
-  const said = Date.now();
-  hook('npm test');
-  await new Promise(resolve => setTimeout(resolve, 5));
-  const latest = Date.now();
-  await new Promise(resolve => setTimeout(resolve, 5));
-  hook('git commit');
-  await h.read({ trigger: 'delegation', spoken: [{ role: 'intermediary', text: 'Tests are running.', at: said - 5000 }, { role: 'operator', text: 'Then commit it.', at: latest }] });
-  assert.equal(moments[0].latest!.text, 'Then commit it.');
-  assert.match(moments[0].history!, /^voice assistant: Tests are running\.\nClaude Code observation \(history\):\n[^\n]*npm test[^\n]*\n$/, 'in the order it happened, as the agent and a new voice session read it');
-  assert.doesNotMatch(moments[0].history!, /git commit/, 'nothing after the latest words');
-});
-
 test("commands that do the same count as one choice, even below none: the page's own runs", () => {
   const deck: StageView = { ...view, commands: [{ id: 'back', say: 'Go back to wherever the viewer was' }, { id: 'next_section', say: 'Go to the next section' }, { id: 'page_back', say: 'Go back to the previous slide' }, { id: 'page_next', say: 'Go to the next slide' }] };
   const step = (probabilities: Record<string, number>) => ({ choice: Object.entries(probabilities).sort((a, b) => b[1] - a[1])[0][0], probabilities });

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { estimatedTokens } from './text-fragments.ts';
 import type { Turn } from './voice-history.ts';
+import type { PerceivedEntry } from './perceived.ts';
 
 /** How a voice session starts: from a fork of the stored last session, seeded with the conversation's text, or without it. */
 export type ResumePlan = 'fork' | 'seed' | 'fresh';
@@ -24,6 +25,8 @@ export interface ResumeRecord {
   prompt?: string;
   /** The page state GPT Live was last told (pageSeen), and how full its context was at the end (GPT Live's last report). */
   briefed?: string; context?: number;
+  /** What fdc sent GPT Live since the session that began what it perceives now started (when that was), for Jev (perceived.ts). */
+  perceived?: PerceivedEntry[]; perceivedSince?: number;
 }
 export interface SavedInstruction { id: string; text: string; learned?: string; learnedIn?: string }
 // OpenAI keeps stored recordings for 30 days.
@@ -92,6 +95,8 @@ export class ResumeStore {
     try {
       const data = JSON.parse(fs.readFileSync(this.file(sessionId), 'utf8'));
       const instructions = (list: unknown) => list === undefined || Array.isArray(list) && list.every(i => typeof i?.id === 'string' && typeof i.text === 'string' && (i.learned === undefined || typeof i.learned === 'string'));
+      // What GPT Live perceived is only for Jev: a damaged copy is dropped rather than the record.
+      if (!(Array.isArray(data.perceived) && data.perceived.every((e: PerceivedEntry) => typeof e?.text === 'string' && typeof e.at === 'number'))) delete data.perceived;
       return Array.isArray(data.turns) && data.turns.every((t: Turn) => ['operator', 'intermediary'].includes(t?.role) && typeof t.text === 'string') && instructions(data.instructions) && instructions(data.inForce) ? data : undefined;
     } catch { return undefined; }
   }

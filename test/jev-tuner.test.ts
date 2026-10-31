@@ -41,7 +41,7 @@ test('earlier instructions meant for their own session only are marked so for Je
 test("with the operator's words, Jev reads them in the same call and keeps the current levels unless they ask for a change", async () => {
   let sent: any;
   const fetch = async (_url: string, init: RequestInit) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers: { needs_agent: { noul: .1 }, wakeThreshold: { choice: 'level_100' } } }) }; };
-  const reading = await new Jev({ apiKey: 'k', log: () => {}, fetch }).read({ trigger: 'delegation', latest: { role: 'operator', text: 'Stop waking up for every little thing.' }, tune: { instructions: ["I1: don't cut in while I'm thinking"], earlier: [], current: DEFAULT_TUNING, pinned: [] } });
+  const reading = await new Jev({ apiKey: 'k', log: () => {}, fetch }).read({ trigger: 'delegation', latest: { role: 'operator', text: 'Stop waking up for every little thing.' }, instructions: ["I1: don't cut in while I'm thinking"], tune: { earlier: [], current: DEFAULT_TUNING, pinned: [] } });
   assert.deepEqual(tuningFrom(reading.tuning, DEFAULT_TUNING).changes, [{ name: 'wakeThreshold', from: 50, to: 100 }]);
   assert.equal(sent.state.latest, 'user: Stop waking up for every little thing.');
   assert.match(sent.state.operator_instructions, /cut in/);
@@ -53,7 +53,7 @@ test("with the operator's words, Jev reads them in the same call and keeps the c
   for (const name of ['speechPrice', 'liveSpeechPrice', 'toolPrice', 'promptPrice', 'messagePrice', 'turnEndPrice', 'failurePrice', 'approvalPrice', 'requestPrice']) assert.ok(sent.questions[name], name);
   assert.match(sent.questions.wakeThreshold.instructions, /Choose higher when the operator says it wakes up for nothing/);
   // When the instructions change, with no words: the default unless they ask otherwise.
-  await new Jev({ apiKey: 'k', log: () => {}, fetch }).read({ trigger: 'settings', tune: { instructions: [], earlier: [], current: DEFAULT_TUNING, pinned: [] } });
+  await new Jev({ apiKey: 'k', log: () => {}, fetch }).read({ trigger: 'settings', instructions: [], tune: { earlier: [], current: DEFAULT_TUNING, pinned: [] } });
   assert.match(sent.questions.standbyAfterMs.instructions, /Choose the default unless/);
   assert.equal(sent.questions.needs_agent, undefined);
 });

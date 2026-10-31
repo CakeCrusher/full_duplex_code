@@ -231,7 +231,7 @@ test("with Jev, GPT Live is told the voice tool passes requests on; without it, 
   const { liveInstructions } = await import('../src/core/prompts.ts');
   const own = liveInstructions(claude, { jev: true }), delegating = liveInstructions(claude);
   assert.doesNotMatch(own, /SpawnThinking/);
-  assert.match(own, /you never pass anything on yourself.*the voice tool reads their words/);
+  assert.match(own, /It passes nothing on itself: when the operator finishes speaking, the voice tool reads their words and sends whatever needs Claude to Claude/);
   assert.match(delegating, /Generate <\|SpawnThinking\|> when:/);
   assert.ok(own.length < delegating.length);
 });

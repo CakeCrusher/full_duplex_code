@@ -141,11 +141,10 @@ export class VoiceHistory {
   turns(): Turn[] { return utterances(this.fragments.filter(f => !f.carried && !this.unheard(f))).map(({ role, text, at }) => ({ role, text: text.replace(/\s+/g, ' ').trim(), at })); }
   /**
    * The conversation as it was heard, up to the operator's latest words (to fragment `through`): each speaker's words until
-   * the other speaks or they pause, with when it was heard, for placing it among the agent's events (bridge.ts, read).
-   * How far back is the recent history's to decide (recent-history.ts). With `since` (the last word read before), all of
-   * the operator's words after it are the latest, whatever was said among them: read only to its last pause, "…send it"
-   * then "over" was read as "over" and kept. Words carried over from the connection before are its conversation, which the
-   * caller has already (VoiceSessions.earlierTurns), unless they are among the latest.
+   * the other speaks or they pause, with when it was heard, for placing it among what GPT Live was sent (perceived.ts).
+   * With `since` (the last word read before), all of the operator's words after it are the latest, whatever was said among
+   * them: read only to its last pause, "…send it" then "over" was read as "over" and kept. Words carried over from the
+   * connection before are its conversation, which GPT Live heard there (record.turns), unless they are among the latest.
    */
   spoken(through = Infinity, since?: number): Spoken[] {
     const latest = since === undefined ? [] : this.fragments.filter(f => f.seq > since && f.seq <= through && f.role === 'operator' && !this.unheard(f));

@@ -15,7 +15,9 @@ import { decides, fakeJev, harness, turn, until } from './live-fake.ts';
 // Two companions in their own folders, both registered under one root, as two fdc runs are.
 async function pair(t: TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-sessions-')), folder = (name: string) => { const dir = path.join(root, name); fs.mkdirSync(dir); return dir; };
-  const a = await harness(t, { cwd: folder('alpha') }, root), b = await harness(t, { cwd: folder('beta') }, root);
+  // Orchestration is off unless turned on (features.ts).
+  const features = ['instructions', 'orchestration'];
+  const a = await harness(t, { cwd: folder('alpha'), features }, root), b = await harness(t, { cwd: folder('beta'), features }, root);
   // Beta's open page starts voice when asked, as web/app.ts does.
   const ws = { readyState: 1, bufferedAmount: 0, send(text: string) { const event = JSON.parse(text); if (event.type === 'voice_on') void b.h.startLive(undefined, page, 'fresh'); }, on() {}, terminate() {}, close() {} } as any;
   const page = { id: 'beta-page', ws, via: 'local', alive: true, ready: { microphone: 'granted', clicked: true } } as any;

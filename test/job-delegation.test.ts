@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { Jev } from '../src/core/jev.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { liveInstructions, pageState } from '../src/core/prompts.ts';
+import { roles } from '../src/core/roles.ts';
+import { DEFAULT_FEATURES } from '../src/core/features.ts';
 import type { StageView } from '../src/core/stage.ts';
 import { fakeJev, harness, page, pageReading, settle, turn, until } from './live-fake.ts';
 
@@ -15,7 +17,7 @@ test("two calls over the same state that ask different questions: the job delega
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { bodies.push(JSON.parse(String(init.body))); return { ok: true, status: 200, json: async () => ({ answers: { needs_agent: { noul: .8 }, ready: { noul: .6 } } }) }; } });
   const latest = { role: 'operator' as const, text: 'Can the page show me the error bars?' };
   const job = await jev.read({ trigger: 'job', latest, reply: "I can't show that; Claude would have to add it.", page: view });
-  const own = await jev.read({ trigger: 'turn', latest, page: view });
+  const own = await jev.read({ trigger: 'turn', latest, page: view, learn: true });
   assert.deepEqual(Object.keys(bodies[0].questions).sort(), ['needs_agent', 'ready']);
   assert.match(bodies[0].state.voice_reply, /Claude would have to add it/);
   assert.match(bodies[0].state.page_commands, /^- Go to the next section\n- Go to the section "Options"$/);
@@ -29,6 +31,8 @@ test("two calls over the same state that ask different questions: the job delega
   assert.equal(bodies[2].state.voice_reply, '(the companion has not replied)');
   assert.equal(bodies[2].state.page_commands, undefined, 'no page, no commands');
   assert.equal(silent.needsAgent, .8);
+  await jev.read({ trigger: 'turn', latest });
+  assert.deepEqual(Object.keys(bodies[3].questions), ['standby'], "without the learner or the tuner, nothing acts on words about the companion's behavior, so they aren't asked about");
 });
 
 test("the job delegation decides once the voice has said its first sentence, and reads what it said", async t => {
@@ -86,9 +90,11 @@ test("with a page open, the job delegation knows what its controls can do, and t
   assert.deepEqual(runs, []);
 });
 
-test("the voice answers what it can with moderate confidence, asks when in doubt, and leaves to the agent only what it can't do", () => {
-  const text = liveInstructions(claude, { jev: true });
-  assert.match(text, /Answer whatever you can with moderate confidence, from what you know and what you were told: this conversation, Claude's work, the page\. When in doubt about what the operator means, ask\. Only a request that is fully stated and that you can't do yourself is Claude's\./);
+test("the voice answers what it can with moderate confidence, asks when in doubt, and leaves to the agent only what it can't do: the same account in its instructions and in Jev's", () => {
+  const text = liveInstructions(claude, { jev: true }), shared = roles(claude, new Set(DEFAULT_FEATURES));
+  assert.match(shared, /It answers whatever it can with moderate confidence, from what it knows and what it was told \(this conversation, Claude's work, the page\); when in doubt about what the operator means, it asks; .* Only a request that is fully stated and that the voice companion can't do itself is Claude's\./);
+  assert.ok(text.includes(shared), "in the voice companion's instructions");
+  assert.ok(new Jev({ apiKey: 'k', log: () => {}, agent: claude }).setting.includes(shared), "and in what Jev reads: written apart, Jev's account had drifted");
   assert.doesNotMatch(text, /never guess|would have to check|What you can answer/, 'no script for not knowing: it leaned on the agent');
   assert.match(liveInstructions(claude), /You can answer, with moderate confidence/, 'without Jev, the same principle in its delegation policy');
 });

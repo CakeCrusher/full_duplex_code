@@ -37,7 +37,7 @@ export function mountSettings(section: HTMLElement, token: string | null) {
     if (!knobs || !status.tuning) return;
     const key = JSON.stringify([status.tuning, status.tuningPinned, status.tuningHistory?.length, status.jevTuning]);
     if (key === shown) return; shown = key;
-    jev.textContent = status.jevTuning ? 'Jev tuning is on: Jev picks the levels from your instructions and words; settings set with FDC_TUNING are left to you.' : 'Jev tuning is off (FDC_TUNING=1 with TYPESAFE_API_KEY turns it on): the settings are the defaults and FDC_TUNING.';
+    jev.textContent = status.jevTuning ? 'Jev tuning is on: Jev picks the levels from your instructions and words; settings set with FDC_TUNING are left to you.' : 'Jev tuning is off (--features configuration with TYPESAFE_API_KEY turns it on): the settings are the defaults and FDC_TUNING.';
     body.replaceChildren(...GROUPS.map(([title, names]) => {
       const group = tag('div', undefined, 'settings-group');
       group.append(tag('h3', title));

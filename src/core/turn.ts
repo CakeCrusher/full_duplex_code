@@ -1,8 +1,8 @@
 // The operator's turn, read in two calls over the same state (jev.ts) that ask different questions:
-// - The voice tool's own actions, at once (routeActions): it turns voice sessions on or off (sessions.ts), goes on Standby
-//   when they are done for now, and leaves the companion's own behavior to the learner and the tuner (they take the
-//   reading). It never decides whether their words go to the agent, and never moves the page: the voice does that with its
-//   own words (presenter.ts), so the operator never has to learn how.
+// - The voice tool's own actions, at once (routeActions): it goes on Standby when they are done for now and, with those
+//   features on (features.ts), turns voice sessions on or off (sessions.ts) and leaves the companion's own behavior to the
+//   learner and the tuner (they take the reading). It never decides whether their words go to the agent, and never moves
+//   the page: the voice does that with its own words (presenter.ts), so the operator never has to learn how.
 // - The job delegation, once the voice companion has replied (jobTurn): whether their words need the coding agent,
 //   read with what the companion said and what the page's commands can do, and whether they have finished saying them.
 //   Words not finished wait for the next reading, which takes them with what the operator adds; never dropped. Keeping
@@ -25,13 +25,14 @@ export interface Actions {
 export async function routeActions(bridge: Harness, request: SpokenRequest, spoken: Spoken[], why: Trigger): Promise<Actions> {
   // Read at every turn: a companion slower than 300 ms is listed as not answering. The page on stage is for the job
   // delegation (what its controls can do) and for the agent (what the user was looking at).
-  const [sessions, view] = await Promise.all([bridge.sessionSwitch.sessions(300), bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
+  const orchestration = bridge.features.has('orchestration');
+  const [sessions, view] = await Promise.all([orchestration ? bridge.sessionSwitch.sessions(300) : undefined, bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
   const reading = await bridge.read({ trigger: why, spoken, sessions });
   bridge.log({ type: 'turn.read', why, said: request.fresh.slice(-200), companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions });
   if ((reading.standby ?? 0) >= STANDBY) bridge.voiceSessions.standbyAsked();
-  const asked = bridge.sessionSwitch.act(reading, sessions);
+  const asked = sessions && bridge.sessionSwitch.act(reading, sessions);
   const companion = (reading.companionOnly ?? 0) >= COMPANION_ONLY;
-  const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent)].filter(Boolean).join(' ') || undefined;
+  const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent, bridge.features)].filter(Boolean).join(' ') || undefined;
   const handled = asked ? 'sessions' : companion ? 'companion' : undefined;
   return { reading, view, told, note: view ? lookingNote(view) : undefined, keptNote: handled && handledNote(handled) };
 }

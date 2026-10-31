@@ -9,8 +9,9 @@ import { InstructionLearner, LearnedLog, type LearnedInstruction } from './instr
 import { DelegationAudit } from './delegation-audit.ts';
 import { askAgent, distillPrompt, parseDistilled } from './instruction-distiller.ts';
 import { tuningFrom, type TuningChange } from './jev-tuner.ts';
-import { Jev, type Moment, type Reading } from './jev.ts';
-import { recentHistory } from './recent-history.ts';
+import { HISTORY_BYTES, Jev, type Moment, type Reading } from './jev.ts';
+import { perceivedText } from './perceived.ts';
+import { DEFAULT_FEATURES, type Feature, type Features } from './features.ts';
 import { agentInstructions } from './prompts.ts';
 import type { Spoken } from './voice-history.ts';
 import { Stage } from './stage.ts';
@@ -33,12 +34,12 @@ export interface HarnessOptions {
   /** The agent session's ID; when unknown, it is learned from the agent's first event. */
   sessionId?: string;
   voice?: string; observation?: string; port?: number; portFallback?: boolean; publicUrl?: string;
-  /** A TypeSafe API key: Jev then learns the operator's standing instructions (instruction-learner.ts). */
+  /** A TypeSafe API key: Jev then decides what reaches the agent, and does the optional features on. */
   jevKey?: string;
   /** Overrides of the low-level settings for how agent updates reach GPT Live (tuning.ts). */
   tuning?: Partial<Tuning>;
-  /** With a TypeSafe API key: Jev sets those settings from the operator's instructions (jev-tuner.ts). */
-  jevTuning?: boolean;
+  /** Jev's optional features on (features.ts): orchestration, instructions (the learner), configuration (the tuner). */
+  features?: Iterable<Feature>;
   /** The agent's own command-line arguments. */
   agentArgs?: string[];
   /** Ask OpenAI to store voice sessions so that Resume voice can fork them (default true; --no-store turns it off). */
@@ -51,8 +52,10 @@ export interface HarnessOptions {
 // It owns the shared state; each concern lives in its own module.
 export class Harness {
   agent: AgentDefinition; adapter: AgentAdapter; observer: AgentObserver;
-  /** Jev, when a TypeSafe key is set: one reading per moment (jev.ts), for the gate, the page, the learner and, with Jev's tuning on, the tuner. */
+  /** Jev, when a TypeSafe key is set: its readings (jev.ts) decide what reaches the agent, and act for the features on. */
   jev?: Jev; learner?: InstructionLearner; handOffAudit?: DelegationAudit; jevTuning: boolean; learned: LearnedLog;
+  /** Jev's optional features on (features.ts). */
+  features: Features;
   /** Settings the operator set by hand (FDC_TUNING), which Jev leaves alone; the latest ask for settings (only its answer counts), and the one waiting. */
   pinned: (keyof Tuning)[] = []; tuneAsks = 0; tuneTimer?: NodeJS.Timeout;
   /** Every change to the settings in this run, newest last: when, by whom, from what to what (Developer mode lists them). */
@@ -85,7 +88,7 @@ export class Harness {
   /** Moves the stage by what GPT Live says: speech cues, the words Jev matches to a command, the following ring. */
   presenter: Presenter;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
-  constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides, jevTuning = false, store = true, stageFile }: HarnessOptions) {
+  constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides, features = DEFAULT_FEATURES, store = true, stageFile }: HarnessOptions) {
     this.agent = agent; this.root = root; this.runDir = runDir; this.cwd = cwd; this.sessionId = sessionId; this.apiKey = apiKey;
     this.voice = voice; this.observation = observation; this.port = port; this.portFallback = portFallback;
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
@@ -99,14 +102,15 @@ export class Harness {
     this.tuning = tuning(overrides); this.pinned = Object.keys(overrides ?? {}) as (keyof Tuning)[];
     if (this.pinned.length) this.tuningHistory.push({ at: Date.now(), by: 'FDC_TUNING', changes: this.pinned.map(name => ({ name, from: DEFAULT_TUNING[name], to: this.tuning[name] })) });
     this.learned = new LearnedLog(path.join(root, '.runs', 'learned-instructions.jsonl'));
-    this.jevTuning = Boolean(jevKey && jevTuning);
-    if (jevKey) { this.jev = new Jev({ apiKey: jevKey, log: this.log }); this.handOffAudit = new DelegationAudit({ file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log }); }
+    this.features = new Set(features);
+    this.jevTuning = Boolean(jevKey && this.features.has('configuration'));
+    if (jevKey) { this.jev = new Jev({ apiKey: jevKey, log: this.log, agent, features: this.features }); this.handOffAudit = new DelegationAudit({ file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log }); }
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
     this.stage = new Stage({ log: this.log, file: stageFile, onChange: () => void this.voiceSessions?.briefStage() });
     this.presenter = new Presenter(this);
     this.sessionSwitch = new SessionSwitch(this);
     this.voiceSessions = new VoiceSessions(this, { store });
-    if (jevKey) this.learner = new InstructionLearner({ log: this.log,
+    if (jevKey && this.features.has('instructions')) this.learner = new InstructionLearner({ log: this.log,
       onJudged: judged => { if (!judged.learned) this.jevCheck(judged.requestId, 'instruction', `Not a standing instruction (${judged.behave.toFixed(2)})`, judged); },
       onLearn: instruction => { this.learnInstruction(instruction).catch(error => this.fault(error as Error)); } });
     this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,
@@ -193,21 +197,19 @@ export class Harness {
     this.log({ type: 'tuning.changed', id, tuning: next, changes }); this.publish({ type: 'tuning', id, tuning: next, changes }); this.publish(this.status());
   }
   /**
-   * Jev's reading of a moment (jev.ts): the latest words (the last of `spoken`), with what happened before them as fdc
-   * keeps it, the agent's events and the conversation in order, as far back as the recent history keeps (the same as a new
-   * voice session starts from; the job delegation, twice as far back, nearer what the voice companion was told). The
-   * conversation includes the voice connections before this one: after a Standby wake, a resume or a restart of fdc, Jev
-   * read only the new connection's words, and lost what "that one" or "go back to it" referred to. Of the
-   * operator's words the voice tool's own reading also asks whether they give a standing instruction (the learner) and,
-   * with Jev's tuning on, which settings fit (the tuner), with the instructions in force.
+   * Jev's reading of a moment (jev.ts): the latest words (the last of `spoken`), with the latest of what the voice companion
+   * had perceived before them, word for word as GPT Live got it (perceived.ts: the same conversation however many Standby
+   * wakes, resumes and restarts of fdc came between, as far as GPT Live has it), and the operator's instructions to the
+   * companion in force, as GPT Live has them. Of the operator's words the voice tool's own reading also asks, with those
+   * features on, whether they give a standing instruction (the learner) and which settings fit (the tuner).
    */
-  read({ spoken = [], ...moment }: Omit<Moment, 'latest' | 'history' | 'learn' | 'tune'> & { spoken?: Spoken[] }, timeoutMs?: number): Promise<Reading> {
+  read({ spoken = [], ...moment }: Omit<Moment, 'latest' | 'history' | 'instructions' | 'learn' | 'tune'> & { spoken?: Spoken[] }, timeoutMs?: number): Promise<Reading> {
     if (!this.jev) return Promise.reject(new Error('Jev is not configured'));
     const words = ['turn', 'delegation', 'unsent'].includes(moment.trigger), tune = this.jevTuning && (words || moment.trigger === 'settings');
-    const ask = tune ? ++this.tuneAsks : 0, latest = spoken.at(-1);
-    const before = latest ? [...this.adapter.history().filter(o => o.at <= latest.at), ...this.voiceSessions.earlierTurns(), ...spoken.slice(0, -1)].sort((a, b) => a.at - b.at) : [];
-    return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(recentHistory(this.agent, before, moment.trigger === 'job' ? 14000 : undefined).text) },
-      learn: words || undefined, tune: tune ? { instructions: this.voiceSessions.additionalInstructions.map(item => item.text), earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined }, timeoutMs)
+    const ask = tune ? ++this.tuneAsks : 0, latest = spoken.at(-1), record = this.voiceSessions.run?.record ?? this.voiceSessions.current();
+    return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(perceivedText(record, spoken.slice(0, -1), latest.at, HISTORY_BYTES)) },
+      instructions: this.voiceSessions.additionalInstructions.map(item => item.text), learn: (words && this.features.has('instructions')) || undefined,
+      tune: tune ? { earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined }, timeoutMs)
       .then(reading => Object.assign(reading, ask ? { tuneAsk: ask } : {}));
   }
   /** What Jev read in the operator's words, acted on once: a standing instruction to learn, and the settings that fit (only the latest ask's: an older answer arriving late would undo it). */
@@ -238,7 +240,7 @@ export class Harness {
     this.startedAt = Date.now(); this.register();
     this.statusTimer = setInterval(() => this.publish(this.status()), 1000);
     if (this.learned.earlier(this.sessionId).length) this.tuneFromInstructions();
-    this.log({ type: 'bridge.started', sessionId: this.sessionId, cwd: this.cwd, baseUrl: this.baseUrl });
+    this.log({ type: 'bridge.started', sessionId: this.sessionId, cwd: this.cwd, baseUrl: this.baseUrl, features: this.jev ? [...this.features] : undefined });
     return this;
   }
   // This private descriptor permits repeatable local tests without exposing the API key.

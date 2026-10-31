@@ -1,4 +1,4 @@
-// Jev tuning the companion, optional: on with TYPESAFE_API_KEY and FDC_JEV_TUNING=1.
+// Jev tuning the companion, optional: the configuration feature (features.ts), on with a TypeSafe key.
 // Whenever the operator's instructions change (one Jev learned, one they added or
 // removed), when voice starts, and with every reading of the operator's words (jev.ts), Jev
 // reads the instructions, with those it learned in earlier sessions and the conversation,
@@ -8,7 +8,7 @@ import { KNOBS, type Tuning } from './tuning.ts';
 
 export interface TuningChange { name: keyof Tuning; from: number; to: number }
 
-export const TUNER_SETTING = "The companion's low-level settings decide when and how the agent's updates reach it, and Standby: voice costs $0.05 a minute while the companion is connected, and Standby disconnects it while the conversation is quiet, at the price of waking it again. Each setting describes, with measurements from the operator's own recorded conversations, what each level costs and buys and which of the operator's words call for it; `operator_instructions` are the companion's instructions in force, `earlier_sessions` those from the operator's earlier sessions, `current_settings` the levels now. The core principles, in order: 1 the operator comes first (never lose a work request, don't talk over them); 2 answer the operator's questions instead of delegating them; 3 synthesis, not narration; 4 know as much as possible; 5 fresh enough.";
+export const TUNER_SETTING = "The companion's low-level settings decide when and how the agent's updates reach it, and Standby: voice costs $0.05 a minute while the companion is connected, and Standby disconnects it while the conversation is quiet, at the price of waking it again. Each setting describes, with measurements from the operator's own recorded conversations, what each level costs and buys and which of the operator's words call for it; `earlier_sessions` are the operator's instructions from their earlier sessions, `current_settings` the levels now. The core principles, in order: 1 the operator comes first (never lose a work request, don't talk over them); 2 answer the operator's questions instead of delegating them; 3 synthesis, not narration; 4 know as much as possible; 5 fresh enough.";
 
 /** Settings the operator set by hand are theirs; those without measured levels are set only by hand. */
 const knobs = (pinned: (keyof Tuning)[]) => Object.entries(KNOBS).filter(([name, knob]) => !pinned.includes(name as keyof Tuning) && knob.levels.length) as [keyof Tuning, typeof KNOBS[keyof Tuning]][];

@@ -48,9 +48,11 @@ export class Live extends EventEmitter {
     const event = { type: 'session.started', session: { id: this.id } };
     this.resolveReady!(event); this.emit('event', event);
   }
-  append(kind: string, text: string, _delegationId: string | null = null) {
+  append(kind: string, text: string, delegationId: string | null = null) {
     this.appended.push([kind, text]);
     if (this.state !== 'active') return Promise.reject(new Error(`Live session is ${this.state}`));
+    // As LiveSession.send does for everything it sends.
+    this.emit('sent', { type: `session.${kind}.append`, event_id: randomUUID(), delegation_id: delegationId, content: text });
     if (!Live.hold(kind, text)) return Promise.resolve({});
     return new Promise((resolve, reject) => { this.pending.add({ resolve, reject, kind, text }); });
   }

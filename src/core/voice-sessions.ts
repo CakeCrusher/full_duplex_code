@@ -15,7 +15,7 @@ import { Stage, type StageView } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
 import { operatorVoice, type MicrophoneLevel } from './floor.ts';
-import type { Spoken } from './voice-history.ts';
+import { beginPerceived, perceive, type PerceivedEntry, type SentKind } from './perceived.ts';
 
 export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean; /** Set for an instruction Jev learned: its short ID, such as I3, and the agent session it was learned in. */ learned?: string; learnedIn?: string }
 /** The latest voice session's span and GPT Live's usage reports, for the page's meters. */
@@ -71,6 +71,8 @@ interface Run {
   requested: { at: number; plan: ResumePlan; seeded?: string }; spoke?: boolean;
   /** Set when it woke from Standby: when Standby began, and whether the operator was speaking. */
   wake?: Wake;
+  /** What GPT Live perceives at its start (its startup input; nothing new for a fork), recorded once it starts (perceived.ts). */
+  perceivedInput: PerceivedEntry[]; perceiving?: boolean;
 }
 interface Wake { since: number; operator: boolean; reason: string }
 /**
@@ -209,10 +211,10 @@ export class VoiceSessions {
     publish(this.bridge.status());
   }
   /** fdc's own instructions for the voice (or others), as a short hash: which ones a session started with. */
-  prompt(text = liveInstructions(this.bridge.agent, { jev: Boolean(this.bridge.jev) })) { return createHash('sha1').update(text).digest('hex').slice(0, 12); }
+  prompt(text = liveInstructions(this.bridge.agent, { jev: Boolean(this.bridge.jev), features: this.bridge.features })) { return createHash('sha1').update(text).digest('hex').slice(0, 12); }
   instructions() {
     const additional = this.additionalInstructions.map(item => item.text).join('\n\n');
-    return liveInstructions(this.bridge.agent, { jev: Boolean(this.bridge.jev) }) + (additional ? `\n\nAdditional operator instructions:\n${additional}` : '');
+    return liveInstructions(this.bridge.agent, { jev: Boolean(this.bridge.jev), features: this.bridge.features }) + (additional ? `\n\nAdditional operator instructions:\n${additional}` : '');
   }
   /** An instruction Jev learned from the operator: it joins this companion's instructions at once, under an ID the operator can remove it by. */
   async learn({ text, ...judged }: LearnedInstruction) {
@@ -276,12 +278,6 @@ export class VoiceSessions {
     catch (error) { this.bridge.log({ type: 'voice.resume_save_failed', message: (error as Error).message }); }
   }
   // A voice session's record is saved under its own agent session, even if the agent moved on to another meanwhile.
-  /**
-   * What was said in this conversation's earlier voice connections (since the last Start fresh), in order: Jev reads the
-   * operator's words among them as it did then, however many Standby wakes, resumes and restarts of fdc came between. A turn
-   * kept before turns had times reads as older than anything else.
-   */
-  earlierTurns(): Spoken[] { return this.current().turns.map(({ role, text, at }) => ({ role, text, at: at ?? 0 })); }
   saveRun(run: Run) { this.save(run.recordId ?? (run.record === this.record ? this.recordFor : undefined), run.record); }
   rememberInstructions() { const record = this.current(); record.instructions = this.additionalInstructions.map(saved); record.learnedCount = Math.max(record.learnedCount ?? 0, this.learnedCount); this.save(); }
   /** The instructions in force in a running session, for a fork of it to inherit. */
@@ -425,8 +421,11 @@ export class VoiceSessions {
     const view = plan === 'fork' ? undefined : await this.stageNow(), seen = view && this.pageFor(view);
     const message = (role: 'developer' | 'user', text: string) => ({ type: 'message', role, content: [{ type: 'input_text', text }] });
     let input = [message('developer', startup), ...history.text ? [message('user', historyIntro(agent) + history.text)] : []];
-    const now = seen ? [message('developer', seen.state)] : [];
+    const now = seen ? [message('developer', seen.state)] : [], opening = input.length;
     input = plan === 'seed' ? seedInput(input, record.turns, now) : [...input, ...now];
+    // What GPT Live perceives at its start, for Jev: fdc's messages, and the earlier turns a seed puts between them.
+    const perceivedInput: PerceivedEntry[] = plan === 'fork' ? [] : input.map((item, i) => i < opening || i >= input.length - now.length
+      ? { at: 0, kind: 'start', text: item.content[0].text } : { at: 0, role: item.role === 'user' ? 'operator' : 'intermediary', text: item.content[0].text });
     const live: LiveSession = this.createLive({ apiKey: bridge.apiKey, budget: bridge.ledger, voice: bridge.voice, instructions: this.instructions(), label: `${name} ${bridge.sessionId ?? 'session'}`,
       input: plan === 'fork' ? [] : input, store: this.store, fork: sourceId, log: event => log({ liveRun: live.reservation, ...event }) });
     attempt.live = live;
@@ -438,7 +437,7 @@ export class VoiceSessions {
       audit: bridge.handOffAudit, route: bridge.jev ? { actions: (request, spoken, why) => routeActions(bridge, request, spoken, why), job: (request, spoken, reply, actions) => jobTurn(bridge, request, spoken, reply, actions) } : undefined,
       read: bridge.jev ? (trigger, spoken) => bridge.read({ trigger, spoken }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
-    const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake };
+    const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake, perceivedInput };
     // A fork knows the page state its source was told, and how full its context is; a new session, the page it starts with.
     Object.assign(run, plan === 'fork' ? { briefed: record.briefed, context: record.context } : { briefed: seen?.signature ?? NO_PAGE });
     if (seen) this.bridge.presenter.speechCues.set(seen.cues);
@@ -460,7 +459,10 @@ export class VoiceSessions {
     live.on('fault', error => plan === 'fork' && !this.started.has(live) ? log({ type: 'voice.fork_fault', message: error.message }) : fault(error, page));
     live.on('answer', sdp => publish({ type: 'voice_answer', sdp }, page));
     live.on('sent', event => {
-      if (/^session\.(thinking|commentary|instructions)\.append$/.test(event.type)) publish({ type: 'context_sent', id: event.event_id, kind: event.type.split('.')[1], text: event.content, notification: event });
+      const kind = /^session\.(thinking|commentary|instructions)\.append$/.exec(event.type)?.[1] as SentKind | undefined;
+      if (!kind) return;
+      this.perceiving(run); perceive(run.record, { at: Date.now(), kind, text: event.content });
+      publish({ type: 'context_sent', id: event.event_id, kind, text: event.content, notification: event });
     });
     live.on('event', event => this.liveEvent(run, event));
     live.on('closed', result => this.closed(run, result));
@@ -566,9 +568,11 @@ export class VoiceSessions {
       this.bridge.publish({ type: 'live_usage', ...usage });
     }
   }
+  /** What GPT Live perceives starts again with a new session (a fork continues it): at its start, before anything is appended. */
+  perceiving(run: Run) { if (!run.perceiving) { run.perceiving = true; beginPerceived(run.record, run.plan, run.perceivedInput); } }
   begun(run: Run) {
     const { live, plan, page, automatic, record } = run, bridge = this.bridge, { log, publish, fault } = bridge;
-    this.started.add(live);
+    this.started.add(live); this.perceiving(run);
     // The replacement took over a dropped session's unsent speech.
     if (this.carried) { clearTimeout(this.carried.timer); this.carried = undefined; }
     // In force from the start: everything in a new session's startup prompt (one removed while it started is
