@@ -361,3 +361,21 @@ test("the operator done for now, then speaking on: voice stays on; with no answe
   h.voiceSessions.checkStandby(later(6500));
   await until(() => lives[0].state === 'closed');
 });
+
+test("words the job delegation put off because the operator hadn't finished go to the agent when Standby comes, rather than at the next wake", async t => {
+  const { fakeJev } = await import('./live-fake.ts');
+  const f = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10 } });
+  fakeJev(f.h, m => m.trigger === 'job' ? { needsAgent: .9, ready: .05 } : {});
+  const voicePage = page('voice-page');
+  Object.assign(voicePage.ws, { terminate() {}, close() {}, on() {} });
+  f.h.pages.all.set(voicePage.ws, voicePage);
+  await f.h.startLive(undefined, voicePage, 'fresh');
+  Object.assign(f.h.voiceSessions.mediator!, { operatorQuietMs: 50, replyStartMs: 30, replyMs: 60 });
+  const delivered: any[] = []; f.h.deliver = (request: any) => { delivered.push(request); };
+  f.lives[0].say('operator', 'Add a dark mode toggle, and also', 0);
+  await until(() => f.h.voiceSessions.mediator!.undecided());
+  assert.equal(delivered.length, 0, 'not finished: it waits');
+  f.h.voiceSessions.checkStandby(later(WINDOW + 500));
+  await until(() => delivered.length === 1);
+  assert.match(delivered[0].content, /stopped partway through this.*may be unfinished[\s\S]*user: Add a dark mode toggle, and also/);
+});

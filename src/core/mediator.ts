@@ -9,8 +9,8 @@ import { Floor, operatorSpeaking, type MicrophoneLevel } from './floor.ts';
 import { DEFAULT_TUNING, holdOf, type Tuning } from './tuning.ts';
 import type { DelegationAudit, HandOff } from './delegation-audit.ts';
 import type { Reading, Trigger } from './jev.ts';
-import type { Actions } from './turn.ts';
-import { cueNoDelegation, nothingToSend, queueFailed, sessionEndRequest, turnOutcome, uncertainNote, voiceRequest } from './prompts.ts';
+import type { Actions, Waiting } from './turn.ts';
+import { cueNoDelegation, heldNote, nothingToSend, queueFailed, sessionEndRequest, turnOutcome, uncertainNote, voiceRequest } from './prompts.ts';
 
 /** What the voice tool made of the operator's turn (turn.ts): Jev's reading, whether their words go to the agent, and what it did itself. */
 export interface Decision {
@@ -25,6 +25,10 @@ export interface Decision {
   moved?: boolean;
   /** Sent although Jev found nothing for the agent: the page failed or fell short, which the agent fixes. */
   escalated?: boolean;
+  /** Not decided: the operator hasn't finished saying it, and the job delegation reads it again with what they add. */
+  wait?: boolean;
+  /** Waiting words a reading found to need the agent: they go to it, whatever a later reading of the whole stretch finds. */
+  needed?: boolean;
   /** What the voice tool did itself first (turn.ts), when both calls were made together. */
   actions?: import('./turn.ts').Actions;
 }
@@ -32,7 +36,7 @@ export interface Decision {
 /** The voice tool's two readings of a turn (turn.ts): what it does itself, then, with GPT Live's reply, whether the words go to the agent. */
 export interface Route {
   actions: (request: SpokenRequest, spoken: Spoken[], why: Trigger) => Promise<Actions>;
-  job: (request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions) => Promise<Decision>;
+  job: (request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions, waiting?: Waiting) => Promise<Decision>;
 }
 
 // What GPT Live says while the operator only pauses ("Mm-hmm", "Go on"): no answer, so not the end of their turn.
@@ -93,6 +97,18 @@ export class Mediator {
    * often than at 4 (labeled sessions, Oct 28).
    */
   operatorQuietMs = 4000;
+  /**
+   * Words the operator hasn't finished saying wait undecided (the job delegation reads them again, with what they add, at the
+   * end of their next turn). They go to the agent anyway once the conversation stays quiet for HELD_QUIET_MS (neither the
+   * operator nor GPT Live speaking: they have stopped, not paused), or at the next reading that finds they need the agent
+   * once they have waited HELD_CAP_MS (finished or not: they went on to other things). On the labeled training sessions,
+   * after a turn ended in the middle of a request the operator spoke again within 10 s of it in 90% of cases, 15 s in 92%;
+   * the quiet waits about 15 s past the turn's end.
+   */
+  static HELD_QUIET_MS = 12000; static HELD_CAP_MS = 20000;
+  heldQuietMs = Mediator.HELD_QUIET_MS; heldCapMs = Mediator.HELD_CAP_MS; heldTimer?: NodeJS.Timeout; heldAt = 0;
+  /** The job delegation's own reading: the operator's last word it decided on (its next reading's latest words are all after it), since when words wait undecided, and whether a reading found they need the agent. */
+  jobRead = -1; undecidedSince = 0; undecidedNeeded = false;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
   constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, audit, route, read, consider, firstRecordId = 0 }: {
@@ -182,8 +198,11 @@ export class Mediator {
     const id = randomUUID();
     this.history.claim(request, id);
     this.pending++;
-    // What Jev reads as their latest words: all of theirs since the last reading.
-    const since = this.turn?.last ?? -1, spoken = this.history.spoken(request.through, since), heardAt = this.history.lastInputAt, route = this.route;
+    // What Jev reads as their latest words: all of theirs since the voice tool's last reading for its own actions (a page
+    // command never runs twice for the same words); for the job delegation, all since its last decision, so that words the
+    // operator hadn't finished are judged within the whole of what they said.
+    const since = this.turn?.last ?? -1, spoken = this.history.spoken(request.through, since), jobSpoken = this.history.spoken(request.through, this.jobRead);
+    const heardAt = this.history.lastInputAt, route = this.route, overdue = Boolean(this.undecidedSince) && Date.now() - this.undecidedSince >= this.heldCapMs;
     // The voice tool's own part, at once and in the operator's order; GPT Live hears what it did, and the learner and the
     // tuner take the reading.
     const actions = this.actionsOrder.then(() => route?.actions(request, spoken, why))
@@ -197,7 +216,12 @@ export class Mediator {
     // Jev failing, the words go to the agent: keeping work from it is the costly mistake.
     const decided = Promise.all([actions, this.order]).then(async ([done]): Promise<Decision> => {
       if (!route || !done) return { send: true };
-      return route.job(request, spoken, await this.replyTo(spoken.at(-1)?.at ?? heardAt, heardAt), done);
+      const reply = await this.replyTo(spoken.at(-1)?.at ?? heardAt, heardAt);
+      // They went on speaking before the decision, so they haven't finished: nothing is sent yet, and the end of their turn
+      // reads these words with what they add. Sent at once, they went in pieces ("Actually, I like the soft shapes one the"
+      // reached Codex a second after the turn ended, Oct 29, while the operator went on about the rim and the face).
+      const continued = this.history.lastInputAt > heardAt;
+      return route.job(request, jobSpoken, reply, done, { continued, overdue, needed: this.undecidedNeeded });
     }).catch(error => { this.log({ type: 'turn.error', message: (error as Error).message }); return { send: true } as Decision; });
     // What GPT Live was told about the turn stays with it: asked again to pass the words on, it hears the same.
     const done = decided.then(async decision => { const told = (await actions)?.told; this.decided(id, request, decision, delegationId, told); return told && !decision.told ? { ...decision, told } : decision; })
@@ -225,13 +249,47 @@ export class Mediator {
     });
   }
   /** What came of a turn: the words go to the agent, noted with what the voice tool did; or they stay for the next request, noted with it. GPT Live hears what was done (unless the voice tool's own reading told it already: toldBefore). */
-  decided(id: string, request: SpokenRequest, { reading, send, note, told, escalated }: Decision, delegationId?: string, toldBefore?: string) {
+  decided(id: string, request: SpokenRequest, { reading, send, note, told, escalated, wait, needed }: Decision, delegationId?: string, toldBefore?: string) {
     if (told && this.live.state === 'active') this.context.add('thinking', told, delegationId ?? null);
+    // Sent, or kept as needing nothing: the job delegation's next reading starts after these words. Not finished: they wait for it.
+    if (wait) { this.undecidedSince ||= Date.now(); this.undecidedNeeded ||= Boolean(needed); this.awaitQuiet(); }
+    else { this.jobRead = Math.max(this.jobRead, request.through); this.undecidedSince = 0; this.undecidedNeeded = false; clearTimeout(this.heldTimer); }
     if (send) return this.send(id, request, this.clean(voiceRequest(request.utterances, [...request.notes ?? [], ...note ? [note] : []])), delegationId ?? null, reading, escalated ? 'escalated' : 'passed');
-    this.log({ type: 'turn.kept', id, said: this.said(request).slice(-200), needsAgent: reading?.needsAgent ?? null, handled: Boolean(note) });
+    this.log({ type: 'turn.kept', id, said: this.said(request).slice(-200), needsAgent: reading?.needsAgent ?? null, handled: Boolean(note), ...wait && { waiting: true } });
     this.audit?.record({ handOff: 'kept', said: this.said(request), voiceSessionId: this.live.id, delegationId: delegationId ?? null, requestId: id }, reading?.needsAgent ?? null, reading?.transcript);
     this.giveBack(id, note);
     if (delegationId && !told && !toldBefore) this.outcome(delegationId, { send: false });
+  }
+  /** Words the job delegation put off because the operator hadn't finished, that no request has taken yet. */
+  undecided() { return this.undecidedSince > 0 && this.history.fragments.some(f => f.role === 'operator' && f.seq > this.jobRead && !f.sent && !f.claim); }
+  /**
+   * Words waiting undecided go to the agent once the conversation has been quiet for heldQuietMs: by then the operator has
+   * stopped rather than paused. Their next words, if they come first, are read with the waiting ones instead.
+   */
+  awaitQuiet() {
+    clearTimeout(this.heldTimer);
+    this.heldAt = Date.now();
+    const check = () => {
+      // Once they speak again, the end of that turn reads the waiting words with the new ones (and waits again, if so).
+      if (this.live.state !== 'active' || !this.undecided() || this.history.lastInputAt > this.heldAt) return;
+      const quiet = Date.now() - Math.max(this.history.lastInputAt, this.answerAt);
+      if (quiet < this.heldQuietMs || this.pending) { this.heldTimer = setTimeout(check, Math.max(200, this.heldQuietMs - quiet)); this.heldTimer.unref?.(); return; }
+      this.sendHeld();
+    };
+    this.heldTimer = setTimeout(check, this.heldQuietMs);
+    this.heldTimer.unref?.();
+  }
+  /** The operator stopped partway and said no more: what they said since the last request goes to the agent, noted as such. */
+  sendHeld() {
+    clearTimeout(this.heldTimer);
+    if (!this.undecided()) return;
+    const request = this.history.request();
+    if (!request) return;
+    const id = randomUUID(), seconds = Math.round((Date.now() - this.history.lastInputAt) / 1000);
+    this.history.claim(request, id);
+    this.jobRead = Math.max(this.jobRead, request.through); this.undecidedSince = 0; this.undecidedNeeded = false;
+    this.log({ type: 'turn.held_sent', id, seconds, said: this.said(request).slice(-200) });
+    this.inTurn(() => this.send(id, request, this.clean(voiceRequest(request.utterances, [...request.notes ?? [], heldNote(seconds)])), null, undefined, 'held'));
   }
   /** GPT Live asked to pass words on: what came of them (nothing new to send, sent, or kept). */
   outcome(delegationId: string, decision?: Decision) {
@@ -259,7 +317,7 @@ export class Mediator {
     const needsAgent = reading?.needsAgent ?? null;
     this.audit.record({ handOff, said, voiceSessionId: this.live.id, delegationId, requestId }, needsAgent, reading?.transcript);
     this.publish({ type: 'jev_check', requestId, at: Date.now(), kind: 'handoff', words: said, scores: { needsAgent, handOff },
-      outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${{ passed: this.route ? 'Jev passed it on' : 'GPT Live passed it on', kept: 'Kept', answered: 'Kept; sent when voice ended', escalated: "The voice tool passed it on: the page couldn't do what they meant" }[handOff]}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})` });
+      outcome: typeof needsAgent !== 'number' ? 'Hand-off check failed' : `${{ passed: this.route ? 'Jev passed it on' : 'GPT Live passed it on', kept: 'Kept', answered: 'Kept; sent when voice ended', escalated: "The voice tool passed it on: the page couldn't do what they meant", held: "Waited for the operator to finish; sent once they stayed quiet" }[handOff]}; Jev: ${needsAgent >= .5 ? 'needed the harness' : 'could have been answered'} (${needsAgent.toFixed(2)})` });
   }
   /** The microphone level of the page this voice session listens to. */
   // The operator's held words still going out after a wake count as their talking: GPT Live is hearing them now.
@@ -313,7 +371,7 @@ export class Mediator {
    */
   stop(reason?: string) {
     if (reason) this.ended ??= reason;
-    this.feed.stop(); this.context.stop(); clearTimeout(this.quiet); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();
+    this.feed.stop(); this.context.stop(); clearTimeout(this.quiet); clearTimeout(this.heldTimer); for (const timer of this.timers) clearTimeout(timer); this.timers.clear();
     this.live.off('event', this.onLive); this.observer.off('observation', this.onObservation);
   }
 }

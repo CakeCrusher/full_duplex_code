@@ -609,6 +609,8 @@ export class VoiceSessions {
     const reconnect = unexpected && this.live === live && !bridge.stopping && page?.ws.readyState === WebSocket.OPEN && this.allowReconnect();
     if (unexpected) this.lastDrop = { reason: result.reason, at: Date.now(), reconnecting: Boolean(reconnect) };
     // Speech not yet passed on goes to the session that replaces this one (whenever Standby wakes); otherwise to the agent now.
+    // Words waiting for the operator to finish don't wait for a wake: the quiet that brought Standby is the end of them.
+    if (standby) own?.sendHeld();
     if (reconnect || moved || standby) this.carry(mediator, result.reason, !standby); else own?.handOff(result.reason);
     if (reconnect) log({ type: 'voice.reconnecting', reason: result.reason, recent: this.reconnects.length });
     own?.stop();

@@ -208,6 +208,8 @@ export const pageDoneNote = (done: readonly { say: string }[]) =>
   `The voice tool already did the page part of this in the browser (${steps(done)}); don't do that again, do the rest.`;
 export const pageFailedNote = (done: readonly { say: string }[], error: string, page?: { title: string; url: string }) =>
   `The voice tool tried to do this on the page${page ? ` "${page.title.slice(0, 80)}" (${page.url})` : ''} in the browser (${steps(done)}) and the page's controls failed: ${error.slice(0, 400)}. Fix the page's controller (window.fdcController or its data-fdc annotations; the guide is ${STAGE_GUIDE}) so this works, reload the page, then do what the user asked.`;
+// Words the operator hadn't finished saying (turn.ts), sent once they had said nothing more for a while (mediator.ts).
+export const heldNote = (seconds: number) => `The user stopped partway through this and said nothing more for ${seconds} seconds, so it came to you then: it may be unfinished.`;
 export const uncertainNote = 'Some of it may have reached you already: its delivery was uncertain. Don\'t repeat work it already started.';
 // Speech the voice assistant had not passed on when the voice session ended.
 export const sessionEndRequest = (reason: string, utterances: readonly Pick<Utterance, 'role' | 'text'>[], notes: readonly string[] = []) =>

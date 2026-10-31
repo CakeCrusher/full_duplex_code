@@ -4,8 +4,9 @@
 //   to the learner and the tuner (they take the reading). It never decides whether their words go to the agent; only
 //   page controls that fail send them (escalated).
 // - The job delegation, once the voice companion has replied (jobTurn): whether their words need the coding agent,
-//   read with what the companion said and what the page's commands can do. Keeping work from the agent is the costly
-//   mistake; GPT Live passes nothing on.
+//   read with what the companion said and what the page's commands can do, and whether they have finished saying them.
+//   Words not finished wait for the next reading, which takes them with what the operator adds; never dropped. Keeping
+//   work from the agent is the costly mistake; GPT Live passes nothing on.
 import type { Harness } from './bridge.ts';
 import type { Decision } from './mediator.ts';
 import type { StageView } from './stage.ts';
@@ -38,13 +39,23 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
   return { reading, view, told, note: page?.note ?? (view ? lookingNote(view) : undefined), keptNote: handled && handledNote(handled), moved: page?.moved, escalated: page?.escalated, aboutPage: (reading.page?.only ?? 0) >= PAGE_ONLY };
 }
 
-export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions): Promise<Decision> {
+/** Words waiting undecided before this reading (mediator.ts): the operator went on speaking before the decision, the words have waited too long, or an earlier reading of them found they need the agent. */
+export interface Waiting { continued?: boolean; overdue?: boolean; needed?: boolean }
+
+export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions, { continued = false, overdue = false, needed: neededBefore = false }: Waiting = {}): Promise<Decision> {
   const reading = await bridge.read({ trigger: 'job', spoken, reply, page: actions.view });
-  const send = Boolean(actions.escalated) || ((reading.needsAgent ?? 1) >= NEEDS_AGENT && (reading.ready ?? 1) >= READY);
-  bridge.log({ type: 'turn.job', said: request.fresh.slice(-200), reply: reply?.slice(-200) ?? null, needsAgent: reading.needsAgent, ready: reading.ready, send });
+  // Once found to need the agent, waiting words keep needing it: a later reading of the whole stretch never drops them
+  // (read with the talk around them, a request was sometimes found to need nothing and waited minutes for another).
+  const needed = neededBefore || (reading.needsAgent ?? 1) >= NEEDS_AGENT, ready = (reading.ready ?? 1) >= READY;
+  // Sent once the operator has finished saying it and stopped, or once it has waited too long (mediator.ts, HELD_CAP_MS).
+  const send = Boolean(actions.escalated) || (needed && ((ready && !continued) || overdue));
+  // Not finished, or still being said: no decision yet. The next reading takes these words with what the operator adds, or
+  // they go once the conversation stays quiet (mediator.ts). There is a next time, so a pause is no reason to send half a request.
+  const wait = !send && (needed || continued);
+  bridge.log({ type: 'turn.job', said: request.fresh.slice(-200), reply: reply?.slice(-200) ?? null, needsAgent: reading.needsAgent, ready: reading.ready, send, ...wait && { wait }, ...continued && { continued }, ...overdue && { overdue } });
   // Their words about the page that no command did go to the agent to extend the page's controller.
   const shortOfCommand = send && !actions.escalated && actions.view && actions.aboutPage && !actions.moved;
-  return { reading, send, note: send ? (shortOfCommand ? controllerNote(actions.view!) : actions.note) : actions.keptNote, moved: actions.moved, escalated: actions.escalated };
+  return { reading, send, wait, needed: wait && needed, note: send ? (shortOfCommand ? controllerNote(actions.view!) : actions.note) : actions.keptNote, moved: actions.moved, escalated: actions.escalated };
 }
 
 /** Both calls in turn, without waiting for a reply: the turn as the tests (and a voice tool that heard none) read it. */
