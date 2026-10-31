@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ObservationKind, TurnState } from '../../core/adapter.ts';
-import { AgentObserver, type Logger } from '../../core/agent-observer.ts';
+import type { Observation, ObservationKind, TurnState } from '../../core/adapter.ts';
+import { AgentObserver, type Logger, type ToolUse } from '../../core/agent-observer.ts';
 import { observation as makeObservation } from '../../core/observation.ts';
 import { piProfile } from './profile.ts';
 import { piContext } from './context.ts';
@@ -35,14 +35,25 @@ export class PiObserver extends AgentObserver {
   /** How the run's last assistant message ended: an error makes a failed turn, unless Pi retries. */
   lastStop?: string;
   restored = new Set<string>();
+  /** What each running tool call was asked (tool_execution_start), until it ends: Pi's end event carries only the result. */
+  started = new Map<string, Record<string, any>>();
   constructor({ sessionId, clean = String, log = () => {} }: { sessionId?: string; clean?: (text: string) => string; log?: Logger }) {
     super({ agent: { profile: piProfile, context: piContext, receivedRequest }, clean, log });
     this.sessionId = sessionId;
   }
   observe(data: Record<string, any>, emit = true) {
+    if (data.type === 'tool_execution_start' && typeof data.toolCallId === 'string') { this.started.set(data.toolCallId, data.args ?? {}); if (this.started.size > 200) this.started.delete(this.started.keys().next().value!); }
     const failed = data.type === 'agent_settled' && this.lastStop === 'error';
     if (data.source !== 'session_file') this.turn = this.nextTurn(data, failed);
     this.add(makeObservation({ kind: observationKind(data, failed), name: data.type, text: this.clean(JSON.stringify(data)), at: Date.now(), state: this.turn, child: false }), emit);
+  }
+  /** A finished tool call: its end event, with what its start event asked. */
+  override toolUse(observation: Observation): ToolUse | undefined {
+    const raw = observation.raw;
+    if (raw?.type !== 'tool_execution_end' || typeof raw.toolName !== 'string') return;
+    const input = this.started.get(raw.toolCallId) ?? {};
+    this.started.delete(raw.toolCallId);
+    return { tool: raw.toolName, input, response: raw.result?.content ?? raw.result };
   }
   nextTurn(data: Record<string, any>, failed: boolean): TurnState {
     switch (data.type) {

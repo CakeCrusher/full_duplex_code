@@ -2,6 +2,8 @@ import { EventEmitter } from 'node:events';
 import type { AgentDefinition, AgentState, Observation } from './adapter.ts';
 
 export interface ConversationTurn { role: 'input' | 'output'; text: string }
+/** A tool call the agent finished, in terms every agent shares: the tool, what it was asked, what it answered. */
+export interface ToolUse { tool: string; input: Record<string, any>; response: unknown }
 export type Logger = (event: Record<string, unknown>) => void;
 /** The parts of an agent definition that describe its observations. */
 export type ObservedAgent = Pick<AgentDefinition, 'profile' | 'context' | 'receivedRequest' | 'toolCall'>;
@@ -47,5 +49,14 @@ export class AgentObserver extends EventEmitter {
   }
   /** One event from the agent's command hook. Returns false for another session's event. */
   hook(_event: Record<string, any>): boolean { return false; }
+  /**
+   * The tool call an observation reports finished, if it does: what the stage reads to learn which tab the agent showed
+   * (stage.ts). Agents whose hooks are Claude's shape (PostToolUse with tool_name, tool_input and tool_response) need no
+   * more; an agent whose events split a call in two pairs them (Pi).
+   */
+  toolUse(observation: Observation): ToolUse | undefined {
+    const raw = observation.raw;
+    return raw?.hook_event_name === 'PostToolUse' && typeof raw.tool_name === 'string' ? { tool: raw.tool_name, input: raw.tool_input ?? {}, response: raw.tool_response } : undefined;
+  }
   close() {}
 }

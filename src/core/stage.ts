@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import type { Observation } from './adapter.ts';
+import type { ToolUse } from './agent-observer.ts';
 import { Browser } from './browser.ts';
 import { cueWords, type SpeechCue } from './speech-cues.ts';
 
@@ -66,18 +66,19 @@ export class Stage {
     try { fs.mkdirSync(path.dirname(this.file), { recursive: true }); fs.writeFileSync(this.file, JSON.stringify({ tabId: this.tabId ?? null, url: this.view?.url ?? this.pages.get(this.tabId ?? 0)?.url ?? null, at: Date.now(), pages })); } catch {}
   }
   /**
-   * The agent's own browser tool calls say which tab it showed the operator. At the end of each of its turns the page is
-   * read again, since the agent may have rebuilt it however it reloaded it: the voice is briefed anew if its parts changed.
+   * The agent's own browser tool calls say which tab it showed the operator (each agent's observer reports a finished call
+   * in the same terms: AgentObserver.toolUse). At the end of each of its turns the page is read again, since the agent may
+   * have rebuilt it however it reloaded it: the voice is briefed anew if its parts changed.
    */
-  observe({ raw }: Pick<Observation, 'raw'>, turnEnded = false) {
+  observe(used: ToolUse | undefined, turnEnded = false) {
     if (turnEnded && this.tabId) { this.view = undefined; this.onChange?.(); return; }
-    if (raw?.hook_event_name !== 'PostToolUse' || !SHOWS.test(String(raw.tool_name ?? ''))) return;
-    const input = raw.tool_input ?? {}, response = typeof raw.tool_response === 'string' ? raw.tool_response : JSON.stringify(raw.tool_response ?? '');
+    if (!used || !SHOWS.test(used.tool)) return;
+    const input = used.input, response = typeof used.response === 'string' ? used.response : JSON.stringify(used.response ?? '');
     const created = /Tab ID: (\d+)/.exec(response)?.[1];
     const named = typeof input.tabId === 'number' ? input.tabId : [...String(input.code ?? '').matchAll(/(?:navigate|set_tab_focus)\(\s*\{[^}]*?tabId:\s*(\d+)/g)].at(-1)?.[1];
     const tabId = Number(created ?? named);
     if (!Number.isInteger(tabId) || tabId <= 0) return;
-    if (tabId !== this.tabId) this.log({ type: 'stage.tab', tabId, by: raw.tool_name });
+    if (tabId !== this.tabId) this.log({ type: 'stage.tab', tabId, by: used.tool });
     this.tabId = tabId; this.view = undefined; this.remember();
     this.onChange?.();
   }

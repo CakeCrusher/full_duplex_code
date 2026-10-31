@@ -14,7 +14,8 @@ import { decides, fakeJev, harness, pageReading, turn, until } from './live-fake
 
 const view: StageView = { tabId: 7, title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"',
   commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'goto_options', say: 'Go to the section "Options"' }, { id: 'show_the_recommendation', say: 'Show and highlight: the recommendation' }], parts: [] };
-const posted = (tool_name: string, tool_input: Record<string, unknown>, tool_response: unknown = '') => ({ raw: { hook_event_name: 'PostToolUse', tool_name, tool_input, tool_response } });
+// A finished tool call, as every agent's observer reports it (AgentObserver.toolUse).
+const posted = (tool: string, input: Record<string, unknown>, response: unknown = '') => ({ tool, input, response });
 
 test('the stage script parses (it only ever runs inside a page)', () => {
   assert.doesNotThrow(() => new Function(fs.readFileSync(new URL('../src/core/stage-page.js', import.meta.url), 'utf8')));
@@ -31,6 +32,25 @@ test('the stage is the tab the agent last showed with the browser tools', () => 
   stage.observe(posted('mcp__open-claude-in-chrome-hybrid__javascript_tool', { tabId: 14, text: '1' }));
   stage.observe(posted('Read', { file_path: '/x' }));
   assert.equal(stage.tabId, 13, 'reading a page or a file does not change the stage');
+});
+
+test("every agent's finished tool calls name the tab it showed: Claude's and Codex's hooks as they are, Pi's start and end paired", async () => {
+  const { PiObserver } = await import('../src/adapters/pi/observer.ts');
+  const claude = new ClaudeObserver({ sessionId: 'c' });
+  const seen: any[] = [];
+  claude.on('observation', o => seen.push(claude.toolUse(o)));
+  claude.hook({ session_id: 'c', hook_event_name: 'PostToolUse', tool_name: 'mcp__open-claude-in-chrome-hybrid__navigate', tool_input: { url: 'http://x/a.html', tabId: 21 }, tool_response: 'Navigated' });
+  assert.deepEqual(seen.at(-1), { tool: 'mcp__open-claude-in-chrome-hybrid__navigate', input: { url: 'http://x/a.html', tabId: 21 }, response: 'Navigated' });
+  claude.close();
+  const pi = new PiObserver({ sessionId: 'p' }), stage = new Stage({ log: () => {} });
+  pi.on('observation', o => stage.observe(pi.toolUse(o)));
+  pi.observe({ type: 'tool_execution_start', toolCallId: 't1', toolName: 'mcp__open-claude-in-chrome-hybrid__navigate', args: { url: 'http://x/deck.html', tabId: 33 } });
+  assert.equal(stage.tabId, undefined, 'started, not finished');
+  pi.observe({ type: 'tool_execution_end', toolCallId: 't1', toolName: 'mcp__open-claude-in-chrome-hybrid__navigate', result: { content: [{ type: 'text', text: 'Navigated to http://x/deck.html.' }] }, isError: false });
+  assert.equal(stage.tabId, 33, "a page Pi shows is on stage, as Claude's and Codex's are");
+  pi.observe({ type: 'tool_execution_start', toolCallId: 't2', toolName: 'mcp__open-claude-in-chrome-hybrid__tabs_create_mcp', args: {} });
+  pi.observe({ type: 'tool_execution_end', toolCallId: 't2', toolName: 'mcp__open-claude-in-chrome-hybrid__tabs_create_mcp', result: { content: [{ type: 'text', text: 'Created new tab. Tab ID: 34' }] }, isError: false });
+  assert.equal(stage.tabId, 34);
 });
 
 test('a closed stage tab ends the stage', async () => {
