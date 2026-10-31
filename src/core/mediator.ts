@@ -39,6 +39,10 @@ export interface Route {
 const BACKCHANNEL = new Set(['mm', 'mmm', 'mhm', 'hm', 'hmm', 'uh', 'huh', 'um', 'ah', 'oh', 'okay', 'ok', 'yeah', 'yes', 'yep', 'right', 'sure', 'alright', 'go', 'on', 'ahead', 'i', 'see', 'got', 'it', 'so']);
 /** Whether GPT Live's words so far answer anything: a whole word beyond a backchannel. */
 const answers = (said: string) => (said.toLowerCase().match(/[a-z']+(?=[^a-z'])/g) ?? []).some(word => !BACKCHANNEL.has(word));
+// Words that carry nothing of what GPT Live will do about the operator's words: acknowledgments and the words around them.
+const FILLER = new Set("thanks thank one sec second moment hold just let me you it that this the a an to and of is i i'm im i'll ill we we'll its it's there on for be will can now here up".split(' '));
+/** How much GPT Live's reply says, past its acknowledgments ("Okay. Hold on." says nothing; "Walking you through the map now" does). */
+const substance = (said: string) => (said.toLowerCase().match(/[a-z']+/g) ?? []).filter(word => !BACKCHANNEL.has(word) && !FILLER.has(word)).length;
 
 /** The part of a Live session the mediator uses. */
 export interface MediatedLive extends ContextSink, Pick<EventEmitter, 'on' | 'off'> {
@@ -80,13 +84,15 @@ export class Mediator {
   /** What GPT Live said lately, as it said it: its reply to the operator's turn, for the job delegation. */
   voiceSaid: { at: number; text: string }[] = [];
   /**
-   * How long the job delegation waits for GPT Live's reply to a turn: until its first sentence ends, at most replyMs after
-   * the turn was read, and no longer than replyStartMs if it hasn't begun. Its reply shows what it could answer itself
-   * (on the labeled sessions, read about 3 s after the turn: 50 of 79 stretches of talk kept from the agent against 28
-   * without it, a request lost in 25 rather than 33).
+   * How long the job delegation waits for GPT Live's reply to a turn: until the reply says REPLY_WORDS words past its
+   * acknowledgments at a sentence's end, or stops at one for REPLY_PAUSE_MS; at most replyMs after the turn was read, and
+   * no longer than replyStartMs if it hasn't begun. Its reply shows what it could answer itself (on the labeled sessions,
+   * read about 3 s after the turn: 50 of 79 stretches of talk kept from the agent against 28 without it, a request lost in
+   * 25 rather than 33). Until Oct 31 the wait ended with the reply's first sentence, mostly an acknowledgment: a median of
+   * 7 words read of 21 said ("Okay. Hold on.", "Got it. Walking"). The page doesn't wait on this reading (presenter.ts).
    */
-  static REPLY_MS = 5000; static REPLY_START_MS = 2500;
-  replyMs = Mediator.REPLY_MS; replyStartMs = Mediator.REPLY_START_MS;
+  static REPLY_MS = 6000; static REPLY_START_MS = 2500; static REPLY_WORDS = 10; static REPLY_PAUSE_MS = 900;
+  replyMs = Mediator.REPLY_MS; replyStartMs = Mediator.REPLY_START_MS; replyPauseMs = Mediator.REPLY_PAUSE_MS;
   /**
    * How long the operator is quiet before their turn has ended, when GPT Live doesn't answer first (a pause mid-sentence is
    * no end: "Take me to … tonight" was read as "Take me to"). At 2.5 s, long requests made in pieces went in pieces more
@@ -229,16 +235,17 @@ export class Mediator {
   }
   /**
    * GPT Live's reply to the operator's latest words, begun at `from` (it often answers before their transcript is in): what
-   * it said since, once its first sentence ends; at most replyMs from now, none if it hasn't begun within replyStartMs. A
-   * word of theirs after `heardAt` ends the wait.
+   * it said since, once it says enough of what it makes of them or stops (REPLY_WORDS, replyPauseMs); at most replyMs
+   * from now, none if it hasn't begun within replyStartMs. A word of theirs after `heardAt` ends the wait.
    */
   replyTo(from: number, heardAt: number): Promise<string | undefined> {
     const started = Date.now();
     return new Promise(resolve => {
       const check = () => {
-        const text = this.voiceSaid.filter(d => d.at >= from).map(d => d.text).join('').replace(/\s+/g, ' ').trim(), waited = Date.now() - started;
-        const spoke = answers(`${text} `), whole = spoke && /[.!?…](\s|$)/.test(text);
-        if (whole || waited >= this.replyMs || (!spoke && waited >= this.replyStartMs) || this.history.lastInputAt > heardAt || this.live.state !== 'active') resolve(text || undefined);
+        const said = this.voiceSaid.filter(d => d.at >= from), text = said.map(d => d.text).join('').replace(/\s+/g, ' ').trim(), waited = Date.now() - started;
+        const spoke = answers(`${text} `), ended = spoke && /[.!?…]["”’)]?$/.test(text);
+        const enough = ended && substance(text) >= Mediator.REPLY_WORDS, stopped = ended && Date.now() - (said.at(-1)?.at ?? 0) >= this.replyPauseMs;
+        if (enough || stopped || waited >= this.replyMs || (!spoke && waited >= this.replyStartMs) || this.history.lastInputAt > heardAt || this.live.state !== 'active') resolve(text || undefined);
         else this.schedule(check, 150);
       };
       check();

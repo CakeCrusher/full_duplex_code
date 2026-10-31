@@ -39,7 +39,7 @@ test('each Jev call of a turn is recorded with what fdc asked, what Jev answered
   assert.equal(jobCall.status, 200);
   assert.ok(jobCall.ms >= 0);
   assert.deepEqual(jobCall.decision, { outcome: 'send', needed: true, finished: true });
-  assert.deepEqual(turnCall.config.thresholds, { companion_only: .85, standby: .7, behave: .6, design_talk: .5 });
+  assert.deepEqual(turnCall.config.thresholds, { companion_only: .85, standby: .7, goal: .6, behave: .6, design_talk: .5 });
   assert.deepEqual(turnCall.answers, own);
   assert.deepEqual(turnCall.decision, { standby: false, companionOnly: false, learned: false }, "the voice tool's own actions, then the learner's");
   const text = fs.readFileSync(file, 'utf8');
@@ -85,13 +85,13 @@ test("the page command Jev chose for the voice's words is recorded, and so is no
   const view: StageView = { tabId: 7, title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"',
     commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'goto_options', say: 'Go to the section "Options"' }], parts: [] };
   let asked = 0;
-  const { h, calls } = await audited(t, () => ({ answers: { page_command: ++asked === 1 ? { choice: 'goto_options', probabilities: { goto_options: .8, next_section: .1, none: .1 } } : { choice: 'none', probabilities: { none: .9, goto_options: .05, next_section: .05 } } } }));
+  const { h, calls } = await audited(t, () => ({ answers: { page_command: ++asked === 1 ? { choice: 'goto_options', probabilities: { goto_options: .8, next_section: .1, none: .1 } } : { choice: 'none', probabilities: { none: .9, goto_options: .05, next_section: .05 } }, page_more: { noul: .1 } } }));
   const ran: string[][] = [];
   h.stage = { tabId: 7, view, pages: new Map(), describe: async () => view, run: async (commands: string[]) => { ran.push(commands); return { done: [], onScreen: '' }; }, follow: async () => null, observe() {}, close() {} } as any;
-  await h.presenter.judgedMove('the options');
-  await h.presenter.judgedMove('the repeat visit');
+  await h.presenter.show('The options are where it gets interesting.');
+  await h.presenter.show('The repeat visit is a separate story.');
   assert.deepEqual(ran, [['goto_options']]);
-  assert.deepEqual(calls().map(c => [c.trigger, c.decision, c.config.thresholds]), [['cue', { command: 'goto_options' }, { page_command: .45 }], ['cue', { command: null }, { page_command: .45 }]]);
+  assert.deepEqual(calls().map(c => [c.trigger, c.decision, c.config.thresholds]), [['cue', { command: 'goto_options', step: 0, more: false }, { page_command: .45, page_more: .5 }], ['cue', { command: null, step: 0 }, { page_command: .45, page_more: .5 }]]);
 });
 
 test('a reading fdc has not finished acting on is recorded as it is when fdc stops, or 30 s after the call', async t => {

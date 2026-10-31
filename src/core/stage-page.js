@@ -49,6 +49,13 @@
   const place = () => {
     const el = stage.at;
     if (!el || !el.isConnected) { ring.style.opacity = '0'; return; }
+    // A table's column is ringed across its cells.
+    const cells = stage.span?.filter(c => c.isConnected).map(c => c.getBoundingClientRect());
+    if (cells?.length) {
+      const left = Math.min(...cells.map(c => c.left)), right = Math.max(...cells.map(c => c.right)), top = Math.min(...cells.map(c => c.top)), bottom = Math.max(...cells.map(c => c.bottom));
+      Object.assign(ring.style, { left: `${left - 4}px`, top: `${top - 4}px`, width: `${right - left + 8}px`, height: `${bottom - top + 8}px`, opacity: stage.ringOn ? '1' : '0' });
+      return;
+    }
     // A heading is ringed with the block under it, so the eye lands on the part, not one line (capped to the view).
     const r = el.getBoundingClientRect(), pad = 6, next = el.matches(UNITS.heading) ? el.nextElementSibling : null;
     const n = next && !next.matches(UNITS.heading) && visible(next) ? next.getBoundingClientRect() : null;
@@ -58,8 +65,13 @@
   let frame = 0;
   const follow = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(place); };
   addEventListener('scroll', follow, { passive: true, capture: true }); addEventListener('resize', follow);
+  // The viewer's own moves (scrolling, keys, clicks), apart from fdc's: fdc tells the voice where they went (here()).
+  const viewerMoved = () => { stage.viewerAt = Date.now(); };
+  for (const type of ['wheel', 'touchmove', 'keydown', 'mousedown']) addEventListener(type, viewerMoved, { passive: true, capture: true });
 
   const settle = () => new Promise(resolve => {
+    // A step on the way to another (stage.fast) only has to be on screen: its part's own controls show once it is.
+    if (stage.fast) { requestAnimationFrame(() => { place(); resolve(); }); return; }
     // Scrolling ends when the element stops moving in the view.
     let last = NaN, still = 0;
     const tick = () => { const y = stage.at?.getBoundingClientRect().top ?? 0; if (Math.abs(y - last) < 1) still++; else still = 0; last = y; place(); if (still > 4) resolve(); else requestAnimationFrame(tick); };
@@ -72,7 +84,7 @@
     const r = el.getBoundingClientRect(), far = r.bottom < -innerHeight * 1.5 || r.top > innerHeight * 2.5;
     // Room above a part brought to the top, for its ring.
     if (block === 'start' && !el.style.scrollMarginTop) el.style.scrollMarginTop = '28px';
-    el.scrollIntoView({ behavior: far ? 'instant' : 'smooth', block });
+    el.scrollIntoView({ behavior: far || stage.fast ? 'instant' : 'smooth', block });
     if (far) ring.animate([{ transform: 'scale(1.04)', opacity: 0.2 }, { transform: 'scale(1)', opacity: 1 }], { duration: 450, easing: 'ease-out' });
   };
   const describe = el => {
@@ -86,10 +98,10 @@
     // Where the viewer was, even before any move (the paragraph at the top of the view): back returns there.
     const from = current('paragraph');
     if (from && from !== el) stage.history.push(from);
-    stage.at = el; stage.ringOn = true;
+    stage.at = el; stage.span = null; stage.ringOn = true;
     reveal(el, block);
     await settle();
-    glow();
+    if (!stage.fast) glow();
     return describe(el);
   };
   // The element the viewer is looking at: the first unit near the top of the view.
@@ -150,7 +162,7 @@
     commands.push({ id: 'scroll_down', say: 'Scroll down a bit, when they name no unit (not paragraphs, sections or items)', run: () => scroll(1) });
     commands.push({ id: 'scroll_up', say: 'Scroll up a bit, when they name no unit (not paragraphs, sections or items)', run: () => scroll(-1) });
     commands.push({ id: 'top', say: 'Go to the top of the page', run: () => go(units('heading')[0] ?? document.body, 'start') });
-    commands.push({ id: 'highlight_here', say: 'Highlight the paragraph in view, only when the operator says "highlight this" without naming what', run: async () => { const el = current('paragraph'); stage.at = el; stage.ringOn = true; place(); return describe(el); } });
+    commands.push({ id: 'highlight_here', say: 'Highlight the paragraph in view, only when the operator says "highlight this" without naming what', run: async () => { const el = current('paragraph'); stage.at = el; stage.span = null; stage.ringOn = true; place(); return describe(el); } });
     commands.push({ id: 'clear_highlight', say: 'Remove the highlight', run: async () => { stage.ringOn = false; place(); return 'The highlight is off.'; } });
     const used = new Set(commands.map(c => c.id));
     const unique = id => { let out = id, n = 2; while (used.has(out)) out = `${id}_${n++}`; used.add(out); return out; };
@@ -188,7 +200,62 @@
     const offered = page().map(c => c.say.toLowerCase()).join('\n');
     // Only what is shown: an annotation on a hidden slide or tab is the page's own controller's to show.
     for (const el of [...document.querySelectorAll('[data-fdc]')].slice(0, 30)) if (visible(el) && !offered.includes(el.dataset.fdc.toLowerCase())) commands.push({ id: unique(`show_${slug(el.dataset.fdc)}`), say: `Show and highlight: ${el.dataset.fdc}`, anchor: anchorOf(el), name: el.dataset.fdc, run: () => go(el) });
+    commands.push(...tableCommands(unique));
     return commands;
+  };
+  // The table most on screen: each of its rows (by its first cell) and columns (by its header) can be ringed, so the voice
+  // can point at "the FDC row" or "the follows column" as it explains a grid. Only while the table is on screen, as a
+  // part's own controls are; a grid that isn't a table gets such commands from the page's controller.
+  const shownArea = el => { const r = el.getBoundingClientRect(); return Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0)) * r.width; };
+  const tableCommands = unique => {
+    const table = [...document.querySelectorAll('table')].filter(t => visible(t) && inView(t) && !t.closest('#__fdc_ring')).sort((a, b) => shownArea(b) - shownArea(a))[0];
+    if (!table) return [];
+    const rows = [...table.rows].filter(visible), head = table.tHead?.rows[0] ?? (rows[0] && [...rows[0].cells].every(c => c.tagName === 'TH') ? rows[0] : null);
+    const name = text(table.caption ?? table.closest('figure')?.querySelector('figcaption') ?? sectionOf(table) ?? table).slice(0, 60);
+    const of = name ? ` in the table "${name}"` : ' in the table on screen', out = [];
+    for (const row of rows.filter(r => r !== head).slice(0, 10)) {
+      const label = text(row.cells[0] ?? row).slice(0, 40);
+      if (label) out.push({ id: unique(`row_${slug(label)}`), say: `Highlight the row "${label}"${of}`, run: () => go(row) });
+    }
+    [...head?.cells ?? []].slice(0, 8).forEach((cell, i) => {
+      const label = text(cell).slice(0, 40);
+      if (!label) return;
+      out.push({ id: unique(`column_${slug(label)}`), say: `Highlight the column "${label}"${of}`, run: async () => {
+        const cells = rows.map(r => r.cells[i]).filter(Boolean);
+        stage.at = cell; stage.span = cells; stage.ringOn = true;
+        reveal(table, 'nearest'); await settle(); if (!stage.fast) glow();
+        return `column "${label}"${of}: ${cells.filter(c => c !== cell).map(text).join(', ').slice(0, 400)}`;
+      } });
+    });
+    return out;
+  };
+  // Where the viewer is, in words and in structure. A controller's where() or run() may return text or { text, path,
+  // step: { index, total, of }, revision }: path from the outer part in ("FDC waves", "Wave 2"), the step within the
+  // part, the page's content revision. Text that counts ("Stage 3 of 5", "slide 2/6") gives the step too.
+  const STEP = /\b([a-z]+)\s+(\d+)\s*(?:of|\/)\s*(\d+)\b/i;
+  const focusOf = value => {
+    const given = value && typeof value === 'object', said = given ? String(value.text ?? value.where ?? '') : value == null ? '' : String(value);
+    const focus = {}, path = given && Array.isArray(value.path) ? value.path.map(p => String(p).slice(0, 80)).filter(Boolean).slice(0, 6) : [];
+    if (path.length) focus.path = path;
+    const counted = STEP.exec(said), step = given && value.step && Number.isFinite(+value.step.index) && Number.isFinite(+value.step.total) ? value.step : counted && { index: counted[2], total: counted[3], of: counted[1] };
+    if (step) focus.step = { index: +step.index, total: +step.total, ...step.of ? { of: String(step.of).toLowerCase().slice(0, 40) } : {} };
+    if (given && value.revision != null) focus.revision = String(value.revision).slice(0, 60);
+    return { text: said, focus };
+  };
+  // Without a controller's word for it: the section in view, and the heading under it, among the page's sections.
+  const domFocus = () => {
+    // Counted among the sections proper: a page's title above them is no section of its own.
+    const el = current('paragraph'), sections = units('heading').filter(h => level(h) === sectionLevel());
+    const section = el && sectionOf(el), at = sections.indexOf(section);
+    const sub = el && units('heading').filter(h => level(h) > sectionLevel() && (h === el || before(h, el)) && (!section || before(section, h))).at(-1);
+    return { ...section ? { path: [text(section).slice(0, 80), ...sub ? [text(sub).slice(0, 80)] : []] } : {}, ...at >= 0 ? { step: { index: at + 1, total: sections.length, of: 'section' } } : {} };
+  };
+  const whereNow = () => {
+    let said;
+    try { said = window.fdcController?.where?.(); } catch {}
+    if (said == null) return { text: describe(current('paragraph')), focus: domFocus() };
+    const out = focusOf(said);
+    return out.text ? out : { text: describe(current('paragraph')), focus: out.focus };
   };
   // What the page says, part by part, from its own text, hidden slides and tabs included: what the voice knows of it. The
   // controller only moves the page; what the voice can say comes from what the page says.
@@ -238,7 +305,8 @@
       // A limit thrown ("Already on the first slide") is an answer, as the guide asks controllers to return it; not a broken control.
       try { out = await c.run(cmd.id); } catch (error) { if (!LIMIT.test(String(error?.message ?? ''))) throw error; stage.limited = true; return String(error.message); }
       // The page shows what its own command did (a slide, a lit stage): fdc's ring steps aside, so one highlight shows.
-      stage.at = null; stage.ringOn = false; place();
+      stage.at = null; stage.span = null; stage.ringOn = false; place();
+      if (out && typeof out === 'object') { const { text: said } = focusOf(out); return said || describe(current('paragraph')); }
       return typeof out === 'string' ? out : describe(current('paragraph'));
     } }));
   };
@@ -267,7 +335,7 @@
       if ((shared >= 3 || (shared >= 2 && score >= 0.6)) && score > bestScore) { best = el; bestScore = score; }
     }
     if (!best) return null;
-    if (best !== stage.at) { stage.at = best; stage.ringOn = true; best.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); place(); }
+    if (best !== stage.at) { stage.at = best; stage.span = null; stage.ringOn = true; best.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); place(); }
     return { on: text(best).slice(0, 100), score: Math.round(bestScore * 100) / 100 };
   };
   // Relative moves and non-moves by their ids: the page's own commands and fdc's, never ids made from a heading's or
@@ -277,28 +345,34 @@
   // The named place a page's answer is about: 'Slide 2 of 6: "Margins"' is where the command named "Margins" goes.
   const landed = text => { const title = /["“]([^"”]{2,80})["”]/.exec(String(text ?? ''))?.[1]; return title ? stage.commands().find(c => c.name === title && !RELATIVE.test(c.id))?.id : undefined; };
   const stage = window.__fdcStage = {
-    version: VERSION, history: [], trail: [], last: {}, at: null, ringOn: false, quiet: false, follow: followSpeech,
+    version: VERSION, history: [], trail: [], last: {}, at: null, span: null, ringOn: false, quiet: false, fast: false, viewerAt: 0, follow: followSpeech,
     now: () => describe(stage.at?.isConnected ? stage.at : current('paragraph')),
     commands: () => [...page(), ...base()],
     describe() {
-      const c = window.fdcController;
+      const c = window.fdcController, { text: where, focus } = whereNow();
       return {
         title: document.title, url: location.href,
         about: c?.about ?? null,
-        where: c?.where?.() ?? describe(current('paragraph')),
+        where, focus, viewerAt: stage.viewerAt ?? 0,
         commands: stage.commands().map(({ id, say, anchor, name, top }) => ({ id, say, ...anchor ? { anchor } : {}, ...name ? { name } : {}, ...top ? { top } : {} })),
         parts: parts(),
       };
     },
-    async run(id, { again = false } = {}) {
+    /** Where the viewer is, and when they last moved the page themselves: light enough to ask every few seconds. */
+    here() { const { text: where, focus } = whereNow(); return { url: location.href, where, focus, viewerAt: stage.viewerAt ?? 0 }; },
+    async run(id, { again = false, fast = false } = {}) {
       const command = stage.commands().find(c => c.id === id);
       if (!command) throw new Error(`No command "${id}" on this page`);
       stage.quiet = id === 'clear_highlight';
       // Where the viewer starts, when the page names it, is the first place back can return to.
-      if (!stage.trail.length && id !== 'back') { let start; try { start = landed(window.fdcController?.where?.()); } catch {} if (start) stage.trail.push(start); }
+      if (!stage.trail.length && id !== 'back') { let start; try { start = landed(focusOf(window.fdcController?.where?.()).text); } catch {} if (start) stage.trail.push(start); }
       // Nothing to do (no earlier place to go back to, no next item): null, and fdc sends the request on.
       stage.limited = false; stage.leftFrom = stage.landedAt = undefined;
-      const steps = stage.history.length, out = (await command.run()) ?? null;
+      const steps = stage.history.length;
+      // A step on the way to another doesn't wait for its scroll to glide (settle).
+      stage.fast = fast;
+      let out;
+      try { out = (await command.run()) ?? null; } finally { stage.fast = false; }
       // A limit is the page's answer that it had nothing to do: fdc doesn't count it as a move.
       stage.limit = out !== null && (stage.limited || LIMIT.test(String(out)));
       // A move to a named place joins the trail that back follows, and so does a relative move ("next slide") that

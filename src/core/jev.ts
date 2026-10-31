@@ -5,8 +5,10 @@
 // - The voice tool's own actions on the operator's turn (trigger turn or delegation, turn.ts): whether they turn voice
 //   sessions on or off (sessions.ts), are about how the companion behaves, or end the conversation for now (Standby);
 //   never whether anything goes to the agent.
-// - The page on the stage: which command shows what the voice companion meant when it turned to something by words that
-//   name no part (presenter.ts); the operator's own words never move the page.
+// - The page on the stage: as the voice companion talks, which command shows what it is talking about, and whether
+//   another must follow (a part's own control, listed once that part is on screen): the page moves one command at a time
+//   until none is needed (presenter.ts). The operator's own words never move the page.
+// - The operator's goal (bridge.ts): whether their words set what they want shown, taught or walked through, or end it.
 // - The learner: whether they give the companion a standing instruction (instruction-learner.ts).
 // - The tuner: the level of each setting that fits the operator's instructions (jev-tuner.ts).
 // The learner, the tuner and session orchestration are optional features (features.ts). Jev gets the latest words, what
@@ -18,7 +20,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentProfile } from './adapter.ts';
 import type { HandOff } from './delegation-audit.ts';
 import type { JevCall } from './jev-audit.ts';
-import type { StageCommand, StageView } from './stage.ts';
+import { focusLine, type StageCommand, type StageView } from './stage.ts';
 import type { Tuning } from './tuning.ts';
 import { DEFAULT_FEATURES, type Feature, type Features } from './features.ts';
 import { tunerQuestions, TUNER_SETTING } from './jev-tuner.ts';
@@ -29,13 +31,14 @@ type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: 
 const URL = 'https://api.typesafe.ai/v1/systemone', MODEL = 'jev-latest';
 
 /** Why Jev is asked now: its provenance, part of what it reads. */
-export type Trigger = 'turn' | 'delegation' | 'job' | 'unsent' | 'cue' | 'settings';
+export type Trigger = 'turn' | 'delegation' | 'job' | 'unsent' | 'cue' | 'step' | 'settings';
 const WHY: Record<Trigger, string> = {
   turn: 'The operator has just stopped speaking.',
   job: 'The operator has just stopped speaking and the voice companion has replied to them (`voice_reply`, what it has said so far).',
   delegation: 'The voice companion has asked for the operator\'s latest words to be passed on.',
   unsent: 'The operator\'s latest words are going to the coding agent although the voice companion never passed them on (voice ended, or the voice tool sends them itself).',
-  cue: 'The voice companion has just said it is turning to something on the page, by words that are no part\'s name.',
+  cue: 'The voice companion has just said the latest words, with a page open beside the operator.',
+  step: 'Page commands just ran for the voice companion\'s latest words (`page_done`, in order), and the page is now where `page` says.',
   settings: 'The operator\'s instructions to the companion have changed, or voice has started.',
 };
 /** What Jev is told of its place, by the agent and the features on: who does what (shared with the companion), then its own part and how to read its state. */
@@ -53,6 +56,10 @@ export const COMPANION_ONLY = .85;
 // A page command is run when Jev's choice of it is at least this likely. On 135 synthetic navigation requests over 7 pages
 // (Oct 19): at .5, 96 first steps right, 8 wrong; at .45, 99 right, still 8 wrong; at .4, 101 right, 13 wrong.
 export const PAGE_STEP = .45;
+// After a command ran, the next is asked for only when Jev finds another needed (page_more).
+export const PAGE_MORE = .5;
+// The operator's words set a new goal, or end it, from this likelihood.
+export const GOAL = .6;
 // The learner's held-out thresholds from the offline test.
 export const BEHAVE = .6, DESIGN = .5;
 // The operator's words go to the coding agent from this likelihood that they need it, read once the voice companion has
@@ -67,7 +74,7 @@ export const STANDBY = .7;
 // What Jev reads of what the voice companion perceived: its latest 14 KB (perceived.ts).
 export const HISTORY_BYTES = 14000;
 /** For the record (jev-audit.ts): the likelihood at which each question's answer changes what fdc does. */
-const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, standby: STANDBY, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, behave: BEHAVE, design_talk: DESIGN };
+const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, standby: STANDBY, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
 
 /** One utterance of the conversation. */
 export interface Line { role: 'operator' | 'intermediary'; text: string }
@@ -81,7 +88,11 @@ export interface SessionsJudgment { asked: number; unlisted: number; turnOn: str
 export interface PageJudgment {
   /** The command that shows what the voice meant, if Jev is sure enough of one. */
   command?: string;
+  /** How likely another command is needed after it (page_more); and how likely each command was, to choose again when the first has nothing to do. */
+  more?: number; likely?: Record<string, number>;
 }
+/** Whether the operator's latest words set a new goal (what they want shown, taught or walked through), end it, or neither. */
+export interface GoalJudgment { choice: 'keep' | 'new' | 'done'; p: number }
 /** Whether the latest words give the companion a standing instruction, and for how long. */
 export interface InstructionJudgment { behave: number; design: number; lasting: string }
 /** Everything Jev read in one moment. */
@@ -94,7 +105,7 @@ export interface Reading {
   /** Whether those words must reach the coding agent, and whether the operator has finished saying them (trigger job); null when Jev couldn't be asked. */
   needsAgent: number | null; ready?: number;
   sessions?: SessionsJudgment; companionOnly?: number;
-  page?: PageJudgment; instruction?: InstructionJudgment;
+  page?: PageJudgment; instruction?: InstructionJudgment; goal?: GoalJudgment;
   /** The level of each setting Jev chose (jev-tuner.ts). */
   tuning?: Record<string, unknown>;
   /** That the latest words end the conversation for now (the companion then goes on Standby). */
@@ -110,6 +121,10 @@ export interface Moment {
   /** The operator's instructions to the companion in force. */
   instructions?: readonly string[];
   sessions?: Session[]; page?: StageView;
+  /** The page commands already run for the latest words (trigger step). */
+  done?: StageCommand[];
+  /** The operator's goal in force, as Jev reads it: what they asked to be shown or taught, when, and what was shown since. */
+  goal?: string;
   /** What the voice companion has said in reply to the latest words (trigger job). */
   reply?: string;
   /** Ask whether the words give a standing instruction (the learner). */
@@ -165,45 +180,84 @@ const sessionQuestions = (sessions: Session[]) => ({
 });
 const sessionLines = (sessions: Session[]) => sessions.map((s, index) => `session_${index + 1}${s.current ? ' (the one the operator is speaking to now)' : ''}: ${s.shown}`).join('\n') || '(none)';
 
-// Which command shows what the voice companion meant, when it turned to something by words that name no part ("let's look at
-// the repeat visit"). One question with the command list.
-const pageQuestions = (page: StageView) => ({
-  page_command: { type: 'choice', instructions: 'Which page command shows what the voice companion meant in the latest words? A part may be named by what it says, by how the page labels it, or by its number said as a word ("section four" is section 4, not the next one). Choose none if no command shows it.',
-    criteria: { none: 'No page command shows it.', ...Object.fromEntries(page.commands.map(c => [c.id, c.say])) } },
+// As the voice companion talks: which command shows what it is talking about, and whether another must follow it. One
+// command at a time: once it has run, the page is read again (a part's own controls are offered only while that part is on
+// screen, stage-page.js) and Jev is asked for the next (trigger step), until none is needed. Before Oct 31 only "let's look
+// at" and other turning words were judged: the voice said "getting you there", "switching over now" and "that grid's up
+// now" and the page never moved (video-editing, Oct 31: ten misses in ten minutes).
+const pageQuestions = (page: StageView, trigger: Trigger) => ({
+  page_command: { type: 'choice', instructions: trigger === 'step'
+    ? 'Which page command should run next to finish showing what the voice companion is talking about in the latest words, now that the commands in `page_done` have run and the page is where `page` says? A part\'s own controls (its rows, columns, toggles or steps) are listed only while that part is on screen. Choose none when the page now shows it.'
+    : 'Which page command, if any, should run now so that the page shows what the voice companion is talking about in the latest words, or what it says it is showing or will show? A part may be named by what it says, by how the page labels it, or by its number said as a word ("section four" is section 4, not the next one). Choose none when the page already shows it, when no command shows it, or when the companion is not talking about anything on the page.',
+    criteria: { none: 'No page command: the page already shows it, no command shows it, or the companion is not talking about the page. Also none when the operator has just moved the page themselves and the companion is talking about what they moved to.', ...Object.fromEntries(page.commands.map(c => [c.id, c.say])) } },
+  page_more: noul('Will the page need another command right after this one to show what the voice companion is talking about?',
+    'What it talks about is inside or beyond what this command shows: a row, column, toggle, step or highlight within the part this command brings on screen (a part\'s own controls are listed only once it is on screen), or several things it names in turn.',
+    'This command alone shows it, or no command should run.'),
 });
-const pageLine = (page: StageView) => `${page.title} (${page.url})${page.about ? `: ${page.about}` : ''}. The viewer is at: ${page.where}`.slice(0, 900);
-/** The part a command goes to, by its name without a number before it ("stage 3: DNS lookup" is "dns lookup"). */
-const partOf = (command: StageCommand) => (command.name ?? '').toLowerCase().replace(/^(stage|slide|step|part|section)\s*\d+\s*[:.\-–]?\s*/, '').replace(/[^a-z0-9]+/g, ' ').trim();
-/** What a command does, for counting commands that do the same as one: its part, or going back (fdc's own, the page's back or previous), or the page's next. */
-const sameAs = (command: StageCommand) => {
-  const page = command.id.startsWith('page_');
-  if (command.id === 'back' || (page && /(^|_)(previous|prev|back)(_|$)/.test(command.id))) return 'back';
-  if (page && /(^|_)(next|forward)(_|$)/.test(command.id)) return 'next';
-  return partOf(command) ? `part ${partOf(command)}` : command.id;
+const pageLine = (page: StageView, now = Date.now()) => {
+  const moved = page.viewerAt && now - page.viewerAt < 60000 ? ` The viewer moved the page themselves ${Math.max(1, Math.round((now - page.viewerAt) / 1000))} s ago.` : '';
+  const focus = focusLine(page.focus);
+  return `${page.title} (${page.url})${page.about ? `: ${page.about}` : ''}. The viewer is at: ${page.where.slice(0, 500)}${focus ? ` (${focus})` : ''}.${moved}`.slice(0, 1100);
+};
+// What a command shows, for counting commands that show the same as one choice: the part it goes to (by its name, or the
+// heading it goes to, without a number before it or a word such as "grid" after it), the element it lands on, going back
+// (fdc's own, the page's back or previous), the page's next, or what it says.
+const GENERIC = /\s+(grid|section|chart|table|view|panel|tab|slide|diagram|figure|part)$/;
+const partOf = (text: string) => text.toLowerCase().replace(/^(stage|slide|step|part|section)\s*\d+\s*[:.\-–,]?\s*/, '').replace(/[^a-z0-9]+/g, ' ').trim().replace(/^(the|a|an|my|our|your)\s+/, '').replace(GENERIC, '').trim();
+const keysOf = (command: StageCommand) => {
+  const page = command.id.startsWith('page_'), said = `say ${command.say.replace(/\s*\([^()]*\)\s*$/, '').toLowerCase().trim()}`;
+  if (command.id === 'back' || (page && /(^|_)(previous|prev|back)(_|$)/.test(command.id))) return ['back', said];
+  if (page && /(^|_)(next|forward)(_|$)/.test(command.id)) return ['next', said];
+  const headed = /\(headed "([^"]+)"\)/.exec(command.say)?.[1];
+  return [command.name && partOf(command.name) && `part ${partOf(command.name)}`, headed && partOf(headed) && `part ${partOf(headed)}`, command.anchor && `at ${command.anchor}`, said].filter(Boolean) as string[];
 };
 /**
- * The command Jev chose, if it is sure enough. Commands that do the same thing split its confidence between them, even
+ * The command Jev chose, if it is sure enough. Commands that show the same thing split its confidence between them, even
  * below "none": one part's (its heading, the page's own command, an annotation on it: "connecting to the server" .43, .38
- * and .11), going back (fdc's own and the page's: "go back… I don't see it" .26 and .11, with none at .40), or two that
- * say the same ("Go to the next section", fdc's own and the page's: .42 and .33 on "Okay, next", Oct 29). They count as
- * one choice, and the page's own command runs.
+ * and .11; the grid's annotation .35 and its section .31 for "Yeah, getting you there", Oct 31), going back (fdc's own and
+ * the page's: "go back… I don't see it" .26 and .11, with none at .40), or two that say the same ("Go to the next
+ * section", fdc's own and the page's: .42 and .33 on "Okay, next", Oct 29). They count as one choice, linked by any of
+ * those, and its likeliest runs, the page's own first among those as likely.
  */
-export function chosenCommand(answer: any, page: StageView): string | undefined {
+export function chosenCommand(answer: any, page: StageView, without: Iterable<string> = []): string | undefined {
   if (!answer) return;
-  const likely: Record<string, number> = answer.probabilities ?? { [answer.choice]: Number(answer.confidence ?? 1) };
-  const groups = new Map<string, StageCommand[]>(), bySay = new Map<string, string>();
-  for (const command of page.commands) {
-    const say = command.say.replace(/\s*\([^()]*\)\s*$/, '').toLowerCase().trim();
-    if (!bySay.has(say)) bySay.set(say, sameAs(command));
-    const key = bySay.get(say)!;
-    if (likely[command.id] !== undefined) groups.set(key, [...groups.get(key) ?? [], command]);
+  let likely: Record<string, number> = answer.probabilities ?? { [answer.choice]: Number(answer.confidence ?? 1) };
+  // Without commands that had nothing to do: the rest, as likely as they are among themselves ("back" .55 with nothing to go
+  // back to left the main map .30 of the remaining .45, Oct 31).
+  const dropped = new Set(without);
+  if (dropped.size) {
+    const kept = Object.entries(likely).filter(([id]) => !dropped.has(id)), mass = kept.reduce((total, [, p]) => total + Number(p), 0);
+    if (!(mass > 0)) return;
+    likely = Object.fromEntries(kept.map(([id, p]) => [id, Number(p) / mass]));
   }
+  // Commands sharing any key are one choice (union-find over the page's commands, likely or not: a heading links its
+  // section's annotation to the page's own command for it).
+  const root = new Map<string, string>(), find = (id: string): string => { const up = root.get(id) ?? id; return up === id ? id : find(up); };
+  const owner = new Map<string, string>();
+  for (const command of page.commands) for (const key of keysOf(command)) {
+    const other = owner.get(key);
+    if (!other) owner.set(key, command.id); else if (find(other) !== find(command.id)) root.set(find(command.id), find(other));
+  }
+  const groups = new Map<string, StageCommand[]>();
+  for (const command of page.commands) if (likely[command.id] !== undefined && !dropped.has(command.id)) groups.set(find(command.id), [...groups.get(find(command.id)) ?? [], command]);
   const sum = (group: StageCommand[]) => group.reduce((total, c) => total + Number(likely[c.id] ?? 0), 0);
   const best = [...groups.values()].sort((a, b) => sum(b) - sum(a))[0];
   if (!best || sum(best) < PAGE_STEP || sum(best) < Number(likely.none ?? 0)) return;
-  const ranked = best.sort((a, b) => Number(likely[b.id] ?? 0) - Number(likely[a.id] ?? 0));
-  return (ranked.find(c => c.id.startsWith('page_')) ?? ranked[0]).id;
+  const ranked = best.sort((a, b) => Number(likely[b.id] ?? 0) - Number(likely[a.id] ?? 0) || Number(b.id.startsWith('page_')) - Number(a.id.startsWith('page_')));
+  // The page's own command among the likeliest (within a tenth of the top), else the likeliest.
+  return (ranked.find(c => c.id.startsWith('page_') && Number(likely[c.id] ?? 0) >= Number(likely[ranked[0].id] ?? 0) - .1) ?? ranked[0]).id;
 }
+
+// The operator's goal: what they want shown, taught or walked through, kept apart from the page (bridge.ts), so that the
+// voice keeps to it through questions, pauses and edits, and the page follows it. The Codex study of Oct 31 found a
+// controller's menu taking over as the agenda once the voice started moving the page.
+const GOAL_QUESTION = {
+  goal: { type: 'choice', instructions: 'Do the latest words set what the operator wants the voice companion to show, teach or walk them through (their goal), or end the goal in force (`goal`)?',
+    criteria: {
+      keep: 'Neither: a question, a reaction, an aside, a request for the coding agent, or a step within the goal in force (continue, next, go back, say more about that part).',
+      new: 'They ask to be shown, taught, walked or run through something as a whole: a page, a part of it, a diagram, a topic ("walk me through the projects by approach", "run me through who\'s engaging", "explain the graph to me", "teach me how the queue works").',
+      done: 'They end or drop the goal in force: it is enough, they are done with it, or they turn to something else for good.' } },
+};
 
 const LEARNER = {
   behave: { type: 'noul', instructions: 'In the latest words, is the operator telling the voice companion how to behave toward them from now on (not designing the tool, not asking the coding agent to do something, not a one-off cue)?',
@@ -235,14 +289,16 @@ export class Jev {
     if (trigger === 'job') state.voice_reply = reply?.trim() || '(the companion has not replied)';
     if (sessions) state.sessions = sessionLines(sessions);
     if (page) state.page = pageLine(page);
+    if (trigger === 'step') state.page_done = (moment.done ?? []).map((c, i) => `${i + 1}. ${c.say}`).join('\n') || '(none)';
+    if (gate || trigger === 'cue' || trigger === 'step' || trigger === 'job') state.goal = moment.goal || '(none)';
     // The job delegation knows what the page's controller can do: what it can't goes to the agent, to add it.
     if (page && job) state.page_commands = page.commands.map(c => `- ${c.say}`).join('\n').slice(0, 3000) || '(none)';
     if (tune) Object.assign(state, { earlier_sessions: tune.earlier.join('\n').slice(0, 4000) || '(none)', current_settings: JSON.stringify(tune.current) });
     const questions = {
       ...job && { needs_agent: JOB.needs_agent }, ...trigger === 'job' && { ready: JOB.ready },
       // Words about how the companion behaves are for the learner and the tuner: asked only while either is on.
-      ...gate && { ...(learn || tune) && { companion_only: GATE.companion_only }, standby: GATE.standby, ...sessions && sessionQuestions(sessions) },
-      ...page && trigger === 'cue' && pageQuestions(page),
+      ...gate && { ...(learn || tune) && { companion_only: GATE.companion_only }, standby: GATE.standby, ...GOAL_QUESTION, ...sessions && sessionQuestions(sessions) },
+      ...page && (trigger === 'cue' || trigger === 'step') && pageQuestions(page, trigger),
       ...learn && LEARNER,
       ...tune && tunerQuestions(tune.current, tune.pinned, trigger !== 'settings'),
     };
@@ -264,17 +320,22 @@ export class Jev {
     this.record?.(call);
     const p = (name: string, missing = 0) => { const value = Number(answers?.[name]?.noul); return Number.isFinite(value) ? value : missing; };
     const reading: Reading = { trigger, id: call.id, said, transcript: `${history}${latest ? `► ${spokenLine(latest)}` : ''}`, needsAgent: 'needs_agent' in questions ? p('needs_agent') : null, ...'ready' in questions && { ready: p('ready', 1) } };
-    if (gate) { if ('companion_only' in questions) reading.companionOnly = p('companion_only'); reading.standby = p('standby'); }
+    if (gate) {
+      if ('companion_only' in questions) reading.companionOnly = p('companion_only');
+      reading.standby = p('standby');
+      const goal = answers?.goal, choice = goal?.choice;
+      if (choice === 'keep' || choice === 'new' || choice === 'done') reading.goal = { choice, p: Number(goal.probabilities?.[choice] ?? goal.confidence ?? 1) };
+    }
     if (gate && sessions) {
       const chosen = (choice: string) => sessions.filter((_, index) => answers?.[`session_${index + 1}`]?.choice === choice).map(s => s.id);
       reading.sessions = { asked: p('sessions_asked'), unlisted: p('unlisted_session'), turnOn: chosen('turn_on'), turnOff: chosen('turn_off') };
     }
-    if (page && trigger === 'cue') {
+    if (page && (trigger === 'cue' || trigger === 'step')) {
       const answer = answers?.page_command;
-      reading.page = { command: chosenCommand(answer, page) };
+      reading.page = { command: chosenCommand(answer, page), more: p('page_more'), ...answer?.probabilities && { likely: answer.probabilities } };
       // The likeliest commands, for tuning the page question.
       const top = Object.entries(answer?.probabilities ?? {}).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 3).map(([id, v]) => `${id} ${Number(v).toFixed(2)}`).join(', ');
-      this.log({ type: 'page.judged', trigger, said: said.slice(-200), command: top });
+      this.log({ type: 'page.judged', trigger, said: said.slice(-200), command: top, more: Number(reading.page!.more?.toFixed(2)) });
     }
     if (learn) reading.instruction = { behave: p('behave', NaN), design: p('design_talk', NaN), lasting: answers?.lasting?.choice };
     if (tune) reading.tuning = answers;

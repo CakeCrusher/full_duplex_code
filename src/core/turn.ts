@@ -1,8 +1,9 @@
 // The operator's turn, read in two calls over the same state (jev.ts) that ask different questions:
-// - The voice tool's own actions, at once (routeActions): it goes on Standby when they are done for now and, with those
-//   features on (features.ts), turns voice sessions on or off (sessions.ts) and leaves the companion's own behavior to the
-//   learner and the tuner (they take the reading). It never decides whether their words go to the agent, and never moves
-//   the page: the voice does that with its own words (presenter.ts), so the operator never has to learn how.
+// - The voice tool's own actions, at once (routeActions): it goes on Standby when they are done for now, keeps the goal
+//   they set (what they want shown, taught or walked through) apart from the page, and, with those features on
+//   (features.ts), turns voice sessions on or off (sessions.ts) and leaves the companion's own behavior to the learner and
+//   the tuner (they take the reading). It never decides whether their words go to the agent, and never moves the page: the
+//   page follows what the voice says (presenter.ts), so the operator never has to learn how.
 // - The job delegation, once the voice companion has replied (jobTurn): whether their words need the coding agent,
 //   read with what the companion said and what the page's commands can do, and whether they have finished saying them.
 //   Words not finished wait for the next reading, which takes them with what the operator adds; never dropped. Keeping
@@ -12,7 +13,7 @@ import type { Harness } from './bridge.ts';
 import type { Decision } from './mediator.ts';
 import type { StageView } from './stage.ts';
 import type { Spoken, SpokenRequest } from './voice-history.ts';
-import { COMPANION_ONLY, NEEDS_AGENT, READY, STANDBY, type Reading, type Trigger } from './jev.ts';
+import { COMPANION_ONLY, GOAL, NEEDS_AGENT, READY, STANDBY, type Reading, type Trigger } from './jev.ts';
 import { companionNoted, handledNote, lookingNote, sessionsChanging } from './prompts.ts';
 
 /** What the voice tool did itself for the operator's turn: for GPT Live at once (told), and for the agent with their words (note). */
@@ -34,8 +35,11 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
   if (standby) bridge.voiceSessions.standbyAsked();
   const asked = sessions && bridge.sessionSwitch.act(reading, sessions);
   const companion = (reading.companionOnly ?? 0) >= COMPANION_ONLY;
+  // A goal they set replaces the one before; one they end is gone.
+  const goal = reading.goal && reading.goal.choice !== 'keep' && reading.goal.p >= GOAL ? reading.goal.choice : undefined;
+  if (goal) bridge.voiceSessions.setGoal(goal === 'new' ? request.fresh : undefined);
   // The learner and the tuner add theirs, and complete the record (bridge.ts, consider).
-  bridge.jevAudit?.decided(reading.id, { standby, ...sessions && { sessions: asked?.told ?? false }, ...reading.companionOnly !== undefined && { companionOnly: companion } });
+  bridge.jevAudit?.decided(reading.id, { standby, ...sessions && { sessions: asked?.told ?? false }, ...reading.companionOnly !== undefined && { companionOnly: companion }, ...goal && { goal } });
   const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent, bridge.features)].filter(Boolean).join(' ') || undefined;
   const handled = asked ? 'sessions' : companion ? 'companion' : undefined;
   return { reading, view, told, note: view ? lookingNote(view) : undefined, keptNote: handled && handledNote(handled) };

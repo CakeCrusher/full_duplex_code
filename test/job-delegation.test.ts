@@ -32,28 +32,38 @@ test("two calls over the same state that ask different questions: the job delega
   assert.equal(bodies[2].state.page_commands, undefined, 'no page, no commands');
   assert.equal(silent.needsAgent, .8);
   await jev.read({ trigger: 'turn', latest });
-  assert.deepEqual(Object.keys(bodies[3].questions), ['standby'], "without the learner or the tuner, nothing acts on words about the companion's behavior, so they aren't asked about");
+  assert.deepEqual(Object.keys(bodies[3].questions), ['standby', 'goal'], "without the learner or the tuner, nothing acts on words about the companion's behavior, so they aren't asked about");
+  assert.equal(bodies[3].state.goal, '(none)', 'the goal in force, which new words may replace or end');
 });
 
-test("the job delegation decides once the voice has said its first sentence, and reads what it said", async t => {
+test("the job delegation waits past the voice's acknowledgments for what it makes of the words, or until it stops", async t => {
   const { h } = await harness(t);
   const moments = fakeJev(h, m => m.trigger === 'job' ? { needsAgent: /don't know/.test(m.reply ?? '') ? .9 : .1, ready: .9 } : { page: pageReading() });
   stage(h);
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const mediator = h.voiceSessions.mediator!;
-  Object.assign(mediator, { replyMs: 3000, replyStartMs: 1000, operatorQuietMs: 60000 });
+  Object.assign(mediator, { replyMs: 4000, replyStartMs: 1000, replyPauseMs: 1500, operatorQuietMs: 60000 });
   const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); };
   const live = h.voiceSessions.live!;
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'What does the dashed divider mean?', start_ms: 0, end_ms: 900 });
   // GPT Live starting to answer ends the operator's turn: the voice tool's own reading is made at once.
-  live.emit('event', { type: 'session.output_transcript.delta', delta: " I don't know that" });
+  live.emit('event', { type: 'session.output_transcript.delta', delta: ' Good question.' });
   await until(() => moments.some(m => m.trigger === 'turn'));
-  await settle(200);
-  assert.ok(!moments.some(m => m.trigger === 'job'), 'the job delegation waits for the end of its first sentence');
-  live.emit('event', { type: 'session.output_transcript.delta', delta: '; Claude would have to check. ' });
+  await settle(300);
+  assert.ok(!moments.some(m => m.trigger === 'job'), 'an acknowledgment says nothing of what the voice makes of the words');
+  live.emit('event', { type: 'session.output_transcript.delta', delta: " I don't know that one; Claude would have to check what the dashed divider means. " });
   await until(() => delivered.length === 1);
-  assert.match(moments.find(m => m.trigger === 'job')!.reply!, /^I don't know that; Claude would have to check\.$/);
+  assert.equal(moments.find(m => m.trigger === 'job')!.reply, "Good question. I don't know that one; Claude would have to check what the dashed divider means.");
   assert.match(delivered[0].content, /What does the dashed divider mean\?/);
+  // A short answer and then quiet: it stopped, and that is its reply.
+  await settle(1600);
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'And the legend?', start_ms: 5000, end_ms: 5600 });
+  live.emit('event', { type: 'session.output_transcript.delta', delta: " It's the key." });
+  const asked = Date.now();
+  await until(() => moments.filter(m => m.trigger === 'job').length === 2);
+  const waited = Date.now() - asked;
+  assert.ok(waited >= 1400 && waited < 3500, `decided ${waited} ms after the voice stopped`);
+  assert.equal(moments.filter(m => m.trigger === 'job')[1].reply, "It's the key.");
 });
 
 test('with no reply, the job delegation reads after a short wait; a word of the operator ends the wait at once', async t => {
@@ -99,16 +109,18 @@ test("the voice answers what it can with moderate confidence, asks when in doubt
   assert.match(liveInstructions(claude), /You can answer, with moderate confidence/, 'without Jev, the same principle in its delegation policy');
 });
 
-test("the voice moves the page with its own words and leans toward showing; how is its own judgment", () => {
+test("the page follows what the voice says and leans toward showing; how is its own judgment, and the operator is never told what to say", () => {
   const state = pageState({ title: 'Briefing', names: ['Intro', 'Options'], others: [], parts: [], where: 'section "Intro"', controls: ['Show the error bars', 'Switch to the table view'] });
   assert.match(state, /Its parts, by name: Intro, Options\. Besides showing its parts, its controls can: Show the error bars; Switch to the table view\./);
   assert.doesNotMatch(pageState({ title: 'Briefing', names: ['Intro'], others: [], parts: [], where: '' }), /controls/);
   for (const text of [liveInstructions(claude, { jev: true }), liveInstructions(claude)]) {
-    assert.match(text, /You move it with your words: say "let's look at" and a part's name/);
     assert.match(text, /Lean toward showing: whenever the conversation touches something the page covers, present it there\./);
-    assert.match(text, /Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants\./);
+    assert.match(text, /Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants; when they ask to be shown or walked through something, keep to it through their questions and pauses until it is done\./);
+    assert.match(text, /They just talk to you: never tell them what to say to move the page\./);
     assert.doesNotMatch(text, /moves with the operator's words|follows their own words|Never start presenting|next part follows by itself|say so in a few words|commands, cues or controls/, "no operator page control, no script for after a move");
     assert.doesNotMatch(text, /can't change any file, page or setting/, 'the voice does move the page');
   }
-  assert.match(liveInstructions(claude, { jev: true }), /or what a control shows, and the page goes there/);
+  assert.match(liveInstructions(claude, { jev: true }), /It follows what you say: as you talk about something on it, or say you will show it, the voice tool moves it there and opens or highlights what you mean/);
+  assert.doesNotMatch(liveInstructions(claude, { jev: true }), /let's look at/, 'with Jev, no phrase to say: the page follows its words');
+  assert.match(liveInstructions(claude), /You move it with your words: say "let's look at" and a part's name/, 'without Jev, only a part\'s name after a turning phrase moves it');
 });

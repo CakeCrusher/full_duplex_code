@@ -10,8 +10,8 @@ import { jobTurn, routeActions } from './turn.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { recentHistory } from './recent-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
-import { attachment, catchUp, deliveryConfirmation, disregardInstruction, greeting, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, standbyNews, standbyWake } from './prompts.ts';
-import { Stage, type StageView } from './stage.ts';
+import { attachment, catchUp, deliveryConfirmation, disregardInstruction, goalState, greeting, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, standbyNews, standbyWake, viewerMoved } from './prompts.ts';
+import { focusLine, Stage, type StageCommand, type StageHere, type StageView } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
 import { operatorVoice, type MicrophoneLevel } from './floor.ts';
@@ -73,7 +73,11 @@ interface Run {
   wake?: Wake;
   /** What GPT Live perceives at its start (its startup input; nothing new for a fork), recorded once it starts (perceived.ts). */
   perceivedInput: PerceivedEntry[]; perceiving?: boolean;
+  /** Where on the page GPT Live was last told the operator is; when the viewer last moved it themselves, as last seen; the watch on it (watchViewer). */
+  toldWhere?: string; viewerSeen?: number; viewerTimer?: NodeJS.Timeout; watching?: boolean;
 }
+/** How often, while voice is on, fdc reads where the operator is on the page (watchViewer). */
+export const VIEWER_MS = 2500;
 interface Wake { since: number; operator: boolean; reason: string }
 /**
  * Voice on Standby: GPT Live is disconnected while the conversation is quiet, and the page that ran
@@ -477,6 +481,62 @@ export class VoiceSessions {
     for (const item of [...this.additionalInstructions]) if (live.state === 'active' && !run.inForce.has(item.id) && !(item.state === 'pending' && item.sessionId === live.id)) await this.applyInstruction(live, item);
     if (live.state === 'active' && !wake) await live.greet(plan === 'fresh' ? greeting(agent) : automatic ? reconnectGreeting(agent) : resumeGreeting(agent));
     void this.briefStage(run);
+    // The operator's goal, if they set one, carries over: a fork's source was told it already.
+    if (plan !== 'fork' && this.goal && live.state === 'active') mediator.context.add('thinking', goalState(this.goal));
+    this.watchViewer(run);
+  }
+  /**
+   * The operator's goal: what they asked to be shown, taught or walked through (turn.ts, from Jev's reading of their
+   * words), kept apart from the page and in the agent session's record, so it holds across Standby, resumes and restarts of
+   * fdc. GPT Live is told it when it is set or ended and at each new session; Jev reads it with what was shown since.
+   */
+  get goal() { return this.current().goal; }
+  setGoal(text: string | undefined, run = this.run) {
+    const record = this.current();
+    if (text) record.goal = { text: this.bridge.clean(text.replace(/\s+/g, ' ').trim()).slice(0, 300), at: Date.now(), shown: [] };
+    else if (!record.goal) return;
+    else delete record.goal;
+    this.save();
+    this.bridge.log({ type: 'goal.set', text: record.goal?.text ?? null });
+    if (run && run.live.state === 'active' && this.run === run) run.mediator.context.add('thinking', goalState(record.goal));
+  }
+  /** The goal as Jev reads it: the operator's words, how long ago, and what the page has shown since. */
+  goalLine(now = Date.now()) {
+    const goal = this.goal;
+    if (!goal) return undefined;
+    return `"${goal.text}" (asked ${Math.max(1, Math.round((now - goal.at) / 1000))} s ago); shown for it since: ${goal.shown.join('; ') || 'nothing yet'}`;
+  }
+  /** The page moved: where the operator now is, as GPT Live was told it, and what was shown for their goal. */
+  shown(here: StageHere | undefined, done: StageCommand[]) {
+    if (this.run && here?.where) this.run.toldWhere = here.where;
+    const goal = this.goal, part = focusLine(here?.focus) || done.at(-1)?.name || done.at(-1)?.say.replace(/^(Go to|Show and highlight:|Highlight)\s*/i, '');
+    if (!goal || !part) return;
+    goal.shown = [...goal.shown.filter(p => p !== part), part].slice(-12);
+    this.save();
+  }
+  /**
+   * While voice is on, where the operator is on the page is read every few seconds (a light read: no commands or parts).
+   * When they moved it themselves (scrolled, clicked) and have stopped, GPT Live hears where they now are: on Oct 31 the
+   * operator scrolled to a grid themselves, and the voice went on about what they could no longer see.
+   */
+  watchViewer(run: Run) {
+    clearInterval(run.viewerTimer);
+    run.viewerTimer = setInterval(() => void this.viewer(run), VIEWER_MS);
+    run.viewerTimer.unref?.();
+  }
+  async viewer(run: Run) {
+    if (this.run !== run || run.live.state !== 'active' || !this.bridge.stage.tabId || run.watching) return;
+    run.watching = true;
+    try {
+      const here = await Promise.resolve().then(() => this.bridge.stage.here()).catch(() => undefined);
+      // Moved by the viewer since last seen, and still for a moment: where they stopped.
+      if (!here?.viewerAt || here.viewerAt <= (run.viewerSeen ?? 0) || Date.now() - here.viewerAt < 1200) return;
+      run.viewerSeen = here.viewerAt;
+      if (!here.where || here.where === run.toldWhere || run.live.state !== 'active') return;
+      run.toldWhere = here.where;
+      this.bridge.log({ type: 'stage.viewer_moved', where: here.where.slice(0, 160), focus: focusLine(here.focus) || undefined });
+      run.mediator.context.add('thinking', viewerMoved(here.where, here.focus));
+    } finally { run.watching = false; }
   }
   /**
    * GPT Live learns the page on the stage: the words that move it as it talks, and what it says, in one message that
@@ -503,6 +563,7 @@ export class VoiceSessions {
     if (!again && sameStage(run.briefed, seen?.signature ?? NO_PAGE)) return;
     run.briefed = seen?.signature ?? NO_PAGE;
     this.bridge.log({ type: 'stage.briefed', url: view?.url ?? null, names: seen?.cues.filter(c => c.listed).map(c => c.label) ?? [], parts: view?.parts.length ?? 0, again: again || undefined });
+    run.toldWhere = view?.where;
     // Through the same queue as the agent's work: it waits while the operator talks.
     run.mediator.context.add('thinking', seen?.state ?? pageState());
   }
@@ -524,6 +585,7 @@ export class VoiceSessions {
    */
   retell(run: Run) {
     void this.briefStage(run, 0, true);
+    if (this.goal) run.mediator.context.add('thinking', goalState(this.goal));
     const first = new Set(run.plan === 'fork' ? [] : run.startup.map(item => item.id));
     for (const item of run.inForce.values()) if (!first.has(item.id)) run.mediator.context.add('instructions', item.text);
   }
@@ -595,6 +657,7 @@ export class VoiceSessions {
   }
   closed(run: Run, result: CloseResult) {
     const { live, page, mediator, record } = run, bridge = this.bridge, { log, publish } = bridge;
+    clearInterval(run.viewerTimer);
     if (this.live === live) clearInterval(this.audioWatchdog);
     const own = this.mediator === mediator ? mediator : undefined;
     // One that never started is reported, or replaced, by start().

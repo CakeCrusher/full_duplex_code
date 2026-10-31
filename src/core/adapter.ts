@@ -167,7 +167,7 @@ export interface AgentSession {
   agentArgs: string[];
   /**
    * fdc's instructions to the agent (prompts.ts, agentInstructions): how voice requests reach it and how to make a page the
-   * voice can steer. Every adapter puts them in the agent's system prompt, by the least invasive way the agent offers, for a
+   * voice can present. Every adapter puts them in the agent's system prompt, by the least invasive way the agent offers, for a
    * session fdc starts, one it resumes and one it never started alike: through its launch, or its hook (`instruct`).
    */
   instructions: string;

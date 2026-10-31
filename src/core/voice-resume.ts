@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { estimatedTokens } from './text-fragments.ts';
 import type { Turn } from './voice-history.ts';
 import type { PerceivedEntry } from './perceived.ts';
+import type { Goal } from './prompts.ts';
 
 /** How a voice session starts: from a fork of the stored last session, seeded with the conversation's text, or without it. */
 export type ResumePlan = 'fork' | 'seed' | 'fresh';
@@ -27,6 +28,8 @@ export interface ResumeRecord {
   briefed?: string; context?: number;
   /** What fdc sent GPT Live since the session that began what it perceives now started (when that was), for Jev (perceived.ts). */
   perceived?: PerceivedEntry[]; perceivedSince?: number;
+  /** The operator's goal: what they asked to be shown, taught or walked through, and what was shown for it (voice-sessions.ts). */
+  goal?: Goal;
 }
 export interface SavedInstruction { id: string; text: string; learned?: string; learnedIn?: string }
 // OpenAI keeps stored recordings for 30 days.

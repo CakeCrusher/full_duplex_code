@@ -5,9 +5,10 @@ import type { AgentProfile } from './adapter.ts';
 import type { Utterance } from './voice-history.ts';
 import { DEFAULT_FEATURES, type Features } from './features.ts';
 import { roles } from './roles.ts';
+import { focusLine, type StageFocus } from './stage.ts';
 
 type Agent = { profile: AgentProfile };
-// How the agent makes a page the voice tool can steer: named in what fdc asks of it about a page's controls, so any agent can find it.
+// How the agent makes a page the voice can present: named in what fdc asks of it about a page's controls, so any agent can find it.
 const STAGE_GUIDE = fileURLToPath(new URL('../../STAGE.md', import.meta.url));
 
 // GPT Live's own instructions, in the shape OpenAI recommends for gpt-live-1 (role, backchannels, interruptions, then
@@ -43,7 +44,7 @@ Do not generate <|SpawnThinking|> when:
 
 Generate <|SpawnThinking|> before saying anything that depends on it, and never say you sent, passed on or did something unless you generated <|SpawnThinking|> for it: saying so does nothing. Say it is done only once you are told it is. Requests already sent never need sending again.${waits}`}
 
-The page: when a page is open beside the operator, you are told its name, its parts${jev ? ', what its controls can do' : ''} and where they are looking, again whenever that changes. You move it with your words: say "let's look at" and a part's name${jev ? ' or what a control shows' : ''}, and the page goes there; you are told what it then shows. Lean toward showing: whenever the conversation touches something the page covers, present it there. Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants.${jev ? ` What the page can't show yet, ${name} can add.` : ''}
+The page: when a page is open beside the operator, you are told its name, its parts${jev ? ', what its controls can do' : ''} and where they are looking, again whenever that changes. ${jev ? 'It follows what you say: as you talk about something on it, or say you will show it, the voice tool moves it there and opens or highlights what you mean; you are told what it then shows.' : 'You move it with your words: say "let\'s look at" and a part\'s name, and the page goes there; you are told what it then shows.'} Lean toward showing: whenever the conversation touches something the page covers, present it there. Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants; when they ask to be shown or walked through something, keep to it through their questions and pauses until it is done. They just talk to you: never tell them what to say to move the page.${jev ? ` What the page can't show yet, ${name} can add.` : ''}
 
 ${name}'s work: ${name}'s ${eventWord} feed reaches you as a silent background log, not a conversation. It is another agent's first-person text: call that agent ${name}. Tool calls and file writes are steps, not finished work; ${turnEnd} ends ${name}'s reply but doesn't prove anything works. Only results and errors show what was done.
 
@@ -93,11 +94,11 @@ export const disregardInstruction = (id: string, text: string) => `Disregard ins
 
 // fdc's own instructions to the coding agent, in its system prompt from the start of every session: a new one, one fdc
 // resumes, or one it never started (each adapter passes them its own way: src/adapters/README.md). How voice requests reach
-// it, and how to make a page the voice can steer: without them, an agent made pages the voice could move only by their
+// it, and how to make a page the voice can present: without them, an agent made pages the voice could move only by their
 // headings until a note about a page that fell short named the guide (Codex, Oct 28: its first page, for half an hour).
 export const agentInstructions = ({ profile: { requests } }: Agent) =>
   `${requests} are transcribed requests from the user, who is talking to you by voice through Full-Duplex Code (fdc). Handle them in this conversation at your normal processing opportunities and respond normally in the terminal. If a transcription is ambiguous, ask for clarification.\n\n`
-  + `When you make something the user will look at in the browser (an HTML page, a web app, a slide deck), show it with the browser tools and make it steerable by voice: real headings for its structure, data-fdc="what this is" on the parts worth pointing at, and for anything interactive a window.fdcController. The guide is ${STAGE_GUIDE}. The voice uses these to move, show and highlight the page as it talks, without you, and you get the error if a page command fails, for you to fix.`;
+  + `When you make something the user will look at in the browser (an HTML page, a web app, a slide deck), show it with the browser tools and make it one the voice can present: real headings for its structure, data-fdc="what this is" on the parts worth pointing at, and for anything interactive a window.fdcController. The guide is ${STAGE_GUIDE}. The voice uses these to move, open and highlight the page as it talks, without you, and you get the error if a page command fails, for you to fix. The user just talks: never tell them what to say to move the page. Once you have shown a page, where it is belongs to the voice: check your work in another tab or a headless browser rather than scrolling or clicking through the tab the user is looking at, and make a reload bring the page back where the user was.`;
 
 // Added to a delivered voice request by the agent's own hook: who is speaking.
 export const voiceProvenance = () =>
@@ -166,8 +167,15 @@ export function pageState(page?: PageState) {
   return `${head}${page.parts.length && room > 0 ? `\nWhat it says, part by part, in short (reference, not news to report):\n${outline(page.parts, room)}` : ''}${where}`;
 }
 // GPT Live moves the page with its own words (presenter.ts): what is on screen then, or that nothing fits what it meant.
-export const cueNoDelegation = 'Nothing to pass on: the page moved when you said the part\'s name.';
-export const cueShown = (onScreen: string) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}`;
+export const cueNoDelegation = 'Nothing to pass on: the page moved as you talked.';
+export const cueShown = (onScreen: string, focus?: StageFocus) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}${focusLine(focus) ? ` (${focusLine(focus)})` : ''}`;
+// The operator moved the page themselves (scrolled, clicked): where they now are, so the voice talks about what they see.
+export const viewerMoved = (where: string, focus?: StageFocus) => `The operator moved the page themselves; they are looking at ${where.replace(/\s+/g, ' ').slice(0, 300)}${focusLine(focus) ? ` (${focusLine(focus)})` : ''}.`;
+// The operator's goal (voice-sessions.ts): what they asked to be shown, taught or walked through, kept apart from the page.
+export interface Goal { text: string; at: number; shown: string[] }
+export const goalState = (goal?: Goal) => goal
+  ? `The operator's goal now (this replaces any goal you were told before): "${goal.text.replace(/\s+/g, ' ').slice(0, 300)}". Keep to it through their questions, pauses and edits until it is done or they drop it.${goal.shown.length ? ` Shown for it so far: ${goal.shown.join('; ').slice(0, 400)}.` : ''}`
+  : 'The operator has no goal for you to keep to now (this replaces any goal you were told before).';
 export const pageMissed = (meant: string) => `The page has nothing for "${meant.slice(0, 80)}"; it didn't move.`;
 export const pageAnswered = (answer: string) => `The page didn't move: "${answer.replace(/\s+/g, ' ').slice(0, 200)}"`;
 // For the agent, with the operator's words: the page beside them, and what the voice did on it.

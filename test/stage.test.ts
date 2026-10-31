@@ -76,17 +76,26 @@ test('the stage runs the script and its commands in the stage tab, in order', as
   await assert.rejects(stage.run(['back']), (error: any) => error instanceof StageNothing && error.failed.id === 'back', 'nothing to do is not done');
 });
 
-test("Jev is asked which page command shows what the voice meant; unlikely or unknown picks run nothing, and the operator's own words get no page question", async () => {
+test("Jev is asked which page command shows what the voice is talking about and whether another must follow; unlikely or unknown picks run nothing, and the operator's own words get no page question", async () => {
   let answers: Record<string, unknown> = {}, sent: any;
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers }) }; } });
   const moment = { history: 'user: What are my choices?\n', latest: { role: 'intermediary', text: "Let's look at the choices you have." } as Line };
   const choice = (id: string, p = .95) => ({ choice: id, probabilities: { [id]: p } });
-  answers = { page_command: choice('goto_options') };
-  assert.deepEqual((await jev.read({ trigger: 'cue', ...moment, page: view })).page, { command: 'goto_options' });
+  answers = { page_command: choice('goto_options'), page_more: { noul: .2 } };
+  assert.deepEqual((await jev.read({ trigger: 'cue', ...moment, page: view })).page, { command: 'goto_options', more: .2, likely: { goto_options: .95 } });
   assert.match(sent.state.page, /Briefing .*The viewer is at: section "Intro"/);
   assert.deepEqual([sent.state.history, sent.state.latest], ['user: What are my choices?', "voice assistant: Let's look at the choices you have."], 'the voice\'s words, and what happened before them');
-  assert.deepEqual(Object.keys(sent.questions), ['page_command']);
+  assert.deepEqual(Object.keys(sent.questions), ['page_command', 'page_more']);
   assert.deepEqual(Object.keys(sent.questions.page_command.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation']);
+  assert.equal(sent.state.goal, '(none)');
+  // After a command ran: what ran, where the page now is (in structure too), and the commands it offers there.
+  const there: StageView = { ...view, where: 'Wave 2', focus: { path: ['FDC waves', 'Wave 2'], step: { index: 2, total: 4, of: 'wave' } }, commands: [...view.commands, { id: 'page_split_campaigns', say: 'Split the FDC row into its campaigns' }] };
+  await jev.read({ trigger: 'step', ...moment, page: there, done: [{ id: 'goto_options', say: 'Go to the section "Options"' }], goal: '"walk me through the waves" (asked 30 s ago); shown for it since: nothing yet' });
+  assert.equal(sent.state.page_done, '1. Go to the section "Options"');
+  assert.match(sent.state.page, /The viewer is at: Wave 2 \(FDC waves › Wave 2, wave 2 of 4\)\./);
+  assert.match(sent.state.goal, /^"walk me through the waves"/);
+  assert.match(sent.state.why, /Page commands just ran/);
+  assert.ok('page_split_campaigns' in sent.questions.page_command.criteria, "a part's own control, offered once the part is on screen");
   answers = { page_command: choice('next_section', .35) };
   assert.equal((await jev.read({ trigger: 'cue', ...moment, page: view })).page!.command, undefined, 'unlikely: nothing runs');
   answers = { page_command: choice('made_up') };
@@ -106,6 +115,16 @@ test("commands that do the same count as one choice, even below none: the page's
   assert.equal(chosenCommand(step({ next_section: .5, page_next: .1, none: .4 }), deck), 'next_section', "a unit's own step is not the page's next");
   const sections: StageView = { ...view, commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'page_next_section', say: 'Go to the next section' }, { id: 'page_section_3', say: 'Go to section 3', name: 'Confidence' }] };
   assert.equal(chosenCommand(step({ next_section: .42, page_next_section: .33, none: .1 }), sections), 'page_next_section', 'two that say the same are one choice');
+  // One part, by three commands: the page's own (by its name), fdc's heading (by its title) and an annotation in it (by its name, and the element it lands on).
+  const grid: StageView = { ...view, commands: [
+    { id: 'page_go_matrix', say: 'Go to section 2, the projects × approaches grid', name: 'Projects by approaches' },
+    { id: 'goto_s_matrix', say: 'Go to the section "s matrix" (headed "Projects by approaches")', name: 's matrix', anchor: 's-matrix', top: true },
+    { id: 'show_the_projects_by_approaches_grid', say: 'Show and highlight: the projects by approaches grid', name: 'the projects by approaches grid', anchor: 'grid' },
+    { id: 'page_go_map', say: 'Go to section 1, the map', name: 'The map' },
+    { id: 'page_matrix_lpp', say: 'Show likes per post in the projects × approaches grid', name: 'Likes per post' } ] };
+  assert.equal(chosenCommand(step({ show_the_projects_by_approaches_grid: .35, goto_s_matrix: .31, none: .2, page_go_map: .14 }), grid), 'show_the_projects_by_approaches_grid', '"Yeah, getting you there" (Oct 31): one part, .66 in all');
+  assert.equal(chosenCommand(step({ show_the_projects_by_approaches_grid: .3, page_go_matrix: .27, none: .25, page_go_map: .18 }), grid), 'page_go_matrix', "the page's own among the likeliest");
+  assert.equal(chosenCommand(step({ page_matrix_lpp: .3, page_go_matrix: .25, none: .45 }), grid), undefined, 'a view of the grid is not the grid: no one choice beats none');
 });
 
 test("the operator's turn never moves the page; with a page open, their words go to the agent noting what they were looking at", async t => {

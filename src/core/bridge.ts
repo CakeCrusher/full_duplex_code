@@ -205,14 +205,16 @@ export class Harness {
    * Jev's reading of a moment (jev.ts): the latest words (the last of `spoken`), with the latest of what the voice companion
    * had perceived before them, word for word as GPT Live got it (perceived.ts: the same conversation however many Standby
    * wakes, resumes and restarts of fdc came between, as far as GPT Live has it), and the operator's instructions to the
-   * companion in force, as GPT Live has them. Of the operator's words the voice tool's own reading also asks, with those
-   * features on, whether they give a standing instruction (the learner) and which settings fit (the tuner).
+   * companion in force, as GPT Live has them, and the operator's goal with what was shown for it. Of the operator's words
+   * the voice tool's own reading also asks, with those features on, whether they give a standing instruction (the learner)
+   * and which settings fit (the tuner).
    */
   read({ spoken = [], ...moment }: Omit<Moment, 'latest' | 'history' | 'instructions' | 'learn' | 'tune'> & { spoken?: Spoken[] }, timeoutMs?: number): Promise<Reading> {
     if (!this.jev) return Promise.reject(new Error('Jev is not configured'));
     const words = ['turn', 'delegation', 'unsent'].includes(moment.trigger), tune = this.jevTuning && (words || moment.trigger === 'settings');
     const ask = tune ? ++this.tuneAsks : 0, latest = spoken.at(-1), record = this.voiceSessions.run?.record ?? this.voiceSessions.current();
     return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(perceivedText(record, spoken.slice(0, -1), latest.at, HISTORY_BYTES)) },
+      goal: moment.goal ?? this.voiceSessions.goalLine(),
       instructions: this.voiceSessions.additionalInstructions.map(item => item.text), learn: (words && this.features.has('instructions')) || undefined,
       tune: tune ? { earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined }, timeoutMs)
       .then(reading => Object.assign(reading, ask ? { tuneAsk: ask } : {}));
