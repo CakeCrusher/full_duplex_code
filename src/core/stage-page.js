@@ -12,26 +12,34 @@
     item: 'li, tr, dt',
     figure: 'figure, img, svg, canvas, video, table',
   };
+  // One read of the page (its commands, what it says, where the viewer is) asks the same things of it over and over:
+  // which headings are shown, what each says, which level is the section level. The page doesn't change within a read, so
+  // each is worked out once per read (`reading`). Without this a read took time with the square of the page's headings and
+  // held the page up meanwhile: 0.3 s at 300 headings, over 5 s at 1,260, every couple of seconds while the voice talked.
+  let memo = null;
+  const once = (key, compute) => { if (!memo) return compute(); if (!memo.has(key)) memo.set(key, compute()); return memo.get(key); };
+  const reading = read => (...args) => { if (memo) return read(...args); memo = new Map(); try { return read(...args); } finally { memo = null; } };
   // Shown: laid out, and neither it nor anything around it transparent or hidden (decks often keep other slides
   // laid out at opacity 0).
-  const visible = el => {
+  const visible = el => once(el, () => {
     const r = el.getBoundingClientRect();
     if (!(r.width > 0 && r.height > 0)) return false;
     for (let a = el; a && a !== document.documentElement; a = a.parentElement) { const st = getComputedStyle(a); if (st.visibility === 'hidden' || Number(st.opacity) < 0.05) return false; }
     return true;
-  };
+  });
   // Invisible characters (a docs site starts every heading with a zero-width space) are no part of a name.
-  const text = el => (el.getAttribute?.('aria-label') || el.innerText || el.textContent || el.getAttribute?.('alt') || '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+  const TEXTS = {};
+  const text = el => { const kept = memo && once(TEXTS, () => new Map()); if (kept?.has(el)) return kept.get(el); const out = (el.getAttribute?.('aria-label') || el.innerText || el.textContent || el.getAttribute?.('alt') || '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim(); kept?.set(el, out); return out; };
   const slug = s => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'x';
-  const units = kind => [...document.querySelectorAll(UNITS[kind])].filter(el => visible(el) && !el.closest('#__fdc_ring') && (kind !== 'paragraph' || text(el).length > 20) && !(kind === 'figure' && el.closest('figure') && el.tagName !== 'FIGURE'));
+  const units = kind => once(`units ${kind}`, () => [...document.querySelectorAll(UNITS[kind])].filter(el => visible(el) && !el.closest('#__fdc_ring') && (kind !== 'paragraph' || text(el).length > 20) && !(kind === 'figure' && el.closest('figure') && el.tagName !== 'FIGURE')));
   const level = el => Number(el.tagName[1]) || 9;
   // The section level: the commonest heading level below the title.
-  const sectionLevel = () => {
+  const sectionLevel = () => once('section level', () => {
     const counts = {};
     for (const h of units('heading')) counts[level(h)] = (counts[level(h)] ?? 0) + 1;
     const levels = Object.keys(counts).map(Number).sort();
     return levels.find(l => l > 1 && counts[l] > 1) ?? levels[0] ?? 2;
-  };
+  });
   const before = (a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
   const sectionOf = el => {
     const top = sectionLevel();
@@ -116,12 +124,16 @@
 
   // A section's own short name (its id, or a short label above the heading) comes first: it is what
   // people call it. Headings that repeat ("Landed" in several sections) are left to next/previous.
+  // The short label just above a heading, without a counter before it ("3 · Results"); and how many headings carry each.
+  const labelOver = h => h.previousElementSibling ? text(h.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') : '';
+  const labelAbove = h => h.previousElementSibling && text(h.previousElementSibling).length < 40 ? labelOver(h) : '';
+  const labelsAbove = () => once('labels above', () => { const counts = new Map(); for (const h of units('heading')) { const label = labelOver(h); if (label) counts.set(label, (counts.get(label) ?? 0) + 1); } return counts; });
   const short = h => {
     const section = h.closest('section[id], article[id]'), id = h.id || (section?.querySelector(UNITS.heading) === h ? section.id : '');
     // A short label above the heading names it, unless it is only a counter ("1 / 15").
-    const above = h.previousElementSibling && text(h.previousElementSibling).length < 40 ? text(h.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') : '';
+    const above = labelAbove(h);
     // A label several headings share ("changed" over four of them) is a category, not a name.
-    const shared = above && units('heading').filter(x => x !== h && x.previousElementSibling && text(x.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') === above).length > 0;
+    const shared = above && labelsAbove().get(above) > 1;
     // Nor is a kicker that counts or files it ("Highlighting · 1 of 6", "Fix · identity"), or says next or back.
     const label = (above.match(/[a-z]/gi) ?? []).length >= 3 && !shared && !/\d|[·|/]/.test(above) && !/^(next|previous|back|up|top|more)$/i.test(above) ? above : '';
     // An id with a number in it is generated ("hs2", "s3"), not what anyone calls the part.
@@ -348,10 +360,10 @@
   // What the ring is on, for the record of page actions: fdc's own highlight (a page's own command highlights by itself).
   const ringNow = () => ({ on: !!stage.ringOn && !!stage.at?.isConnected, at: stage.ringOn && stage.at?.isConnected ? text(stage.at).slice(0, 100) : null });
   const stage = window.__fdcStage = {
-    version: VERSION, history: [], trail: [], last: {}, at: null, span: null, ringOn: false, quiet: false, fast: false, viewerAt: 0, follow: followSpeech,
-    now: () => describe(stage.at?.isConnected ? stage.at : current('paragraph')),
-    commands: () => [...page(), ...base()],
-    describe() {
+    version: VERSION, history: [], trail: [], last: {}, at: null, span: null, ringOn: false, quiet: false, fast: false, viewerAt: 0, follow: reading(followSpeech),
+    now: reading(() => describe(stage.at?.isConnected ? stage.at : current('paragraph'))),
+    commands: reading(() => [...page(), ...base()]),
+    describe: reading(() => {
       const c = window.fdcController, { text: where, focus } = whereNow();
       return {
         title: document.title, url: location.href,
@@ -360,9 +372,9 @@
         commands: stage.commands().map(({ id, say, anchor, name, top, part }) => ({ id, say, ...anchor ? { anchor } : {}, ...name ? { name } : {}, ...top ? { top } : {}, ...part ? { part } : {} })),
         parts: parts(),
       };
-    },
+    }),
     /** Where the viewer is, and when they last moved the page themselves: light enough to ask every few seconds. */
-    here() { const { text: where, focus } = whereNow(); return { url: location.href, where, focus, viewerAt: stage.viewerAt ?? 0, ring: ringNow() }; },
+    here: reading(() => { const { text: where, focus } = whereNow(); return { url: location.href, where, focus, viewerAt: stage.viewerAt ?? 0, ring: ringNow() }; }),
     async run(id, { again = false, fast = false } = {}) {
       const command = stage.commands().find(c => c.id === id);
       if (!command) throw new Error(`No command "${id}" on this page`);
