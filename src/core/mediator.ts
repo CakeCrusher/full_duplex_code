@@ -118,7 +118,7 @@ export class Mediator {
   /** How long after words stayed with the voice its saying that it can't answer them still sends them. */
   static RECONSIDER_MS = 90000;
   /** The request that last went to the agent from this connection: when, and the operator's words in it (turn.ts asks whether words right after it add to it). */
-  lastSent?: { at: number; said: string };
+  lastSent?: { at: number; said: string; held?: boolean };
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
   constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, audit, route, read, consider, firstRecordId = 0 }: {
@@ -231,7 +231,7 @@ export class Mediator {
       // reads these words with what they add. Sent at once, they went in pieces ("Actually, I like the soft shapes one the"
       // reached Codex a second after the turn ended, Oct 29, while the operator went on about the rim and the face).
       const continued = this.history.lastInputAt > heardAt;
-      return route.job(request, jobSpoken, reply, done, { continued, overdue, needed: this.undecidedNeeded, sent: this.lastSent && { ago: Date.now() - this.lastSent.at, said: this.lastSent.said } });
+      return route.job(request, jobSpoken, reply, done, { continued, overdue, needed: this.undecidedNeeded, sent: this.lastSent && { ago: Date.now() - this.lastSent.at, said: this.lastSent.said, ...this.lastSent.held && { held: true } } });
     }).catch(error => { this.log({ type: 'turn.error', message: (error as Error).message }); return { send: true } as Decision; });
     // What GPT Live was told about the turn stays with it: asked again to pass the words on, it hears the same.
     const done = decided.then(async decision => { const told = (await actions)?.told; this.decided(id, request, decision, delegationId, told); return told && !decision.told ? { ...decision, told } : decision; })
@@ -369,7 +369,7 @@ export class Mediator {
     try {
       const said = this.said(request);
       this.deliver({ id, content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now(), said, ...followUp && { followUp } });
-      this.lastSent = { at: Date.now(), said };
+      this.lastSent = { at: Date.now(), said, ...followUp && { held: true } };
       this.check(id, request, handOff, delegationId, reading).catch(error => this.fault(error as Error));
     } catch (error) {
       this.history.release(id);

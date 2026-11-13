@@ -13,7 +13,7 @@ import type { Harness } from './bridge.ts';
 import type { Decision } from './mediator.ts';
 import type { StageView } from './stage.ts';
 import type { Spoken, SpokenRequest } from './voice-history.ts';
-import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, NOW, READY, RECENT_MS, STANDBY, type Reading, type Trigger } from './jev.ts';
+import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, NOW, PRESS, READY, RECENT_MS, STANDBY, type Reading, type Trigger } from './jev.ts';
 import { companionNoted, handledNote, lookingNote, sessionsChanging } from './prompts.ts';
 
 /** What the voice tool did itself for the operator's turn: for GPT Live at once (told), and for the agent with their words (note). */
@@ -46,7 +46,7 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
 }
 
 /** Words waiting undecided before this reading (mediator.ts): the operator went on speaking before the decision, the words have waited too long, or an earlier reading of them found they need the agent. */
-export interface Waiting { continued?: boolean; overdue?: boolean; needed?: boolean; /** The request that last reached the agent from this connection: how long ago, and the operator's words in it (mediator.ts). */ sent?: { ago: number; said: string } }
+export interface Waiting { continued?: boolean; overdue?: boolean; needed?: boolean; /** The request that last reached the agent from this connection: how long ago, and the operator's words in it (mediator.ts). */ sent?: { ago: number; said: string; held?: boolean } }
 
 export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions, { continued = false, overdue = false, needed: neededBefore = false, sent }: Waiting = {}): Promise<Decision> {
   // Moments after a request reached the agent, Jev is also asked whether these words add to it: its tail, a repeat, an
@@ -56,7 +56,9 @@ export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: S
   // now or can wait for the turn to end (jev.ts, NOW): fdc then holds them until it does (outbox.ts).
   const working = bridge.agent.profile.canSteer ? bridge.agentWorking() : undefined;
   const reading = await bridge.read({ trigger: 'job', spoken, reply, page: actions.view, requestId: request.id, ...recent && { sent: recent }, ...working !== undefined && { working } });
-  const adds = reading.adds === undefined || reading.adds >= ADDS;
+  // Words that add nothing to a request held for the turn's end still go when they press for it ("no, send it now"):
+  // steered in, they bring the held request with them (outbox.ts).
+  const adds = reading.adds === undefined || reading.adds >= ADDS || Boolean(recent?.held && (reading.now ?? 0) >= PRESS);
   // Once found to need the agent, waiting words keep needing it: a later reading of the whole stretch never drops them
   // (read with the talk around them, a request was sometimes found to need nothing and waited minutes for another).
   const needed = neededBefore || ((reading.needsAgent ?? 1) >= NEEDS_AGENT && adds), ready = (reading.ready ?? 1) >= READY;

@@ -80,8 +80,9 @@ export const REMOVE = .7;
 export const NEEDS_AGENT = .4, READY = .2;
 // Right after a request has reached the agent (within RECENT_MS), the operator's next words go to it only if they add to
 // it (ADDS): its tail, a repeat, an acknowledgment or noise stays with the voice. Jev used to send them as a second
-// request seconds later (prompts.ts, sentWords).
-export const ADDS = .4, RECENT_MS = 10000;
+// request seconds later (prompts.ts, sentWords). When that request is held for the end of the agent's turn, words that
+// press for it (PRESS, on the now-or-later reading: "no, send it now") go even though they add nothing: they bring it in.
+export const ADDS = .4, RECENT_MS = 10000, PRESS = .5;
 // While the agent is in the middle of a turn, a request is steered into it unless Jev finds it can wait (below NOW): then
 // fdc holds it until the turn ends (outbox.ts). Steering is the default: a correction made to wait costs the operator more
 // than an interruption that could have waited.
@@ -154,8 +155,8 @@ export interface Moment {
   reply?: string;
   /** The agent is in the middle of a turn, for this long (trigger job): Jev is asked whether the words must reach it now or can wait for the turn's end. */
   working?: number;
-  /** The request that reached the agent moments before this reading, within RECENT_MS (trigger job): how long ago, and the operator's words in it. The latest words may only be its tail. */
-  sent?: { ago: number; said: string };
+  /** The request that went to the agent moments before this reading, within RECENT_MS (trigger job): how long ago, the operator's words in it, and whether it is held until the agent's turn ends. The latest words may only be its tail. */
+  sent?: { ago: number; said: string; held?: boolean };
   /** Ask whether the words give a standing instruction (the learner). */
   learn?: boolean;
   /** The instructions Jev learned that are in force (their IDs and text): ask whether the words ask for one of them to be removed. */
@@ -185,7 +186,7 @@ const JOB = {
     'They correct, stop, redirect or change the work under way; answer something the agent asked or is waiting on; give information without which the current work would come out wrong or be wasted; or the operator says it is urgent or wants it right away.',
     "They can wait for the turn to end: a new, separate task; an addition that doesn't change what the agent is doing now; a question or remark about results the agent will produce anyway; anything where interrupting would only disturb work that should finish first."),
   // Asked only when a request reached the agent moments before these words.
-  adds: noul('A request reached the coding agent moments ago (`just_sent`: how long ago, and the operator\'s words it carried). Do the latest words give the agent anything it needs beyond that request?',
+  adds: noul('A request went to the coding agent moments ago, or is held for it until its turn ends (`just_sent`: which, how long ago, and the operator\'s words it carried). Do the latest words give the agent anything it needs beyond that request?',
     "They hold something that request didn't: an instruction, detail, constraint, correction, decision or question the agent needs; an addition to it, a change to it, or another request.",
     'Nothing the agent needs beyond it: the tail end of the same sentence, filler, an acknowledgment or thanks, a repeat or rewording of what was sent, words meant only for the voice companion (to go on, repeat, wait or stop talking), or stray fragments and noise.'),
 };
@@ -339,7 +340,7 @@ export class Jev {
     if (instructions) state.operator_instructions = instructions.join('\n') || '(none)';
     if (trigger === 'job') state.voice_reply = reply?.trim() || '(the companion has not replied)';
     if (trigger === 'job' && moment.working !== undefined) state.agent_turn = `working for ${moment.working < 90000 ? `${Math.max(1, Math.round(moment.working / 1000))} s` : `${Math.round(moment.working / 60000)} min`}`;
-    if (trigger === 'job' && moment.sent) state.just_sent = `${Math.max(1, Math.round(moment.sent.ago / 1000))} s ago: "${wordsEnd(moment.sent.said)}"`;
+    if (trigger === 'job' && moment.sent) state.just_sent = `${moment.sent.held ? 'held until the agent\'s turn ends' : 'delivered'}, ${Math.max(1, Math.round(moment.sent.ago / 1000))} s ago: "${wordsEnd(moment.sent.said)}"`;
     if (sessions) state.sessions = sessionLines(sessions);
     if (page) state.page = pageLine(page);
     if (trigger === 'step') state.page_done = (moment.done ?? []).map((c, i) => `${i + 1}. ${c.say}${c.shown ? ` → ${c.shown.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`).join('\n') || '(none)';

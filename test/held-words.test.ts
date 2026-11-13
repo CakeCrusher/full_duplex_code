@@ -182,3 +182,17 @@ test("when the voice then says it can't answer words that stayed with it, they a
   await settle(30);
   assert.equal(g.deliveries.length, 0);
 });
+
+test("moments after a request was held for the turn's end, an acknowledgment stays with the voice, and words that press for it bring it in", async () => {
+  const decide = async (adds: number, now: number, held: boolean) => {
+    const asked: any[] = [];
+    const bridge: any = { agent: claude, agentWorking: () => 95000, log: () => {},
+      read: async (moment: any) => { asked.push(moment); return { trigger: 'job', said: '', transcript: '', needsAgent: .7, ready: .9, adds, now }; } };
+    const { send, later } = await jobTurn(bridge, { utterances: [], through: 0, seqs: [0], fresh: 'x' }, [], undefined, {}, { sent: { ago: 4000, said: 'Add a legend when you are done.', ...held && { held: true } } });
+    return { send, later, held: asked[0].sent.held };
+  };
+  assert.deepEqual(await decide(.1, .1, true), { send: false, later: false, held: true }, '"okay": nothing more for the agent, and what is held stays held');
+  assert.deepEqual(await decide(.1, .8, true), { send: true, later: false, held: true }, '"no, send it now": steered in, which brings the held request with it');
+  assert.deepEqual(await decide(.1, .8, false), { send: false, later: false, held: undefined }, 'after a request already delivered, words that add nothing stay with the voice');
+  assert.deepEqual(await decide(.9, .1, true), { send: true, later: true, held: true }, 'an addition that can wait is held too');
+});

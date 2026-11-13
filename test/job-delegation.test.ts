@@ -92,7 +92,7 @@ test('moments after a request reached the agent, Jev is asked whether the next w
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { bodies.push(JSON.parse(String(init.body))); return { ok: true, status: 200, json: async () => ({ answers: { needs_agent: { noul: .6 }, ready: { noul: .8 }, adds: { noul: .2 } } }) }; } });
   const tail = await jev.read({ trigger: 'job', latest: { role: 'operator', text: 'Okay' }, sent: { ago: 4200, said: "We don't need test mode. Go ahead and launch it." } });
   assert.deepEqual(Object.keys(bodies[0].questions).sort(), ['adds', 'needs_agent', 'ready']);
-  assert.equal(bodies[0].state.just_sent, '4 s ago: "We don\'t need test mode. Go ahead and launch it."');
+  assert.equal(bodies[0].state.just_sent, 'delivered, 4 s ago: "We don\'t need test mode. Go ahead and launch it."');
   assert.equal(tail.adds, .2);
   await jev.read({ trigger: 'job', latest: { role: 'operator', text: 'Okay' } });
   assert.ok(!('adds' in bodies[1].questions) && !('just_sent' in bodies[1].state), 'asked only when a request went moments before');
