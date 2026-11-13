@@ -88,6 +88,8 @@ export interface VoiceRequest {
   delegationId?: string | null;
   voiceSessionId?: string;
   queuedAt?: number;
+  /** The operator's own words in it: what the voice is told was sent (prompts.ts, sentWords). */
+  said?: string;
 }
 
 /** How far a delivery got. */

@@ -130,14 +130,14 @@ test('the delivery confirmation follows channel success once, independently of h
     ws.send(JSON.stringify(data));
     await new Promise(resolve => { ws.once('pong', resolve); ws.ping(); });
   }
-  h.deliver({ id: 'request-one', content: 'Build the game.', voiceSessionId: 'voice-one', delegationId: 'delegation-one' });
+  h.deliver({ id: 'request-one', content: 'Build the game.', voiceSessionId: 'voice-one', delegationId: 'delegation-one', said: 'Okay, so, build the game.' });
   assert.equal(h.outbox.get('request-one')!.state, 'queued');
   assert.equal(appends.length, 0, 'queuing is not confirmed delivery');
   await event({ type: 'channel.ready' });
   assert.equal(h.outbox.get('request-one')!.state, 'dispatching');
   assert.equal(appends.length, 0, 'writing to the channel socket is not channel success');
   await event({ type: 'channel.sent', id: 'request-one' });
-  assert.deepEqual(appends, [{ kind: 'thinking', content: 'The request has been delivered to Claude Code.', delegationId: 'delegation-one' }], 'quietly: GPT Live confirms as its instructions say');
+  assert.deepEqual(appends, [{ kind: 'thinking', content: 'The operator\'s words were sent to Claude Code, which has them now: "Okay, so, build the game."', delegationId: 'delegation-one' }], 'quietly, and with the words that went: GPT Live (and Jev, reading what it was told) knows what was sent');
   await event({ type: 'channel.sent', id: 'request-one' });
   assert.equal(appends.length, 1, 'a duplicate receipt cannot repeat the spoken confirmation');
   h.deliver({ id: 'old-request', content: 'Earlier request.', voiceSessionId: 'old-voice', delegationId: 'old-delegation' });

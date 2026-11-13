@@ -111,6 +111,8 @@ export class Mediator {
   heldQuietMs = Mediator.HELD_QUIET_MS; heldCapMs = Mediator.HELD_CAP_MS; heldTimer?: NodeJS.Timeout; heldAt = 0;
   /** The job delegation's own reading: the operator's last word it decided on (its next reading's latest words are all after it), since when words wait undecided, and whether a reading found they need the agent. */
   jobRead = -1; undecidedSince = 0; undecidedNeeded = false;
+  /** The request that last went to the agent from this connection: when, and the operator's words in it (turn.ts asks whether words right after it add to it). */
+  lastSent?: { at: number; said: string };
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
   constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, audit, route, read, consider, firstRecordId = 0 }: {
@@ -223,7 +225,7 @@ export class Mediator {
       // reads these words with what they add. Sent at once, they went in pieces ("Actually, I like the soft shapes one the"
       // reached Codex a second after the turn ended, Oct 29, while the operator went on about the rim and the face).
       const continued = this.history.lastInputAt > heardAt;
-      return route.job(request, jobSpoken, reply, done, { continued, overdue, needed: this.undecidedNeeded });
+      return route.job(request, jobSpoken, reply, done, { continued, overdue, needed: this.undecidedNeeded, sent: this.lastSent && { ago: Date.now() - this.lastSent.at, said: this.lastSent.said } });
     }).catch(error => { this.log({ type: 'turn.error', message: (error as Error).message }); return { send: true } as Decision; });
     // What GPT Live was told about the turn stays with it: asked again to pass the words on, it hears the same.
     const done = decided.then(async decision => { const told = (await actions)?.told; this.decided(id, request, decision, delegationId, told); return told && !decision.told ? { ...decision, told } : decision; })
@@ -334,7 +336,9 @@ export class Mediator {
   }
   send(id: string, request: SpokenRequest, content: string, delegationId: string | null, reading?: Reading, handOff: HandOff = 'passed') {
     try {
-      this.deliver({ id, content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now() });
+      const said = this.said(request);
+      this.deliver({ id, content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now(), said });
+      this.lastSent = { at: Date.now(), said };
       this.check(id, request, handOff, delegationId, reading).catch(error => this.fault(error as Error));
     } catch (error) {
       this.history.release(id);

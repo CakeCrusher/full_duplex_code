@@ -14,6 +14,8 @@ import { ResumeStore, type ResumeRecord } from '../src/core/voice-resume.ts';
 import { fakeJev, harness, learn, page, settle, turn } from './live-fake.ts';
 
 const HOW: Record<string, string> = { thinking: 'as silent context', commentary: 'for the companion to say', instructions: 'as an instruction' };
+/** The end of a label that says how long before the latest words the thing was sent. */
+const AGE = /, \d+ (s|min) earlier\]/g;
 
 test("Jev's history is what GPT Live was sent and heard, word for word and in order: its startup input, each append, the conversation; nothing from the latest words on", async t => {
   const { h, lives, sessionId } = await harness(t);
@@ -37,7 +39,9 @@ test("Jev's history is what GPT Live was sent and heard, word for word and in or
   const startup = live.options.input.map((item: any) => `[sent by fdc at the start of the voice connection]\n${item.content[0].text}`);
   const appended = live.appended.slice(0, before).map(([kind, text]) => `[sent by fdc ${HOW[kind]}]\n${text}`);
   assert.ok(appended.some(text => /^\[sent by fdc as silent context\]\n\[Claude hooks; part 1\/1\]\n.*npm test/s.test(text)), "the agent's work as the feed sent it");
-  assert.equal(history, [...startup, ...appended, 'voice assistant: Tests are running.'].join('\n'));
+  // Each label also says how long before the latest words it was sent; without that, the text is what GPT Live got.
+  assert.equal(history!.replace(AGE, ']'), [...startup, ...appended, 'voice assistant: Tests are running.'].join('\n'));
+  assert.equal(history!.match(AGE)?.length, startup.length + appended.length, 'every thing fdc sent says how long before the latest words');
   assert.doesNotMatch(history!, /git commit/, 'nothing GPT Live got after the latest words began');
 });
 
@@ -56,9 +60,9 @@ test('a fork of the last voice session continues what GPT Live perceived; a new 
   lives[1].say('operator', 'Go back to that one.', 0);
   await settle(5);
   const forked = await read();
-  assert.match(forked, /^\[sent by fdc at the start of the voice connection\]\nYou are attached to Claude Code/, "the first session's startup input, which the fork has");
+  assert.match(forked, /^\[sent by fdc at the start of the voice connection, \d+ s earlier\]\nYou are attached to Claude Code/, "the first session's startup input, which the fork has");
   assert.match(forked, /\nuser: Keep the soft shapes one in mind for later\.\n/, 'the conversation before the fork');
-  assert.match(forked, /\[sent by fdc for the companion to say\]\nVoice connection reopened/, "the fork's own greeting");
+  assert.match(forked, /\[sent by fdc for the companion to say, \d+ s earlier\]\nVoice connection reopened/, "the fork's own greeting");
   await lives[1].close('operator ended voice');
   await h.startLive(undefined, page('p'), 'fresh');
   h.voiceSessions.mediator!.operatorQuietMs = 60000;
@@ -66,7 +70,21 @@ test('a fork of the last voice session continues what GPT Live perceived; a new 
   await settle(5);
   const fresh = await read();
   assert.doesNotMatch(fresh, /soft shapes|reopened/, 'a new session perceives none of it');
-  assert.match(fresh, /^\[sent by fdc at the start of the voice connection\]\nYou are attached to Claude Code/);
+  assert.match(fresh, /^\[sent by fdc at the start of the voice connection, \d+ s earlier\]\nYou are attached to Claude Code/);
+});
+
+test('each thing fdc sent says how long before the latest words it was sent: Jev has no other sense of time', () => {
+  const record: ResumeRecord = { stored: false, finalized: false, turns: [] };
+  beginPerceived(record, 'fresh', [{ at: 0, kind: 'start', text: 'You are attached.' }], 1_000);
+  perceive(record, { at: 400_000, kind: 'thinking', text: 'An agent update.' });
+  perceive(record, { at: 597_000, kind: 'thinking', text: 'The operator\'s words were sent to Claude Code, which has them now: "launch it"' });
+  const text = perceivedText(record, [{ role: 'operator', text: 'Okay', at: 600_000 }], 600_000, HISTORY_BYTES);
+  assert.equal(text, [
+    '[sent by fdc at the start of the voice connection, 10 min earlier]', 'You are attached.',
+    '[sent by fdc as silent context, 3 min earlier]', 'An agent update.',
+    '[sent by fdc as silent context, 3 s earlier]', 'The operator\'s words were sent to Claude Code, which has them now: "launch it"',
+    'user: Okay'].join('\n'));
+  assert.doesNotMatch(perceivedText(record, [], Infinity, HISTORY_BYTES), /earlier/, 'no latest words to count from, no ages');
 });
 
 test('Jev reads the latest 14 KB of it: whole entries, the oldest that fits only in part cut to its end under its label', () => {

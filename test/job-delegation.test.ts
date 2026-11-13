@@ -87,6 +87,43 @@ test('with no reply, the job delegation reads after a short wait; a word of the 
   await until(() => moments.filter(m => m.trigger === 'job').length >= 2);
 });
 
+test('moments after a request reached the agent, Jev is asked whether the next words add to it: its tail stays with the voice, an addition goes', async t => {
+  const bodies: any[] = [];
+  const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { bodies.push(JSON.parse(String(init.body))); return { ok: true, status: 200, json: async () => ({ answers: { needs_agent: { noul: .6 }, ready: { noul: .8 }, adds: { noul: .2 } } }) }; } });
+  const tail = await jev.read({ trigger: 'job', latest: { role: 'operator', text: 'Okay' }, sent: { ago: 4200, said: "We don't need test mode. Go ahead and launch it." } });
+  assert.deepEqual(Object.keys(bodies[0].questions).sort(), ['adds', 'needs_agent', 'ready']);
+  assert.equal(bodies[0].state.just_sent, '4 s ago: "We don\'t need test mode. Go ahead and launch it."');
+  assert.equal(tail.adds, .2);
+  await jev.read({ trigger: 'job', latest: { role: 'operator', text: 'Okay' } });
+  assert.ok(!('adds' in bodies[1].questions) && !('just_sent' in bodies[1].state), 'asked only when a request went moments before');
+
+  const { h } = await harness(t);
+  const moments = fakeJev(h, m => m.trigger === 'job' ? { needsAgent: .7, ready: .9, ...m.sent && { adds: /blue/.test(m.latest!.text) ? .9 : .1 } } : {});
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  const mediator = h.voiceSessions.mediator!;
+  Object.assign(mediator, { replyStartMs: 50, operatorQuietMs: 50 });
+  const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); };
+  const live = h.voiceSessions.live!, jobs = () => moments.filter(m => m.trigger === 'job');
+  live.emit('event', { type: 'session.input_transcript.delta', delta: "We don't need test mode. Go ahead and launch it.", start_ms: 0, end_ms: 900 });
+  await until(() => delivered.length === 1);
+  assert.equal(jobs()[0].sent, undefined, 'nothing had been sent before it');
+  assert.equal(delivered[0].said, "We don't need test mode. Go ahead and launch it.", "the request carries the operator's words: what the voice is told was sent");
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ' Okay.', start_ms: 3000, end_ms: 3300 });
+  await until(() => jobs().length === 2);
+  await settle(50);
+  assert.equal(jobs()[1].sent!.said, "We don't need test mode. Go ahead and launch it.");
+  assert.ok(jobs()[1].sent!.ago < 10000);
+  assert.equal(delivered.length, 1, 'the tail of a request just sent is no second request');
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ' And make the button blue.', start_ms: 6000, end_ms: 6900 });
+  await until(() => delivered.length === 2);
+  assert.match(delivered[1].content, /Okay\./, 'what stayed with the voice goes with the next request, as everything said since the last one does');
+  // Later, the same words are read as any turn is.
+  mediator.lastSent!.at -= 11000;
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ' Okay.', start_ms: 20000, end_ms: 20300 });
+  await until(() => jobs().length === 4);
+  assert.equal(jobs()[3].sent, undefined, 'only moments after a request');
+});
+
 test("with a page open, the job delegation knows what its controls can do, and the agent hears what the user was looking at; the page itself doesn't move", async t => {
   const { h } = await harness(t);
   stage(h);

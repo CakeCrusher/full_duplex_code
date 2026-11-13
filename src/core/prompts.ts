@@ -127,7 +127,19 @@ export const turnOutcome = ({ profile: { name, product } }: Agent, { send }: { s
   : `Nothing was sent to ${product}: the voice tool found the operator's words need nothing from ${name}. Answer them yourself; whatever they ask ${name} to do goes to it when they say so.`;
 export const queueFailed = ({ profile: { name } }: Agent) =>
   `The voice bridge failed to queue the user’s request for ${name}. The request was not delivered; the terminal connection needs attention.`;
-export const deliveryConfirmation = ({ profile: { product } }: Agent) => `The request has been delivered to ${product}.`;
+// The end of what the operator said, within `max` characters, from a whole word: what follows a request is its tail.
+export const wordsEnd = (said: string, max = 140) => {
+  const text = said.replace(/\s+/g, ' ').trim();
+  if (text.length <= max) return text;
+  const end = text.slice(-max);
+  return `…${end.slice(end.indexOf(' ') + 1)}`;
+};
+// The agent has a request: the voice is told which of the operator's words went, so that it never has to guess what was
+// sent, and Jev, which reads what the voice was told (perceived.ts), knows it too, with how long ago. Told only that "the
+// request" had been delivered, Jev sent the tail of a request as a second one seconds later: of 110 requests that followed
+// another within 30 s (Oct 31 to Nov 12), 31 added nothing for the agent, 13 of the 25 within 10 s (two blind judges).
+export const sentWords = ({ profile: { product } }: Agent, said?: string) =>
+  said?.trim() ? `The operator's words were sent to ${product}, which has them now: "${wordsEnd(said)}"` : `The request has been delivered to ${product}.`;
 
 // A delegated request as the agent receives it: a note on how to read it, then
 // the conversation since the previous request, one utterance per line.

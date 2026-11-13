@@ -13,7 +13,7 @@ import type { Harness } from './bridge.ts';
 import type { Decision } from './mediator.ts';
 import type { StageView } from './stage.ts';
 import type { Spoken, SpokenRequest } from './voice-history.ts';
-import { COMPANION_ONLY, GOAL, NEEDS_AGENT, READY, STANDBY, type Reading, type Trigger } from './jev.ts';
+import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, READY, RECENT_MS, STANDBY, type Reading, type Trigger } from './jev.ts';
 import { companionNoted, handledNote, lookingNote, sessionsChanging } from './prompts.ts';
 
 /** What the voice tool did itself for the operator's turn: for GPT Live at once (told), and for the agent with their words (note). */
@@ -46,20 +46,24 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
 }
 
 /** Words waiting undecided before this reading (mediator.ts): the operator went on speaking before the decision, the words have waited too long, or an earlier reading of them found they need the agent. */
-export interface Waiting { continued?: boolean; overdue?: boolean; needed?: boolean }
+export interface Waiting { continued?: boolean; overdue?: boolean; needed?: boolean; /** The request that last reached the agent from this connection: how long ago, and the operator's words in it (mediator.ts). */ sent?: { ago: number; said: string } }
 
-export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions, { continued = false, overdue = false, needed: neededBefore = false }: Waiting = {}): Promise<Decision> {
-  const reading = await bridge.read({ trigger: 'job', spoken, reply, page: actions.view, requestId: request.id });
+export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions, { continued = false, overdue = false, needed: neededBefore = false, sent }: Waiting = {}): Promise<Decision> {
+  // Moments after a request reached the agent, Jev is also asked whether these words add to it: its tail, a repeat, an
+  // acknowledgment or noise stays with the voice (jev.ts, ADDS). Not for words already found to need the agent.
+  const recent = sent && sent.ago <= RECENT_MS && !neededBefore ? sent : undefined;
+  const reading = await bridge.read({ trigger: 'job', spoken, reply, page: actions.view, requestId: request.id, ...recent && { sent: recent } });
+  const adds = reading.adds === undefined || reading.adds >= ADDS;
   // Once found to need the agent, waiting words keep needing it: a later reading of the whole stretch never drops them
   // (read with the talk around them, a request was sometimes found to need nothing and waited minutes for another).
-  const needed = neededBefore || (reading.needsAgent ?? 1) >= NEEDS_AGENT, ready = (reading.ready ?? 1) >= READY;
+  const needed = neededBefore || ((reading.needsAgent ?? 1) >= NEEDS_AGENT && adds), ready = (reading.ready ?? 1) >= READY;
   // Sent once the operator has finished saying it and stopped, or once it has waited too long (mediator.ts, HELD_CAP_MS).
   const send = needed && ((ready && !continued) || overdue);
   // Not finished, or still being said: no decision yet. The next reading takes these words with what the operator adds, or
   // they go once the conversation stays quiet (mediator.ts). There is a next time, so a pause is no reason to send half a request.
   const wait = !send && (needed || continued);
-  bridge.log({ type: 'turn.job', said: request.fresh.slice(-200), reply: reply?.slice(-200) ?? null, needsAgent: reading.needsAgent, ready: reading.ready, send, ...wait && { wait }, ...continued && { continued }, ...overdue && { overdue } });
-  bridge.jevAudit?.decided(reading.id, { outcome: send ? 'send' : wait ? 'wait' : 'keep', needed, finished: ready, ...neededBefore && { neededBefore }, ...continued && { continued }, ...overdue && { overdue } }, true);
+  bridge.log({ type: 'turn.job', said: request.fresh.slice(-200), reply: reply?.slice(-200) ?? null, needsAgent: reading.needsAgent, ready: reading.ready, ...reading.adds !== undefined && { adds: reading.adds }, send, ...wait && { wait }, ...continued && { continued }, ...overdue && { overdue } });
+  bridge.jevAudit?.decided(reading.id, { outcome: send ? 'send' : wait ? 'wait' : 'keep', needed, finished: ready, ...reading.adds !== undefined && { adds }, ...neededBefore && { neededBefore }, ...continued && { continued }, ...overdue && { overdue } }, true);
   return { reading, send, wait, needed: wait && needed, note: send ? actions.note : actions.keptNote };
 }
 

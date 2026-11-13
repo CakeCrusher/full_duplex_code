@@ -24,7 +24,7 @@ import { focusLine, type StageCommand, type StageView } from './stage.ts';
 import type { Tuning } from './tuning.ts';
 import { DEFAULT_FEATURES, type Feature, type Features } from './features.ts';
 import { tunerQuestions, TUNER_SETTING } from './jev-tuner.ts';
-import { spokenLine } from './prompts.ts';
+import { spokenLine, wordsEnd } from './prompts.ts';
 import { roles } from './roles.ts';
 
 type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
@@ -42,7 +42,7 @@ const WHY: Record<Trigger, string> = {
   settings: 'The operator\'s instructions to the companion have changed, or voice has started.',
 };
 /** What Jev is told of its place, by the agent and the features on: who does what (shared with the companion), then its own part and how to read its state. */
-const setting = (agent: { profile: Pick<AgentProfile, 'name'> }, features: Features) => `An operator talks by voice (transcribed, may be imperfect) to a voice companion that presents the work of a coding agent, ${agent.profile.name}, while it works. ${roles(agent, features)} You judge for the voice tool: what it does itself follows your reading, and everything else must reach ${agent.profile.name} unless the companion handled it; keeping work from ${agent.profile.name} is the costly mistake. \`latest\` holds the latest words: judge those. \`history\` is what the voice companion had heard and been told before them, oldest first, word for word as it got it: \`user:\` lines are the operator's speech and \`voice assistant:\` lines the companion's own, transcribed; a block that opens with a line in square brackets is something fdc sent the companion, and that line says how. It is context: what "it", "that one" or "yes, please" refers to, and what the companion knows already. \`operator_instructions\` are the operator's instructions to the companion in force now; they hold for your reading too, such as what should or shouldn't reach ${agent.profile.name}. \`why\` says why you are asked now.`;
+const setting = (agent: { profile: Pick<AgentProfile, 'name'> }, features: Features) => `An operator talks by voice (transcribed, may be imperfect) to a voice companion that presents the work of a coding agent, ${agent.profile.name}, while it works. ${roles(agent, features)} You judge for the voice tool: what it does itself follows your reading, and everything else must reach ${agent.profile.name} unless the companion handled it; keeping work from ${agent.profile.name} is the costly mistake. \`latest\` holds the latest words: judge those. \`history\` is what the voice companion had heard and been told before them, oldest first, word for word as it got it: \`user:\` lines are the operator's speech and \`voice assistant:\` lines the companion's own, transcribed; a block that opens with a line in square brackets is something fdc sent the companion, and that line says how, and how long before the latest words. It is context: what "it", "that one" or "yes, please" refers to, and what the companion knows already. \`operator_instructions\` are the operator's instructions to the companion in force now; they hold for your reading too, such as what should or shouldn't reach ${agent.profile.name}. \`why\` says why you are asked now.`;
 const SESSIONS_SETTING = ' The operator may run several companions at once, each beside its own coding session (`sessions`); each one\'s voice can be on or off, and several can be on together. Each session is listed as the operator sees it in the page\'s list of running companions: its folder, its coding agent, the start of its session ID and its state, then what hovering it shows. The operator may name a session by any of these, and a session ID by its first characters, which speech may spell out ("six two zero" or "620" for an ID that starts with 620). fdc, the voice tool itself, turns them on or off; the coding agent does not. Every listed session is already running, so starting, opening or turning on a listed session means turning its voice on, and stopping or closing one means turning its voice off.';
 const PAGE_SETTING = ' A page is open in the browser beside the conversation (`page`). The voice tool can move it, show and highlight its parts with the listed page commands, without the coding agent. Commands whose id starts with page_ are the page\'s own (slides, tabs, views): prefer them when they fit.';
 
@@ -69,12 +69,16 @@ export const BEHAVE = .6, DESIGN = .5;
 // of 176 moments right against 90 for GPT Live delegating itself and 94 for the question alone (.5, ready .2): 50 of 79
 // stretches of talk kept from the agent (GPT Live 29), 4 requests lost (5), 20 late (11).
 export const NEEDS_AGENT = .4, READY = .2;
+// Right after a request has reached the agent (within RECENT_MS), the operator's next words go to it only if they add to
+// it (ADDS): its tail, a repeat, an acknowledgment or noise stays with the voice. Jev used to send them as a second
+// request seconds later (prompts.ts, sentWords).
+export const ADDS = .4, RECENT_MS = 10000;
 // The operator is done for now: the companion goes on Standby as soon as it has answered.
 export const STANDBY = .7;
 // What Jev reads of what the voice companion perceived: its latest 14 KB (perceived.ts).
 export const HISTORY_BYTES = 14000;
 /** For the record (jev-audit.ts): the likelihood at which each question's answer changes what fdc does. */
-const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, standby: STANDBY, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
+const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, standby: STANDBY, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
 
 /** One utterance of the conversation. */
 export interface Line { role: 'operator' | 'intermediary'; text: string }
@@ -104,6 +108,8 @@ export interface Reading {
   said: string; transcript: string;
   /** Whether those words must reach the coding agent, and whether the operator has finished saying them (trigger job); null when Jev couldn't be asked. */
   needsAgent: number | null; ready?: number;
+  /** Whether they add to the request the agent got moments before (asked only then). */
+  adds?: number;
   sessions?: SessionsJudgment; companionOnly?: number;
   page?: PageJudgment; instruction?: InstructionJudgment; goal?: GoalJudgment;
   /** The level of each setting Jev chose (jev-tuner.ts). */
@@ -127,6 +133,8 @@ export interface Moment {
   goal?: string;
   /** What the voice companion has said in reply to the latest words (trigger job). */
   reply?: string;
+  /** The request that reached the agent moments before this reading, within RECENT_MS (trigger job): how long ago, and the operator's words in it. The latest words may only be its tail. */
+  sent?: { ago: number; said: string };
   /** Ask whether the words give a standing instruction (the learner). */
   learn?: boolean;
   /** Ask which settings fit (the tuner): the instructions from earlier sessions, the current settings and those set by hand. */
@@ -149,6 +157,10 @@ const JOB = {
   ready: noul('Have the operator finished saying what they want for now, so that a good listener would act on it at this moment, or are they still in the middle of saying it?',
     "They have said a whole request or question, enough to act on, and stopped: even if it trails off into filler ('um', 'yeah', 'so', 'and yeah') or they might add more later. A short cue or command is whole as soon as it is said ('show them', 'take it from here', 'carry on', 'send it').",
     "They broke off in the middle of a sentence or a list ('and the…', 'I want you to…', 'can you also'), or are still building up to what they want (setting context before the actual ask), so acting now would miss its point."),
+  // Asked only when a request reached the agent moments before these words.
+  adds: noul('A request reached the coding agent moments ago (`just_sent`: how long ago, and the operator\'s words it carried). Do the latest words give the agent anything it needs beyond that request?',
+    "They hold something that request didn't: an instruction, detail, constraint, correction, decision or question the agent needs; an addition to it, a change to it, or another request.",
+    'Nothing the agent needs beyond it: the tail end of the same sentence, filler, an acknowledgment or thanks, a repeat or rewording of what was sent, words meant only for the voice companion (to go on, repeat, wait or stop talking), or stray fragments and noise.'),
 };
 // The voice tool's own actions on the operator's turn (triggers turn, delegation): never whether anything goes to the agent.
 const GATE = {
@@ -279,15 +291,16 @@ export class Jev {
   constructor({ apiKey, log, record, fetch = globalThis.fetch as unknown as Fetch, agent = { profile: { name: 'the coding agent' } }, features = new Set(DEFAULT_FEATURES) }: { apiKey: string; log: (event: Record<string, unknown>) => void; record?: (call: JevCall) => void; fetch?: Fetch; agent?: { profile: Pick<AgentProfile, 'name'> }; features?: Features }) {
     this.apiKey = apiKey; this.log = log; this.record = record; this.fetch = fetch; this.setting = setting(agent, features); this.features = [...features];
   }
-  /** One call: everything the voice tool asks about this moment, of one kind (the job delegation, or its own actions). */
-  async read(moment: Moment, timeoutMs = 3000): Promise<Reading> {
-    const { trigger, latest, history = '', instructions, sessions, page, learn, tune, reply, requestId, handOff } = moment, started = Date.now();
-    const said = latest?.text.replace(/\s+/g, ' ').trim() ?? '', gate = trigger === 'turn' || trigger === 'delegation', job = trigger === 'job' || trigger === 'unsent';
+  /** What one call sends Jev about a moment: the state it reads and the questions asked of it (a recorded moment can be put to it again). */
+  ask(moment: Moment): { state: Record<string, string>; questions: Record<string, unknown> } {
+    const { trigger, latest, history = '', instructions, sessions, page, learn, tune, reply } = moment;
+    const gate = trigger === 'turn' || trigger === 'delegation', job = trigger === 'job' || trigger === 'unsent';
     // The latest words in their own field: marked inside the conversation instead, Jev read plain page moves as likelier
     // work for the agent (page_work up by .1 on average, Oct 21).
     const state: Record<string, string> = { setting: this.setting + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : '') + (tune ? ` ${TUNER_SETTING}` : ''), why: WHY[trigger], history: history.trim() || '(none)', latest: latest ? spokenLine(latest) : '(none)' };
     if (instructions) state.operator_instructions = instructions.join('\n') || '(none)';
     if (trigger === 'job') state.voice_reply = reply?.trim() || '(the companion has not replied)';
+    if (trigger === 'job' && moment.sent) state.just_sent = `${Math.max(1, Math.round(moment.sent.ago / 1000))} s ago: "${wordsEnd(moment.sent.said)}"`;
     if (sessions) state.sessions = sessionLines(sessions);
     if (page) state.page = pageLine(page);
     if (trigger === 'step') state.page_done = (moment.done ?? []).map((c, i) => `${i + 1}. ${c.say}`).join('\n') || '(none)';
@@ -296,13 +309,20 @@ export class Jev {
     if (page && job) state.page_commands = page.commands.map(c => `- ${c.say}`).join('\n').slice(0, 3000) || '(none)';
     if (tune) Object.assign(state, { earlier_sessions: tune.earlier.join('\n').slice(0, 4000) || '(none)', current_settings: JSON.stringify(tune.current) });
     const questions = {
-      ...job && { needs_agent: JOB.needs_agent }, ...trigger === 'job' && { ready: JOB.ready },
+      ...job && { needs_agent: JOB.needs_agent }, ...trigger === 'job' && { ready: JOB.ready }, ...trigger === 'job' && moment.sent && { adds: JOB.adds },
       // Words about how the companion behaves are for the learner and the tuner: asked only while either is on.
       ...gate && { ...(learn || tune) && { companion_only: GATE.companion_only }, standby: GATE.standby, ...GOAL_QUESTION, ...sessions && sessionQuestions(sessions) },
       ...page && (trigger === 'cue' || trigger === 'step') && pageQuestions(page, trigger),
       ...learn && LEARNER,
       ...tune && tunerQuestions(tune.current, tune.pinned, trigger !== 'settings'),
     };
+    return { state, questions };
+  }
+  /** One call: everything the voice tool asks about this moment, of one kind (the job delegation, or its own actions). */
+  async read(moment: Moment, timeoutMs = 3000): Promise<Reading> {
+    const { trigger, latest, history = '', sessions, page, learn, tune, requestId, handOff } = moment, started = Date.now();
+    const said = latest?.text.replace(/\s+/g, ' ').trim() ?? '', gate = trigger === 'turn' || trigger === 'delegation';
+    const { state, questions } = this.ask(moment);
     const call: JevCall = { id: randomUUID(), at: started, trigger, ...requestId && { requestId }, ...handOff && { handOff },
       config: { url: URL, model: MODEL, timeoutMs, features: this.features, thresholds: Object.fromEntries(Object.keys(questions).filter(name => name in THRESHOLDS).map(name => [name, THRESHOLDS[name]])) },
       state, questions, ms: 0 };
@@ -320,7 +340,7 @@ export class Jev {
     // Its record waits for what fdc does with the answers (jev-audit.ts).
     this.record?.(call);
     const p = (name: string, missing = 0) => { const value = Number(answers?.[name]?.noul); return Number.isFinite(value) ? value : missing; };
-    const reading: Reading = { trigger, id: call.id, said, transcript: `${history}${latest ? `► ${spokenLine(latest)}` : ''}`, needsAgent: 'needs_agent' in questions ? p('needs_agent') : null, ...'ready' in questions && { ready: p('ready', 1) } };
+    const reading: Reading = { trigger, id: call.id, said, transcript: `${history}${latest ? `► ${spokenLine(latest)}` : ''}`, needsAgent: 'needs_agent' in questions ? p('needs_agent') : null, ...'ready' in questions && { ready: p('ready', 1) }, ...'adds' in questions && { adds: p('adds', 1) } };
     if (gate) {
       if ('companion_only' in questions) reading.companionOnly = p('companion_only');
       reading.standby = p('standby');

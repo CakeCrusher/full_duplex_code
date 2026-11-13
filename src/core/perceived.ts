@@ -17,14 +17,22 @@ export interface Sent { at: number; kind: SentKind; text: string }
 /** One thing GPT Live perceived: something fdc sent it, or a turn of the earlier conversation a new session was seeded with. */
 export type PerceivedEntry = Sent | Spoken;
 
-// Each thing fdc sent, as Jev reads it: a line saying how, then the text as GPT Live got it.
+// Each thing fdc sent, as Jev reads it: a line saying how (and how long before the latest words), then the text as GPT Live got it.
 const HOW: Record<SentKind, string> = {
   start: '[sent by fdc at the start of the voice connection]',
   thinking: '[sent by fdc as silent context]',
   commentary: '[sent by fdc for the companion to say]',
   instructions: '[sent by fdc as an instruction]',
 };
-const written = (entry: PerceivedEntry) => 'kind' in entry ? `${HOW[entry.kind]}\n${entry.text}` : spokenLine(entry);
+// How long before the latest words (`until`) something was sent, in its label: the voice lives through the conversation's
+// time, and Jev, reading it as text, had none: a request sent three seconds ago read the same as one sent an hour ago.
+export const earlier = (at: number, until: number) => {
+  const seconds = Math.round((until - at) / 1000);
+  if (!Number.isFinite(seconds) || seconds < 0) return '';
+  return seconds < 90 ? `, ${Math.max(1, seconds)} s earlier` : `, ${Math.round(seconds / 60)} min earlier`;
+};
+const label = (entry: Sent, until: number) => `${HOW[entry.kind].slice(0, -1)}${earlier(entry.at, until)}]`;
+const written = (entry: PerceivedEntry, until: number) => 'kind' in entry ? `${label(entry, until)}\n${entry.text}` : spokenLine(entry);
 // The end of a text within a byte allowance, from the start of a line when one is within it.
 function endOf(text: string, maxBytes: number) {
   const chars = Array.from(text);
@@ -34,8 +42,8 @@ function endOf(text: string, maxBytes: number) {
   return newline >= 0 && newline < end.length - 1 ? end.slice(newline + 1) : end;
 }
 /** An entry cut to its end, its label kept. */
-const cut = (entry: PerceivedEntry, maxBytes: number) => {
-  const head = 'kind' in entry ? `${HOW[entry.kind]}\n…` : spokenLine({ ...entry, text: '…' });
+const cut = (entry: PerceivedEntry, maxBytes: number, until: number) => {
+  const head = 'kind' in entry ? `${label(entry, until)}\n…` : spokenLine({ ...entry, text: '…' });
   const end = endOf(entry.text, maxBytes - Buffer.byteLength(head) - 1);
   return end.trim() ? ('kind' in entry ? `${head}${end}` : spokenLine({ ...entry, text: `…${end}` })) : undefined;
 };
@@ -71,9 +79,9 @@ export function perceivedText(record: ResumeRecord, spoken: readonly Spoken[], u
   const kept: string[] = [];
   let room = maxBytes;
   for (let i = entries.length - 1; i >= 0; i--) {
-    const text = written(entries[i]), bytes = Buffer.byteLength(text) + 1;
+    const text = written(entries[i], until), bytes = Buffer.byteLength(text) + 1;
     if (bytes <= room) { kept.unshift(text); room -= bytes; continue; }
-    const end = cut(entries[i], room - 1);
+    const end = cut(entries[i], room - 1, until);
     if (end) kept.unshift(end);
     break;
   }

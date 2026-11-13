@@ -10,7 +10,7 @@ import { jobTurn, routeActions } from './turn.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { recentHistory } from './recent-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
-import { attachment, catchUp, deliveryConfirmation, disregardInstruction, goalState, greeting, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, standbyNews, standbyWake, viewerMoved, walkOn } from './prompts.ts';
+import { attachment, catchUp, disregardInstruction, goalState, greeting, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, sentWords, standbyNews, standbyWake, viewerMoved, walkOn } from './prompts.ts';
 import { focusLine, Stage, type StageCommand, type StageHere, type StageView } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
@@ -759,7 +759,7 @@ export class VoiceSessions {
     // agent has started or completed the work. Never replay it in a new voice session.
     // GPT Live hears it quietly and confirms as its instructions say: sent as speech (commentary), it was said aloud
     // even with the operator's own instruction not to (Oct 18, again every request on Oct 19).
-    live.append('thinking', deliveryConfirmation(this.bridge.agent), task.delegationId ?? null).catch(error => {
+    live.append('thinking', sentWords(this.bridge.agent, task.said), task.delegationId ?? null).catch(error => {
       if (this.live === live && live.state === 'active') this.bridge.fault(new Error(`The request was sent, but its voice confirmation failed: ${error.message}`));
     });
   }
