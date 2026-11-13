@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { lastRecords } from '../src/core/transcript-tail.ts';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -128,4 +129,17 @@ test('a SessionStart for another session moves to it, as when a resume completes
   assert.equal(observer.hook({ session_id: 'resumed', agent_id: 'child', hook_event_name: 'SessionStart' }), true);
   assert.equal(observer.hook({ session_id: 'other', agent_id: 'child', hook_event_name: 'SessionStart' }), false, 'a subagent never moves the session');
   assert.deepEqual(log.filter(e => e.type === 'agent.hook_refused').map(e => [e.name, e.session_id, e.sessionId]), [['Stop', 'provisional', 'resumed'], ['SessionStart', 'other', 'resumed']]);
+});
+
+test("a resumed session's recent work is restored from the end of its record, however large the record is", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-record-')), file = path.join(dir, 'big.jsonl');
+  const line = (n: number) => JSON.stringify({ type: 'assistant', sessionId: 's', timestamp: new Date(1e12 + n).toISOString(), message: { id: `m${n}`, content: [{ type: 'text', text: `Reply ${n}. ${'x'.repeat(200)}` }] } }) + '\n';
+  fs.writeFileSync(file, Array.from({ length: 400 }, (_, n) => line(n)).join(''));
+  assert.equal(lastRecords(file, 64 * 1024 * 1024).length, 400, 'a record that fits is read whole');
+  const tail = lastRecords(file, 4096);
+  assert.ok(tail.length >= 8 && tail.length < 20, `only whole lines within the last 4 KB (${tail.length})`);
+  assert.equal(tail.at(-1).message.id, 'm399', 'through the newest');
+  assert.equal(tail[0].message.id, `m${400 - tail.length}`, 'the line cut at the start of the piece is dropped, none skipped after it');
+  fs.writeFileSync(path.join(dir, 'empty.jsonl'), '');
+  assert.equal(lastRecords(path.join(dir, 'empty.jsonl'), 4096).length, 0);
 });

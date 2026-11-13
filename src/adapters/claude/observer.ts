@@ -4,12 +4,14 @@ import { createHash } from 'node:crypto';
 import type { ObservationKind, TurnState } from '../../core/adapter.ts';
 import { AgentObserver, type Logger } from '../../core/agent-observer.ts';
 import { observation as makeObservation } from '../../core/observation.ts';
-import { TranscriptTail } from '../../core/transcript-tail.ts';
+import { lastRecords, TranscriptTail } from '../../core/transcript-tail.ts';
 import { claudeProfile } from './profile.ts';
 import { claudeContext } from './context.ts';
 import { receivedRequest } from './channel-message.ts';
 
 // What each hook is, in the core's terms. Other hooks are ordinary events.
+/** How much of the end of a resumed session's record is restored: far more than a voice session starts from (about 7 KB of recent work), and little enough to read at once. */
+const RESTORED_BYTES = 32 * 1024 * 1024;
 const KINDS = new Map<string, ObservationKind>([
   ['UserPromptSubmit', 'prompt'], ['MessageDisplay', 'text'],
   ['PreToolUse', 'tool'], ['PostToolUse', 'tool'], ['PostToolBatch', 'tool'], ['PostToolUseFailure', 'tool_failure'],
@@ -66,11 +68,10 @@ export class ClaudeObserver extends AgentObserver {
       this.tail = new TranscriptTail(file, event => this.record(event), error => this.emit('fault', error)); this.tail.start();
     } else {
       // Seed resumed sessions with saved prompts and replies. Normal live observation
-      // uses display hooks, so the two sources are never blindly merged.
+      // uses display hooks, so the two sources are never blindly merged. Only the end of the record is read: a voice
+      // session starts from recent work (recent-history.ts), and a long session's record is too large to read whole.
       try {
-        const data = fs.readFileSync(file, 'utf8');
-        const records = data.split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
-        if (!this.conversation.length) for (const record of records) this.record(record, { emit: false });
+        if (!this.conversation.length) for (const record of lastRecords(file, RESTORED_BYTES)) this.record(record, { emit: false });
       } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') this.emit('fault', err); }
     }
   }

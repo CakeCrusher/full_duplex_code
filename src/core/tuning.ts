@@ -3,7 +3,13 @@
 // Each one trades the core principles in the README against each other; its
 // description says how, from measurements on replayed real sessions, so that
 // whoever sets it (a person, or Jev from the operator's instructions) knows
-// what a change costs and buys. Defaults are the measured best balance.
+// what a change costs and buys. Defaults are the measured best balance, except
+// the three hold settings: their defaults are the hold's original design values,
+// and their levels were compared by replaying the recorded agent updates and the
+// operator's recorded speech of ten runs (Oct 31 to Nov 12, 8,793 updates)
+// through the hold rule, with nothing sent to GPT Live. That gives how many
+// batches go and how long updates wait; what GPT Live then does with more or
+// fewer batches was not measured, and each level says so.
 import type { Hold } from './observation-feed.ts';
 
 export interface Tuning {
@@ -34,23 +40,23 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
   holdFirstMs: { min: 0, max: 5000, describe:
     'How long the first agent update of a quiet stretch waits for more before going to GPT Live (ms). Longer turns bursts into fewer, larger batches: GPT Live speaks less often and more coherently (5 Fresh enough pays). 0 sends each update at once.',
     levels: [
-    { value: 500, consequence: 'Fresher: updates arrive about half a second sooner; GPT Live gets more, smaller batches and remarks more often.' },
-    { value: 1000, consequence: 'The measured balance (default).' },
-    { value: 2000, consequence: 'Calmer: fewer, larger batches and fewer unprompted remarks; updates arrive about a second later.' },
+    { value: 500, consequence: 'Fresher: replayed on recorded sessions, 10% more batches reach GPT Live than at 1000 (3.3 updates each instead of 3.6) and an update waits a median 3.3 s instead of 3.9. Expected, not measured: GPT Live remarks more often.' },
+    { value: 1000, consequence: 'The default, the hold\'s original design value: on recorded sessions 3.6 updates to a batch, an update waiting a median 3.9 s.' },
+    { value: 2000, consequence: 'Calmer: replayed on recorded sessions, 11% fewer batches (4.1 updates each) and a median wait of 4.9 s. Expected, not measured: fewer unprompted remarks.' },
   ] },
   holdPerUpdateMs: { min: 0, max: 5000, describe:
     'How much each further update in a burst extends the wait (ms), up to holdLongestMs. Higher groups a flood into one batch; lower keeps updates fresher.',
     levels: [
-    { value: 500, consequence: 'A burst goes in sooner, in smaller pieces.' },
-    { value: 1000, consequence: 'The measured balance (default).' },
-    { value: 2000, consequence: 'A burst is gathered longer into one batch: calmer, less fresh.' },
+    { value: 500, consequence: 'A burst goes in sooner, in smaller pieces: replayed on recorded sessions, 13% more batches than at 1000 (3.2 updates each) and a median wait of 2.1 s instead of 3.9.' },
+    { value: 1000, consequence: 'The default, the hold\'s original design value: on recorded sessions 3.6 updates to a batch, an update waiting a median 3.9 s.' },
+    { value: 2000, consequence: 'A burst is gathered longer into one batch: replayed on recorded sessions, 11% fewer batches (4.1 updates each) and a median wait of 6.0 s.' },
   ] },
   holdLongestMs: { min: 0, max: 30000, describe:
-    'The longest any agent update waits, also while the operator talks (ms). This caps staleness: at 10000 the slowest update arrived within 10 s and the median within about 2 s on real sessions.',
+    'The longest any agent update waits, also while the operator talks (ms). This caps staleness: replayed on recorded sessions at 10000, an update waited a median 3.9 s, and one in ten waited the full 10 s because the operator was talking.',
     levels: [
-    { value: 5000, consequence: 'No update waits more than 5 s, also while the operator talks: fresher, but more of them land around the operator\'s speech.' },
-    { value: 10000, consequence: 'No update waits more than 10 s (default): median wait about 2 s on real sessions.' },
-    { value: 20000, consequence: 'For operators who talk at length: updates can wait up to 20 s rather than land while they speak.' },
+    { value: 5000, consequence: 'No update waits more than 5 s, also while the operator talks: replayed on recorded sessions, 9% more batches than at 10000, and about twice as many go in while the operator holds the floor (477 against 249).' },
+    { value: 10000, consequence: 'No update waits more than 10 s (default): on recorded sessions a median wait of 3.9 s, and 249 of 2,424 batches went in while the operator held the floor.' },
+    { value: 20000, consequence: 'For operators who talk at length: replayed on recorded sessions, about a third as many batches go in while the operator holds the floor (92 against 249), 5% fewer batches in all, and one update in ten waits 19 s or more.' },
   ] },
   thinkMs: { min: 0, max: 5000, describe:
     'How long after the operator stops talking agent updates keep waiting (ms). GPT Live decides whether to pass a request on 0.6–1 s after the operator stops; every request it dropped in live tests had an update land in that second (0 of 14 requests reached the agent in time without this wait, 31 of 32 with 2000). Lower: fresher updates, more risk to 1 You come first.',
