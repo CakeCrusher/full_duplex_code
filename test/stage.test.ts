@@ -127,6 +127,22 @@ test("commands that do the same count as one choice, even below none: the page's
   assert.equal(chosenCommand(step({ show_the_projects_by_approaches_grid: .35, goto_s_matrix: .31, none: .2, page_go_map: .14 }), grid), 'show_the_projects_by_approaches_grid', '"Yeah, getting you there" (Oct 31): one part, .66 in all');
   assert.equal(chosenCommand(step({ show_the_projects_by_approaches_grid: .3, page_go_matrix: .27, none: .25, page_go_map: .18 }), grid), 'page_go_matrix', "the page's own among the likeliest");
   assert.equal(chosenCommand(step({ page_matrix_lpp: .3, page_go_matrix: .25, none: .45 }), grid), undefined, 'a view of the grid is not the grid: no one choice beats none');
+  // One place by the ids alone: the section's own id in fdc's heading command and in the page's command for it, which has no name.
+  const report: StageView = { ...view, commands: [
+    { id: 'goto_record', say: 'Go to the section "record" (headed "One record, every field")', name: 'record', top: true },
+    { id: 'page_show_record', say: 'Show the example record with every field' },
+    { id: 'page_show_record_sizes', say: 'Show how large each field of the record is' } ] };
+  assert.equal(chosenCommand(step({ goto_record: .38, page_show_record: .36, none: .17, page_show_record_sizes: .09 }), report), 'page_show_record', 'the section and the page\'s command named after it are one place');
+  assert.equal(chosenCommand(step({ page_show_record_sizes: .3, goto_record: .28, none: .42 }), report), undefined, 'a command named after something else in it is not');
+  // A page that lists a heading twice, once with its number: one part. Two numbered parts are two, and so is a year.
+  const steps: StageView = { ...view, commands: [
+    { id: 'goto_1_connect_an_account', say: 'Go to the heading "1 Connect an account"', name: '1 Connect an account' },
+    { id: 'goto_connect_an_account', say: 'Go to the heading "Connect an account"', name: 'Connect an account' },
+    { id: 'goto_7_days', say: 'Go to the heading "7 days"', name: '7 days' }, { id: 'goto_30_days', say: 'Go to the heading "30 days"', name: '30 days' },
+    { id: 'goto_2025_results', say: 'Go to the heading "2025 results"', name: '2025 results' }, { id: 'goto_results', say: 'Go to the heading "Results"', name: 'Results' } ] };
+  assert.equal(chosenCommand(step({ goto_1_connect_an_account: .36, goto_connect_an_account: .33, none: .28 }), steps), 'goto_1_connect_an_account', 'a heading and the same heading with its number');
+  assert.equal(chosenCommand(step({ goto_7_days: .32, goto_30_days: .3, none: .38 }), steps), undefined, 'two numbered parts stay two');
+  assert.equal(chosenCommand(step({ goto_2025_results: .32, goto_results: .3, none: .38 }), steps), undefined, 'a year is part of the name');
 });
 
 test("the operator's turn never moves the page; with a page open, their words go to the agent noting what they were looking at", async t => {

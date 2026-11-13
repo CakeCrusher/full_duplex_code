@@ -243,9 +243,10 @@ const pageLine = (page: StageView, now = Date.now()) => {
   const focus = focusLine(page.focus);
   return `${page.title} (${page.url})${page.about ? `: ${page.about}` : ''}. The viewer is at: ${page.where.slice(0, 500)}${focus ? ` (${focus})` : ''}.${moved}`.slice(0, 1100);
 };
-// What a command shows, for counting commands that show the same as one choice: the part it goes to (by its name, or the
-// heading it goes to, without a number before it or a word such as "grid" after it), the element it lands on, going back
-// (fdc's own, the page's back or previous), the page's next, or what it says.
+// What a command shows, for counting commands that show the same as one choice: the part it goes to (by its name, the
+// heading it goes to, without a number before it or a word such as "grid" after it, or the place its id names:
+// goto_record and the page's show_record), the element it lands on, going back (fdc's own, the page's back or previous),
+// the page's next, or what it says.
 const GENERIC = /\s+(grid|section|chart|table|view|panel|tab|slide|diagram|figure|part)$/;
 const partOf = (text: string) => text.toLowerCase().replace(/^(stage|slide|step|part|section)\s*\d+\s*[:.\-–,]?\s*/, '').replace(/[^a-z0-9]+/g, ' ').trim().replace(/^(the|a|an|my|our|your)\s+/, '').replace(GENERIC, '').trim();
 const keysOf = (command: StageCommand) => {
@@ -253,14 +254,16 @@ const keysOf = (command: StageCommand) => {
   if (command.id === 'back' || (page && /(^|_)(previous|prev|back)(_|$)/.test(command.id))) return ['back', said];
   if (page && /(^|_)(next|forward)(_|$)/.test(command.id)) return ['next', said];
   const headed = /\(headed "([^"]+)"\)/.exec(command.say)?.[1];
-  return [command.name && partOf(command.name) && `part ${partOf(command.name)}`, headed && partOf(headed) && `part ${partOf(headed)}`, command.anchor && `at ${command.anchor}`, said].filter(Boolean) as string[];
+  const place = command.id.replace(/^page_/, '').replace(/^(goto|go_to|go|show|section|open|view)_/, '');
+  return [command.name && partOf(command.name) && `part ${partOf(command.name)}`, headed && partOf(headed) && `part ${partOf(headed)}`, command.anchor && `at ${command.anchor}`, /[a-z]/.test(place) && `place ${place}`, said].filter(Boolean) as string[];
 };
 /**
  * The command Jev chose, if it is sure enough. Commands that show the same thing split its confidence between them, even
  * below "none": one part's (its heading, the page's own command, an annotation on it: "connecting to the server" .43, .38
  * and .11; the grid's annotation .35 and its section .31 for "Yeah, getting you there", Oct 31), going back (fdc's own and
  * the page's: "go back… I don't see it" .26 and .11, with none at .40), or two that say the same ("Go to the next
- * section", fdc's own and the page's: .42 and .33 on "Okay, next", Oct 29). They count as one choice, linked by any of
+ * section", fdc's own and the page's: .42 and .33 on "Okay, next", Oct 29), or a heading listed twice, once with its
+ * number before it (.36 and .33 on a page that was not made for fdc, Nov 6). They count as one choice, linked by any of
  * those, and its likeliest runs, the page's own first among those as likely.
  */
 export function chosenCommand(answer: any, page: StageView, without: Iterable<string> = []): string | undefined {
@@ -277,11 +280,11 @@ export function chosenCommand(answer: any, page: StageView, without: Iterable<st
   // Commands sharing any key are one choice (union-find over the page's commands, likely or not: a heading links its
   // section's annotation to the page's own command for it).
   const root = new Map<string, string>(), find = (id: string): string => { const up = root.get(id) ?? id; return up === id ? id : find(up); };
-  const owner = new Map<string, string>();
-  for (const command of page.commands) for (const key of keysOf(command)) {
-    const other = owner.get(key);
-    if (!other) owner.set(key, command.id); else if (find(other) !== find(command.id)) root.set(find(command.id), find(other));
-  }
+  const owner = new Map<string, string>(), link = (a: string, b: string) => { if (find(a) !== find(b)) root.set(find(a), find(b)); };
+  for (const command of page.commands) for (const key of keysOf(command)) { const other = owner.get(key); if (other) link(command.id, other); else owner.set(key, command.id); }
+  // A part named with its list number is the part of that name without it ("1 Set up" and "Set up"); two numbered ones
+  // stay apart ("7 days", "30 days"), and so does a year.
+  for (const [key, id] of owner) { const plain = owner.get(key.replace(/^part (\d{1,2} )+(?=[a-z])/, 'part ')); if (plain) link(id, plain); }
   const groups = new Map<string, StageCommand[]>();
   for (const command of page.commands) if (likely[command.id] !== undefined && !dropped.has(command.id)) groups.set(find(command.id), [...groups.get(find(command.id)) ?? [], command]);
   const sum = (group: StageCommand[]) => group.reduce((total, c) => total + Number(likely[c.id] ?? 0), 0);
