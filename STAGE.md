@@ -109,7 +109,9 @@ Rules that make it work well:
 - **`say` is how it is chosen.** Write what the command does in plain words, naming its target
   the way people would, including how the page labels it on screen ("Tonight · 1 of 7", "Step 3").
   Give a command that goes to a named place (a slide, a tab, a view) a `name`, the words people use
-  for it. Keep names short and distinct.
+  for it. Keep names short and distinct. A command that shows a section fdc can also reach by its
+  heading counts as the same choice when its `name` is the heading, or its id ends in the section's
+  own (`show_reward` for `<section id="reward">`): otherwise the two split the choice and neither runs.
 - **Next and previous.** If the page steps (slides, stages, steps), give it commands whose ids say
   so (`next_slide`, `previous_slide`): when the voice moves on, the page takes your step.
 - **A part's own controls go with the part.** Steps inside one part (a step-through box, a demo's
@@ -131,6 +133,11 @@ Rules that make it work well:
   slide, nothing to go back to), return a sentence saying so: the voice hears it. Throw only when
   the controller itself is broken (an element it expects is missing, a call fails): the error comes
   to you with the user's next request, so you can fix the controller.
+- **`where()` follows your commands.** Right after `run()`, it names the part that command went to.
+  Keep the current part as state that your commands set and the user's own scrolling updates, rather
+  than working it out from the scroll position alone: the last part of a page can't scroll to the
+  top, so by position the user is still in the part before it, and the voice's every sentence asks
+  for that last part again.
 - **Keep the user's place.** Keep the view in the address (`#waves/2`) or `sessionStorage` and restore
   it on load, so a reload after your edit brings the page back where the user was, with any view or
   toggle they had on.
