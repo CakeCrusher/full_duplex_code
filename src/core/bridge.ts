@@ -221,7 +221,7 @@ export class Harness {
   // Jev found a likely standing instruction; a one-off run of the harness writes what it says (the
   // operator's words are speech), or finds there is none or one in force already says it.
   async learnInstruction(instruction: LearnedInstruction) {
-    const inForce = this.voiceSessions.additionalInstructions.filter(item => item.learned).map(item => ({ id: item.learned!, text: item.text.replace(`${item.learned}: `, '') }));
+    const inForce = this.voiceSessions.learnedInForce();
     let text = instruction.text, replaces: string[] = [];
     try {
       const reply = await this.ask(distillPrompt({ said: instruction.said ?? instruction.text, transcript: instruction.transcript, inForce, scores: instruction, remove: instruction.remove }));
@@ -295,7 +295,7 @@ export class Harness {
     return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(perceivedText(record, spoken.slice(0, -1), latest.at, HISTORY_BYTES)) },
       goal: moment.goal ?? this.voiceSessions.goalLine(),
       instructions: this.voiceSessions.additionalInstructions.map(item => item.text), learn: (words && this.features.has('instructions')) || undefined,
-      removable: words && this.features.has('instructions') ? this.voiceSessions.additionalInstructions.filter(item => item.learned).map(item => ({ id: item.learned!, text: item.text.replace(`${item.learned}: `, '') })) : undefined,
+      removable: words && this.features.has('instructions') ? this.voiceSessions.learnedInForce() : undefined,
       tune: tune ? { earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined }, timeoutMs)
       .then(reading => Object.assign(reading, ask ? { tuneAsk: ask } : {}));
   }

@@ -122,6 +122,12 @@ try {
   await waitFor(async () => await laptop.locator('#learned tbody tr').count() === 15 && await phone.locator('#learned tbody tr').count() === 15, 'every change is listed, on every page');
   const learnedBox = (await laptop.locator('#learned').boundingBox())!;
   assert.ok(learnedBox.height <= 240, `the list stays contained and scrolls (${learnedBox.height}px high)`);
+  // A companion started before it listed what it learned serves this same page from disk: its status names the instructions in force with its prompt only.
+  const { learned: _learned, tuningHistory: _history, ...older } = harness.status() as Record<string, any>;
+  harness.publish({ ...older, prompt: { ...older.prompt, additional: [{ id: 'x', text: 'I9: Speak slowly.', state: 'acknowledged', learned: 'I9' }] } });
+  await waitFor(async () => /Instruction I9: .?Speak slowly\..*Remove/.test((await text(laptop, '#learned-I9')) ?? ''), 'an older companion\'s learned instruction is listed, with Remove');
+  harness.publish(harness.status());
+  await waitFor(async () => await laptop.locator('#learned tbody tr').count() === 15, 'and this companion\'s own list is back');
   // Back to how the session started, for the rest of the run.
   await harness.removeInstruction('I1');
   harness.setTuning({ ...harness.tuning, wakeThreshold: 50 }, [{ name: 'wakeThreshold', from: 62, to: 50 }]);

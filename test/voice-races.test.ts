@@ -98,7 +98,7 @@ test('an instruction removed before GPT Live acknowledged it is out of force for
   await learning; await settle(10);
   assert.deepEqual(h.learned.earlier('another-session'), []);
   const events = published.map(p => p.event.type).filter(type => type.startsWith('instruction_'));
-  assert.deepEqual(events, ['instruction_learned', 'instruction_removed']);
+  assert.deepEqual([events, h.status().learned.map((item: any) => [item.id, Boolean(item.removed)])], [['instruction_learned'], [['I1', true]]], 'the page hears it was learned, and lists it as removed');
   assert.ok(disregarded(lives[0], 'I1'), 'acknowledged after its removal, so countermanded at once');
 });
 

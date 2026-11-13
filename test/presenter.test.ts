@@ -162,7 +162,7 @@ test('a walkthrough goes on while the operator listens, as long as the voice car
   assert.equal(cues().length, 0, 'a connection that has just begun is not told to go on');
   run.live.startedAt = at - 20000;
   // Nor while the agent is still working on something the operator asked from here: its answer comes first.
-  h.workingSince = at - 5000; mediator.lastSent = { at: at - 4000, said: 'Check that number for me.' };
+  h.workingSince = at - 5000; mediator.lastSent = { at: at - 4000, said: 'Check that number for me.', id: 'check' };
   h.voiceSessions.walkOn(run, at);
   assert.equal(cues().length, 0, "the agent's answer to their request comes before the next part");
   h.workingSince = undefined;

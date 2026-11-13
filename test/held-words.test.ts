@@ -208,17 +208,19 @@ test("when the voice then says it can't answer words that stayed with it, they a
 });
 
 test("moments after a request was held for the turn's end, an acknowledgment stays with the voice, and words that press for it bring it in", async () => {
-  const decide = async (adds: number, now: number, held: boolean) => {
+  // Where the request sent moments ago is now is the outbox's to say.
+  const decide = async (adds: number, now: number, state: 'held' | 'sent' | 'uncertain') => {
     const asked: any[] = [];
-    const bridge: any = { agent: claude, agentWorking: () => 95000, log: () => {},
-      read: async (moment: any) => { asked.push(moment); return { trigger: 'job', said: '', transcript: '', needsAgent: .7, ready: .9, adds, now }; } };
-    const { send, later } = await jobTurn(bridge, { utterances: [], through: 0, seqs: [0], fresh: 'x' }, [], undefined, {}, { sent: { ago: 4000, said: 'Add a legend when you are done.', ...held && { held: true } } });
-    return { send, later, held: asked[0].sent.held };
+    const bridge: any = { agent: claude, agentWorking: () => 95000, log: () => {}, outbox: new Map([['legend', { state }]]),
+      read: async (moment: any) => { asked.push(moment); return { trigger: 'job', said: '', transcript: '', needsAgent: .7, ready: .9, ...moment.sent && { adds }, now }; } };
+    const { send, later } = await jobTurn(bridge, { utterances: [], through: 0, seqs: [0], fresh: 'x' }, [], undefined, {}, { sent: { ago: 4000, said: 'Add a legend when you are done.', id: 'legend' } });
+    return { send, later, held: asked[0].sent?.held };
   };
-  assert.deepEqual(await decide(.1, .1, true), { send: false, later: false, held: true }, '"okay": nothing more for the agent, and what is held stays held');
-  assert.deepEqual(await decide(.1, .8, true), { send: true, later: false, held: true }, '"no, send it now": steered in, which brings the held request with it');
-  assert.deepEqual(await decide(.1, .8, false), { send: false, later: false, held: undefined }, 'after a request already delivered, words that add nothing stay with the voice');
-  assert.deepEqual(await decide(.9, .1, true), { send: true, later: true, held: true }, 'an addition that can wait is held too');
+  assert.deepEqual(await decide(.1, .1, 'held'), { send: false, later: false, held: true }, '"okay": nothing more for the agent, and what is held stays held');
+  assert.deepEqual(await decide(.1, .8, 'held'), { send: true, later: false, held: true }, '"no, send it now": steered in, which brings the held request with it');
+  assert.deepEqual(await decide(.1, .8, 'sent'), { send: false, later: false, held: false }, 'once it has been delivered (released at the turn\'s end too), words that add nothing stay with the voice');
+  assert.deepEqual(await decide(.9, .1, 'held'), { send: true, later: true, held: true }, 'an addition that can wait is held too');
+  assert.deepEqual(await decide(.1, .8, 'uncertain'), { send: true, later: false, held: undefined }, 'a request not known to have arrived is no reason to keep a repeat of it');
 });
 
 test('pieces of transcript that are no speech of the operator (another script, a control token) are not their words: no turn, no request, no seed', async t => {

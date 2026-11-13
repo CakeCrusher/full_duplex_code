@@ -264,7 +264,7 @@ const keysOf = (command: StageCommand) => {
  * the page's: "go back… I don't see it" .26 and .11, with none at .40), or two that say the same ("Go to the next
  * section", fdc's own and the page's: .42 and .33 on "Okay, next", Oct 29), or a heading listed twice, once with its
  * number before it (.36 and .33 on a page that was not made for fdc, Nov 6). They count as one choice, linked by any of
- * those, and its likeliest runs, the page's own first among those as likely.
+ * those, and its likeliest runs, the page's own first among those as likely and before fdc's own move to the part's heading.
  */
 export function chosenCommand(answer: any, page: StageView, without: Iterable<string> = []): string | undefined {
   if (!answer) return;
@@ -290,9 +290,14 @@ export function chosenCommand(answer: any, page: StageView, without: Iterable<st
   const sum = (group: StageCommand[]) => group.reduce((total, c) => total + Number(likely[c.id] ?? 0), 0);
   const best = [...groups.values()].sort((a, b) => sum(b) - sum(a))[0];
   if (!best || sum(best) < PAGE_STEP || sum(best) < Number(likely.none ?? 0)) return;
-  const ranked = best.sort((a, b) => Number(likely[b.id] ?? 0) - Number(likely[a.id] ?? 0) || Number(b.id.startsWith('page_')) - Number(a.id.startsWith('page_')));
+  // fdc's own move to a part's heading stands in for the page's command for that part: what Jev put on it counts for the
+  // page's own, where the page has one in this choice. Which of the two Jev leans to varies from sentence to sentence
+  // (.61 and .27, then .28 and .50, one live run of Nov 13), and the page's own shows the part the way its author meant.
+  const own = best.filter(c => c.id.startsWith('page_') && Number(likely[c.id] ?? 0) > 0).sort((a, b) => Number(likely[b.id]) - Number(likely[a.id]))[0];
+  const share = (c: StageCommand) => Number(likely[c.id] ?? 0) + (c === own ? sum(best.filter(other => other.id.startsWith('goto_'))) : 0);
+  const ranked = best.sort((a, b) => share(b) - share(a) || Number(b.id.startsWith('page_')) - Number(a.id.startsWith('page_')));
   // The page's own command among the likeliest (within a tenth of the top), else the likeliest.
-  return (ranked.find(c => c.id.startsWith('page_') && Number(likely[c.id] ?? 0) >= Number(likely[ranked[0].id] ?? 0) - .1) ?? ranked[0]).id;
+  return (ranked.find(c => c.id.startsWith('page_') && share(c) >= share(ranked[0]) - .1) ?? ranked[0]).id;
 }
 
 // The operator's goal: what they want shown, taught or walked through, kept apart from the page (bridge.ts), so that the

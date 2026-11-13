@@ -91,7 +91,9 @@ const clock = (at?: number) => at ? new Date(at).toLocaleTimeString([], { hour: 
 const setting = (name: string, value: number) => name.endsWith('Ms') ? `${value / 1000} s` : String(value);
 let learnedShown = '';
 function showLearned(status: BridgeEvent) {
-  const instructions = (status.learned ?? []).map((item: any) => ({ at: item.at ?? 0, id: `learned-${item.id}`, undone: item.removed, undoneWord: 'Removed',
+  // A companion started before it listed them itself (its code is in memory, this page's is read from disk) names those in force with its prompt.
+  const learned = status.learned ?? (status.prompt?.additional ?? []).filter((item: any) => item.learned).map((item: any) => ({ id: item.learned, text: item.text.replace(`${item.learned}: `, '') }));
+  const instructions = learned.map((item: any) => ({ at: item.at ?? 0, id: `learned-${item.id}`, undone: item.removed, undoneWord: 'Removed',
     what: [`Instruction ${item.id}: `, Object.assign(document.createElement('q'), { textContent: item.text })] as (string | Node)[],
     action: { label: 'Remove', send: { type: 'instruction_remove', id: item.id }, title: 'Heard by Jev from what you said. Removing it tells this voice session to disregard it, and later sessions leave it out.' } }));
   // Jev's changes only: one the operator made (a revert, FDC_TUNING) is theirs, not learned behavior.

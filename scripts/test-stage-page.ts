@@ -116,6 +116,9 @@ try {
   assert.equal(files, 'heading : What your files add — Counts from your own data, in full.', 'a part with nothing under it, whole');
   const doomfly = await stage<string>('window.__fdcStage.run("goto_case_study_doomfly", { fast: true })');
   assert.equal(doomfly, 'heading in "Where the learning lives": Case study: DOOMFLY — It plays the game from pixels.', 'the label above the next part is not this part\'s');
+  // A heading in a short wrapper of its own, with a line under it: the line is its part's text, not a label of the next part.
+  await page.setContent(`<!doctype html><title>R</title><body><header><h1>Jev and Hume</h1><p>Nov 6 to 7 trial</p></header><h2 id="s">Summary</h2><p>One beats the other on every task tried here.</p>${filler(30)}</body>`);
+  assert.equal(await stage<string>('window.__fdcStage.run("top", { fast: true })'), 'heading : Jev and Hume — Nov 6 to 7 trial Under it: Summary.');
 
   console.log('Stage script checks passed: structured where, table rows and columns, the viewer\'s own moves, a part\'s controls once on screen, fast steps, a part read on arrival. No API spending.');
 } finally { await browser.close(); }

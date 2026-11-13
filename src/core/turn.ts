@@ -46,12 +46,15 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
 }
 
 /** Words waiting undecided before this reading (mediator.ts): the operator went on speaking before the decision, the words have waited too long, or an earlier reading of them found they need the agent. */
-export interface Waiting { continued?: boolean; overdue?: boolean; needed?: boolean; /** The request that last reached the agent from this connection: how long ago, and the operator's words in it (mediator.ts). */ sent?: { ago: number; said: string; held?: boolean } }
+export interface Waiting { continued?: boolean; overdue?: boolean; needed?: boolean; /** The request that last went to the agent from this connection: how long ago, and the operator's words in it (mediator.ts). */ sent?: { ago: number; said: string; id: string } }
 
 export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions, { continued = false, overdue = false, needed: neededBefore = false, sent }: Waiting = {}): Promise<Decision> {
   // Moments after a request reached the agent, Jev is also asked whether these words add to it: its tail, a repeat, an
   // acknowledgment or noise stays with the voice (jev.ts, ADDS). Not for words already found to need the agent.
-  const recent = sent && sent.ago <= RECENT_MS && !neededBefore ? sent : undefined;
+  // Where that request is now is the outbox's to say: still held for the turn's end, or not known to have arrived (then a
+  // repeat of it must go).
+  const state = sent && bridge.outbox.get(sent.id)?.state;
+  const recent = sent && sent.ago <= RECENT_MS && !neededBefore && state !== 'uncertain' ? { ago: sent.ago, said: sent.said, held: state === 'held' } : undefined;
   // While the agent is in the middle of a turn it can be steered in, Jev is also asked whether these words must reach it
   // now or can wait for the turn to end (jev.ts, NOW): fdc then holds them until it does (outbox.ts).
   const working = bridge.agent.profile.canSteer ? bridge.agentWorking() : undefined;

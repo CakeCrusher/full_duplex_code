@@ -110,9 +110,10 @@
     if (!el?.matches?.(UNITS.heading)) return describe(el);
     const all = units('heading'), at = all.indexOf(el), end = at < 0 ? null : all.slice(at + 1).find(h => level(h) <= level(el)) ?? null;
     const below = at < 0 ? [] : all.slice(at + 1, end ? all.indexOf(end) : undefined), next = below[0] ?? end;
-    // A short label right above the next heading ("Strand B", "3 of 6") belongs to that heading's part; a short sentence is this part's text.
+    // A short label right above the next heading ("Strand B", "3 of 6") belongs to that heading's part; a short sentence is
+    // this part's text, and so is a short wrapper around this heading itself (<header><h1>…</h1><p>the dates</p></header>).
     const label = next?.previousElementSibling;
-    const stop = label !== el && isLabel(label) ? label : next;
+    const stop = label && !label.contains(el) && isLabel(label) ? label : next;
     let body = '', block = null;
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     walker.currentNode = el;
@@ -393,7 +394,6 @@
   const ringNow = () => ({ on: !!stage.ringOn && !!stage.at?.isConnected, at: stage.ringOn && stage.at?.isConnected ? text(stage.at).slice(0, 100) : null });
   const stage = window.__fdcStage = {
     version: VERSION, history: [], trail: [], last: {}, at: null, span: null, ringOn: false, quiet: false, fast: false, viewerAt: 0, follow: reading(followSpeech),
-    now: reading(() => describe(stage.at?.isConnected ? stage.at : current('paragraph'))),
     commands: reading(() => [...page(), ...base()]),
     describe: reading(() => {
       const c = window.fdcController, { text: where, focus } = whereNow();

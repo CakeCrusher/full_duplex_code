@@ -10,7 +10,7 @@ import { Stage, StageError, StageNothing } from '../src/core/stage.ts';
 import { fakeJev, harness, page, pageReading, until } from './live-fake.ts';
 
 const view = { title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"', viewerAt: 0, parts: [],
-  commands: [{ id: 'goto_options', say: 'Go to the section "Options"' }, { id: 'row_fdc', say: 'Highlight the row "FDC"' }, { id: 'next_section', say: 'Go to the next section' }] };
+  commands: [{ id: 'goto_options', say: 'Go to the section "Options"', name: 'Options' }, { id: 'row_fdc', say: 'Highlight the row "FDC"' }, { id: 'next_section', say: 'Go to the next section' }] };
 const place = (where: string, ring: string | null) => ({ url: view.url, where, viewerAt: 0, ring: { on: ring !== null, at: ring } });
 /** A page that answers each run as told, and reads as `view`. */
 function staged(answer: () => unknown) {
@@ -111,9 +111,9 @@ test("each step of a move reaches the voice and Jev's next reading; the voice sa
 });
 
 test('one command runs once for the same words, a step included; and a part already on screen is not moved to again for the next sentence about it', async t => {
-  const { h } = await harness(t);
+  const { h, lives } = await harness(t);
   // Jev keeps finding another move needed, and choosing the same command.
-  fakeJev(h, m => m.trigger === 'cue' || m.trigger === 'step' ? { page: pageReading({ command: /options/.test(m.latest!.text) ? 'goto_options' : 'next_section', more: .9 }) } : {});
+  fakeJev(h, m => m.trigger === 'cue' || m.trigger === 'step' ? { page: pageReading({ command: /options/.test(m.latest!.text) ? 'goto_options' : /row/.test(m.latest!.text) ? 'row_fdc' : 'next_section', more: .9 }) } : {});
   let ran: string[] = [];
   h.stage.browser = { evaluate: async (_tabId: number, expression: string) => {
     if (expression.endsWith('window.__fdcStage.describe()')) return view;
@@ -133,4 +133,21 @@ test('one command runs once for the same words, a step included; and a part alre
   await h.presenter.show('Back to the options.');
   (view as any).viewerAt = 0;
   assert.deepEqual(ran, ['goto_options', 'goto_options']);
+  // On the part already, the voice turning to it by name is not told the page has nothing for it.
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  await h.presenter.show("Let's look at the options now.");
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.deepEqual([ran.length, lives[0].appended.some(([, text]) => /The page has nothing for/.test(text))], [2, false]);
+  // A control that does something each time it runs has no name of a place: it runs each time.
+  ran = [];
+  await h.presenter.show('Highlighting the FDC row.');
+  await h.presenter.show('And the FDC row once more.');
+  assert.deepEqual(ran, ['row_fdc', 'row_fdc']);
+  // The same command on another page goes there: the place the page was on is not this page's.
+  await h.presenter.show('Here are the options.');
+  ran = [];
+  const url = view.url; (view as any).url = 'http://localhost/other.html'; h.stage.viewAt = 0;
+  t.after(() => { (view as any).url = url; });
+  await h.presenter.show('The options again.');
+  assert.deepEqual(ran, ['goto_options']);
 });

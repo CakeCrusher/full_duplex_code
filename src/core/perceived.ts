@@ -26,7 +26,7 @@ const HOW: Record<SentKind, string> = {
 };
 // How long before the latest words (`until`) something was sent, in its label: the voice lives through the conversation's
 // time, and Jev, reading it as text, had none: a request sent three seconds ago read the same as one sent an hour ago.
-export const earlier = (at: number, until: number) => {
+const earlier = (at: number, until: number) => {
   const seconds = Math.round((until - at) / 1000);
   if (!Number.isFinite(seconds) || seconds < 0) return '';
   return seconds < 90 ? `, ${Math.max(1, seconds)} s earlier` : `, ${Math.round(seconds / 60)} min earlier`;

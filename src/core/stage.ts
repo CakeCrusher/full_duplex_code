@@ -37,7 +37,7 @@ export interface StagePart { name: string; text: string }
 export interface StageHere { url: string; where: string; focus?: StageFocus; viewerAt: number; /** What fdc's ring is on. */ ring?: { on: boolean; at: string | null } }
 export interface StageRun { done: StageCommand[]; onScreen: string; /** Where the viewer is after the commands ran. */ here?: StageHere; /** The action's ID in the page audit, for what GPT Live is told of it. */ action?: string }
 /** Who runs commands on the page and why, for the page audit. */
-export interface StageCause { by: PageActor; because?: PageCause }
+interface StageCause { by: PageActor; because?: PageCause }
 /** A page command threw: the page's controller is broken, or was asked something it can't do. */
 export class StageError extends Error {
   done: StageCommand[]; onScreen: string; failed: StageCommand;
@@ -241,7 +241,7 @@ function hereOf(value: any): StageHere | undefined {
   return { url: text(value.url, 500), where: text(value.where, 600), ...focusOf(value.focus) && { focus: focusOf(value.focus) }, viewerAt: Number(value.viewerAt) || 0, ...ring && { ring } };
 }
 /** Where the page is, for the page audit: its address, where the viewer is and what the ring is on. */
-function placeOf(value: unknown): PagePlace | undefined {
+export function placeOf(value: unknown): PagePlace | undefined {
   const here = hereOf(value);
   return here && { url: here.url, where: here.where, ...here.focus && { focus: here.focus }, ...here.ring && { ring: here.ring } };
 }

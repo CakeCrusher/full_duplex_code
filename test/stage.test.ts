@@ -134,6 +134,8 @@ test("commands that do the same count as one choice, even below none: the page's
     { id: 'page_show_record_sizes', say: 'Show how large each field of the record is' } ] };
   assert.equal(chosenCommand(step({ goto_record: .38, page_show_record: .36, none: .17, page_show_record_sizes: .09 }), report), 'page_show_record', 'the section and the page\'s command named after it are one place');
   assert.equal(chosenCommand(step({ page_show_record_sizes: .3, goto_record: .28, none: .42 }), report), undefined, 'a command named after something else in it is not');
+  assert.equal(chosenCommand(step({ goto_record: .61, page_show_record: .27, none: .12 }), report), 'page_show_record', "the page's own before fdc's move to the heading, whichever Jev leaned to");
+  assert.equal(chosenCommand(step({ goto_record: .9, page_show_record: 0, none: .1 }), report), 'goto_record', 'unless Jev put nothing on it');
   // A page that lists a heading twice, once with its number: one part. Two numbered parts are two, and so is a year.
   const steps: StageView = { ...view, commands: [
     { id: 'goto_1_connect_an_account', say: 'Go to the heading "1 Connect an account"', name: '1 Connect an account' },

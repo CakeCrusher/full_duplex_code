@@ -11,7 +11,7 @@ import { AudioAudit } from './audio-audit.ts';
 import { recentHistory } from './recent-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
 import { attachment, catchUp, disregardInstruction, goalState, greeting, heldWords, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, sentWords, standbyNews, standbyWake, viewerMoved, walkOn } from './prompts.ts';
-import { focusLine, Stage, type StageCommand, type StageHere, type StageView } from './stage.ts';
+import { focusLine, placeOf, Stage, type StageCommand, type StageHere, type StageView } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
 import { operatorVoice, type MicrophoneLevel } from './floor.ts';
@@ -227,6 +227,8 @@ export class VoiceSessions {
     return liveInstructions(this.bridge.agent, { jev: Boolean(this.bridge.jev), features: this.bridge.features }) + (additional ? `\n\nAdditional operator instructions:\n${additional}` : '');
   }
   /** An instruction Jev learned from the operator: it joins this companion's instructions at once, under an ID the operator can remove it by. */
+  /** The instructions Jev learned that are the companion's now: each by its ID, without the ID its text begins with. */
+  learnedInForce() { return this.additionalInstructions.filter(item => item.learned).map(item => ({ id: item.learned!, text: item.text.replace(`${item.learned}: `, '') })); }
   async learn({ text, ...judged }: LearnedInstruction) {
     const id = `I${++this.learnedCount}`;
     this.bridge.log({ type: 'instruction.learned', id, text, ...judged });
@@ -247,7 +249,7 @@ export class VoiceSessions {
     if (listed) listed.removed = Date.now();
     this.bridge.learned.remove({ session: item.learnedIn ?? this.bridge.sessionId, id: item.learned! }); this.bridge.tuneFromInstructions();
     this.rememberInstructions();
-    this.bridge.publish({ type: 'instruction_removed', id: item.learned }); this.bridge.publish(this.bridge.status());
+    this.bridge.publish(this.bridge.status());
     // A session still starting, or ending, countermands it when it starts (or its fork does).
     if (run?.live.state === 'active' && run.inForce.has(item.id)) await this.disregard(run, item);
   }
@@ -280,7 +282,7 @@ export class VoiceSessions {
     this.learnedCount = Math.max(this.learnedCount, this.record.learnedCount ?? 0);
     if (this.additionalInstructions.length || !this.record.instructions?.length) return;
     this.additionalInstructions = this.record.instructions.map(item => ({ ...item, state: 'next_session' }));
-    for (const item of this.additionalInstructions) if (item.learned) this.learnedHistory.push({ id: item.learned, text: item.text.replace(`${item.learned}: `, '') });
+    this.learnedHistory.push(...this.learnedInForce());
     this.learnedCount = Math.max(this.learnedCount, ...this.additionalInstructions.map(item => Number(item.learned?.slice(1)) || 0));
     // With Jev's tuning on, the settings fit these instructions again.
     this.bridge.tuneFromInstructions();
@@ -314,7 +316,7 @@ export class VoiceSessions {
     this.additionalInstructions.push(item);
     log({ type: 'voice.instruction', ...item });
     // Jev's: recorded, shown with Remove and announced the moment it is accepted.
-    if (learned) { this.bridge.learned.add({ session: item.learnedIn, id: learned.id, text: learned.text, scope: learned.scope }); this.learnedHistory.push({ id: learned.id, text: learned.text, at: Date.now() }); publish({ type: 'instruction_learned', id: learned.id, text: learned.text, state: item.state }); }
+    if (learned) { this.bridge.learned.add({ session: item.learnedIn, id: learned.id, text: learned.text, scope: learned.scope }); this.learnedHistory.push({ id: learned.id, text: learned.text, at: Date.now() }); publish({ type: 'instruction_learned', id: learned.id }); }
     publish(this.bridge.status()); this.bridge.tuneFromInstructions();
     this.rememberInstructions();
     if (!active) return item;
@@ -568,7 +570,7 @@ export class VoiceSessions {
       this.bridge.log({ type: 'stage.viewer_moved', where: here.where.slice(0, 160), focus: focusLine(here.focus) || undefined });
       const told = viewerMoved(here.where, here.focus), audit = this.bridge.pageAudit;
       run.mediator.context.add('thinking', told);
-      audit.told(told, audit.action({ by: 'operator', tabId: this.bridge.stage.tabId, after: { url: here.url, where: here.where, ...here.focus && { focus: here.focus }, ...here.ring && { ring: here.ring } } }));
+      audit.told(told, audit.action({ by: 'operator', tabId: this.bridge.stage.tabId, after: placeOf(here) }));
     } finally { run.watching = false; }
   }
   /**

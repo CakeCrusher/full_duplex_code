@@ -198,7 +198,7 @@ export function pageState(page?: PageState) {
 export const cueNoDelegation = 'Nothing to pass on: the page moved as you talked.';
 // After a move the voice is told what the part it landed on says (stage-page.js, read): enough to answer from, in one
 // append (SHOWN_CHARS). Until Nov 13 it was told 500 characters, the heading and the block after it.
-export const SHOWN_CHARS = 1300, STEP_CHARS = 400;
+const SHOWN_CHARS = 1300, STEP_CHARS = 400;
 export const cueShown = (onScreen: string, focus?: StageFocus, controls: readonly string[] = []) => `You moved the page; on screen now: ${onScreen.slice(0, SHOWN_CHARS)}${focusLine(focus) ? ` (${focusLine(focus)})` : ''}${controls.length ? `. Here its controls can: ${controls.join('; ').slice(0, 400)}` : ''}`;
 // A step on the way to what the voice is talking about: where the page is now, in short; the last step says the rest.
 export const cueStep = (onScreen: string) => `The page is on its way; it has reached: ${onScreen.slice(0, STEP_CHARS)}`;

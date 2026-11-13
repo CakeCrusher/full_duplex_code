@@ -32,10 +32,8 @@ const ACK = new Set('okay ok sure yeah yes yep yup right alright all got it than
 export const saysSomething = (sentence: string) => (sentence.toLowerCase().match(/[a-z']+/g) ?? []).some(word => !ACK.has(word.replace(/'/g, '')));
 // The voice saying it turns to something ("let's look at the error bars"): when no command shows it, it hears so.
 const TURNING = /\blet(?:'|’)?s\s+(?:look at|go to|go on to|go back to|turn to|head to|move to|move on to|jump to|look)\s+(.{3,80}?)\s*[.,;:!?]/i;
-// A step from where the page is (next, previous, back, scrolling): run again later it goes further, so it is never "already there".
-const RELATIVE = /(^|_)(next|previous|prev|back|forward|scroll_up|scroll_down)(_|$)/;
-/** How long after a move the same command, chosen again for the voice's next sentence about the same part, is not run again. */
-export const SAME_PLACE_MS = 30000;
+/** How long after the voice last spoke of the place the page is on, the command that goes there, chosen again, is not run again. */
+const SAME_PLACE_MS = 30000;
 
 export class Presenter {
   bridge: Harness;
@@ -49,9 +47,21 @@ export class Presenter {
   queued: string[] = []; judging = false;
   /** The operator's words (when they last spoke) whose reply's first sentence was read. */
   repliedTo = 0;
-  /** The command that last put the page where it is, and when: its part is on screen until something else moves the page. */
-  landed?: { id: string; at: number };
+  /** The command that last put the page where it is: when, on which page, and when the voice last spoke of that place. */
+  landed?: { id: string; at: number; seen: number; page: string };
   constructor(bridge: Harness) { this.bridge = bridge; }
+  land(id: string, url = '') { const now = Date.now(); this.landed = { id, at: now, seen: now, page: url.split('#')[0] }; }
+  /**
+   * The page is on the place this command goes to: the voice's next sentence about it doesn't move it there again, or tell
+   * the voice again what it says (the same command ran for three sentences in a row, Nov 13). Only a place with a name:
+   * a control that does something each time it runs (a toggle, a step, a replay) runs each time. Not once the viewer has
+   * moved the page, the page is another, or the voice has left the place alone for SAME_PLACE_MS.
+   */
+  there(command: string, view: StageView) {
+    const landed = this.landed;
+    return Boolean(landed && landed.id === command && view.commands.find(c => c.id === command)?.name && landed.page === view.url.split('#')[0]
+      && Date.now() - landed.seen < SAME_PLACE_MS && (view.viewerAt ?? 0) < landed.at);
+  }
   /** GPT Live said more: a cue in it moves the page now; each sentence it ends is read for the page. */
   heard(delta: string) {
     const bridge = this.bridge;
@@ -83,7 +93,7 @@ export class Presenter {
     const bridge = this.bridge, started = Date.now();
     this.answered();
     bridge.stage.run([cue.run], { by: 'phrase', because: { said: cue.label } }).then(run => {
-      this.landed = { id: cue.run, at: Date.now() };
+      this.land(cue.run, run.here?.url);
       bridge.log({ type: 'stage.cue', run: cue.run, label: cue.label, ms: Date.now() - started });
       this.shown(run, run.done.length ? run.done : [{ id: cue.run, say: cue.label, name: cue.label }]);
     }).catch(error => this.failed(cue.label, error as Error));
@@ -120,13 +130,11 @@ export class Presenter {
         // another move needed after each, and landed three terms past (Nov 4, twice in five minutes; the operator's
         // instruction "move the page only one step at a time" didn't stop it, since the voice doesn't decide this).
         if (command && done.some(c => c.id === command)) command = undefined;
-        // The page is on that part already: the voice's next sentence about it doesn't move it there again, or tell the voice
-        // again what it says (the same command ran for three sentences in a row, Nov 13). Not once the viewer has moved the page.
-        if (command && !step && !RELATIVE.test(command) && this.landed?.id === command && Date.now() - this.landed.at < SAME_PLACE_MS && (view.viewerAt ?? 0) < this.landed.at) {
+        if (command && !step && this.there(command, view)) {
           bridge.log({ type: 'stage.already_there', command, said: said.slice(-120) });
           bridge.jevAudit?.decided(reading.id, { command: null, step, already: command }, true);
-          this.landed.at = Date.now();
-          break;
+          this.landed!.seen = Date.now();
+          return this.follow(said);
         }
         if (command?.startsWith('tab_') && Date.now() - bridge.stage.shownAt < AGENT_SHOWN_MS) { bridge.log({ type: 'stage.kept_page', instead: command }); command = undefined; }
         const more = (reading.page?.more ?? 0) >= PAGE_MORE && step + 1 < MOST_STEPS;
@@ -167,7 +175,7 @@ export class Presenter {
   moved(said: string, done: StageCommand[], run: StageRun, started: number) {
     const bridge = this.bridge;
     this.answered();
-    this.landed = done.length ? { id: done.at(-1)!.id, at: Date.now() } : undefined;
+    if (done.length) this.land(done.at(-1)!.id, run.here?.url); else this.landed = undefined;
     bridge.log({ type: 'stage.cue', run: done.at(-1)?.id, steps: done.map(c => c.id), label: said.slice(-120), judged: true, ms: Date.now() - started });
     this.shown(run, done);
   }
