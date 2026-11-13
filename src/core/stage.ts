@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import type { ToolUse } from './agent-observer.ts';
 import { Browser } from './browser.ts';
 import { cueWords, type SpeechCue } from './speech-cues.ts';
+import type { PageAction, PageActor, PageCause, PageCommand, PagePlace } from './page-audit.ts';
 
 const RAW = fs.readFileSync(new URL('./stage-page.js', import.meta.url), 'utf8');
 // A page keeps the script it was given until the script changes: its version is its content's hash.
@@ -17,6 +18,10 @@ export const STEP_DWELL_MS = 1000;
 export const REMEMBERED_MS = 7 * 24 * 60 * 60 * 1000;
 /** Browser tools that show a tab to the operator: the tab they act on becomes the stage. */
 const SHOWS = /chrome[\w-]*__(navigate|set_tab_focus|tabs_create_mcp|execute_code)$/;
+/** Any of the agent's browser tools. */
+const BROWSER_TOOL = /chrome[\w-]*__\w+$/;
+/** A tool's input, for the record: its long strings cut. */
+const brief = (input: Record<string, any>) => Object.fromEntries(Object.entries(input).map(([key, value]) => [key, typeof value === 'string' && value.length > 400 ? `${value.slice(0, 400)}…` : value]));
 
 export interface StageCommand { id: string; say: string; /** The element id it lands on, when it has one. */ anchor?: string; /** What people call its target, for speech cues. */ name?: string; /** A whole section. */ top?: boolean; /** A part's own control, offered while that part is on screen. */ part?: boolean }
 /** Where the viewer is, in structure (stage-page.js, focusOf): the parts from the outer one in, the step within the part, the page's content revision. */
@@ -29,11 +34,15 @@ export interface StageView {
 }
 export interface StagePart { name: string; text: string }
 /** Where the viewer is, read without the commands and parts (here). */
-export interface StageHere { url: string; where: string; focus?: StageFocus; viewerAt: number }
-export interface StageRun { done: StageCommand[]; onScreen: string; /** Where the viewer is after the commands ran. */ here?: StageHere }
+export interface StageHere { url: string; where: string; focus?: StageFocus; viewerAt: number; /** What fdc's ring is on. */ ring?: { on: boolean; at: string | null } }
+export interface StageRun { done: StageCommand[]; onScreen: string; /** Where the viewer is after the commands ran. */ here?: StageHere; /** The action's ID in the page audit, for what GPT Live is told of it. */ action?: string }
+/** Who runs commands on the page and why, for the page audit. */
+export interface StageCause { by: PageActor; because?: PageCause }
 /** A page command threw: the page's controller is broken, or was asked something it can't do. */
 export class StageError extends Error {
   done: StageCommand[]; onScreen: string; failed: StageCommand;
+  /** The action's ID in the page audit. */
+  action?: string;
   constructor(message: string, done: StageCommand[], onScreen: string, failed: StageCommand) { super(message); this.done = done; this.onScreen = onScreen; this.failed = failed; }
 }
 /** A page command had nothing to do (no earlier place to go back to, no next slide): the request goes on. */
@@ -58,8 +67,10 @@ export class Stage {
   unchecked = false;
   /** When the agent last put another tab on stage: the voice doesn't switch away from it at once (presenter.ts). */
   shownAt = 0;
-  constructor({ log, browser = new Browser(), onChange, file }: { log: (event: Record<string, unknown>) => void; browser?: Browser; onChange?: () => void; file?: string }) {
-    this.log = log; this.browser = browser; this.onChange = onChange; this.file = file;
+  /** Takes every action on the page for the page audit (page-audit.ts); returns the action's ID. */
+  record?: (action: PageAction) => string;
+  constructor({ log, browser = new Browser(), onChange, file, record }: { log: (event: Record<string, unknown>) => void; browser?: Browser; onChange?: () => void; file?: string; record?: (action: PageAction) => string }) {
+    this.log = log; this.browser = browser; this.onChange = onChange; this.file = file; this.record = record;
     try {
       const saved = file ? JSON.parse(fs.readFileSync(file, 'utf8')) : undefined;
       if (Number.isInteger(saved?.tabId) && saved.tabId > 0 && Date.now() - saved.at < REMEMBERED_MS) {
@@ -83,13 +94,17 @@ export class Stage {
    */
   observe(used: ToolUse | undefined, turnEnded = false) {
     if (turnEnded && this.tabId) { this.view = undefined; this.onChange?.(); return; }
-    if (!used || !SHOWS.test(used.tool)) return;
+    if (!used) return;
+    // Any browser tool of the agent's acting on the tab on stage is a page action too (a reload, a script it ran there).
+    if (BROWSER_TOOL.test(used.tool) && this.tabId && (used.input.tabId === this.tabId || new RegExp(`tabId:\\s*${this.tabId}\\b`).test(String(used.input.code ?? ''))))
+      this.record?.({ by: 'agent', tabId: this.tabId, because: { tool: used.tool, input: brief(used.input) } });
+    if (!SHOWS.test(used.tool)) return;
     const input = used.input, response = typeof used.response === 'string' ? used.response : JSON.stringify(used.response ?? '');
     const created = /Tab ID: (\d+)/.exec(response)?.[1];
     const named = typeof input.tabId === 'number' ? input.tabId : [...String(input.code ?? '').matchAll(/(?:navigate|set_tab_focus)\(\s*\{[^}]*?tabId:\s*(\d+)/g)].at(-1)?.[1];
     const tabId = Number(created ?? named);
     if (!Number.isInteger(tabId) || tabId <= 0) return;
-    if (tabId !== this.tabId) { this.log({ type: 'stage.tab', tabId, by: used.tool }); this.shownAt = Date.now(); }
+    if (tabId !== this.tabId) { this.log({ type: 'stage.tab', tabId, by: used.tool }); this.shownAt = Date.now(); this.record?.({ by: 'agent', tabId, because: { tool: used.tool, input: brief(used.input) }, commands: [{ id: `tab_${tabId}`, say: 'The agent put this tab on the stage', outcome: 'ran' }] }); }
     this.tabId = tabId; this.view = undefined; this.remember();
     this.onChange?.();
   }
@@ -131,22 +146,30 @@ export class Stage {
    * Runs commands in order, each finished before the next; resolves to what is on screen after, and where the viewer then
    * is. `fast`: a step on the way to another (presenter.ts) only has to land, without waiting for its scroll to glide.
    */
-  async run(ids: string[], { fast = false }: { fast?: boolean } = {}): Promise<StageRun> {
+  async run(ids: string[], { fast = false, by = 'jev', because }: { fast?: boolean } & Partial<StageCause> = {}): Promise<StageRun> {
     const switchAt = ids.findIndex(id => /^tab_\d+$/.test(id));
-    if (switchAt >= 0) return this.switchPage(ids, switchAt);
+    if (switchAt >= 0) return this.switchPage(ids, switchAt, { by, because });
     const tabId = this.tabId, view = this.view;
     if (!tabId) throw new Error('No page is on the stage');
     const started = Date.now();
-    // Steps run in order; one that throws stops the rest, and what ran before it is still reported.
-    const { said, error, nothing, limit, here } = await this.browser.evaluate<{ said: string[]; error?: string; nothing?: boolean; limit?: string; here?: unknown }>(tabId, `${SCRIPT}\n;(async () => { const said = [], stage = window.__fdcStage, here = () => { try { return stage.here(); } catch { return undefined; } }; for (const [i, id] of ${JSON.stringify(ids)}.entries()) { if (i) await new Promise(r => setTimeout(r, ${fast ? 0 : STEP_DWELL_MS})); let out; try { out = await stage.run(id, { fast: ${fast} }); } catch (e) { return { said, error: String(e && e.message || e) }; } if (out == null) return { said, nothing: true }; if (stage.limit) return { said, limit: String(out) }; said.push(out); } return { said, here: here() }; })()`, 15000);
+    // Steps run in order; one that throws stops the rest, and what ran before it is still reported. Where the page and the
+    // ring were before the first step and after the last come back with them, for the page audit.
+    const { said, error, nothing, limit, here, before } = await this.browser.evaluate<{ said: string[]; error?: string; nothing?: boolean; limit?: string; here?: unknown; before?: unknown }>(tabId, `${SCRIPT}\n;(async () => { const said = [], stage = window.__fdcStage, here = () => { try { return stage.here(); } catch { return undefined; } }, before = here(); for (const [i, id] of ${JSON.stringify(ids)}.entries()) { if (i) await new Promise(r => setTimeout(r, ${fast ? 0 : STEP_DWELL_MS})); let out; try { out = await stage.run(id, { fast: ${fast} }); } catch (e) { return { said, error: String(e && e.message || e), before, here: here() }; } if (out == null) return { said, nothing: true, before, here: here() }; if (stage.limit) return { said, limit: String(out), before, here: here() }; said.push(out); } return { said, before, here: here() }; })()`, 15000);
     this.viewAt = 0;
     const command = (id: string) => view?.commands.find(c => c.id === id) ?? { id, say: id };
     const done = ids.slice(0, said.length).map(command);
     this.log({ type: error ? 'stage.failed' : nothing || limit ? 'stage.nothing' : 'stage.ran', tabId, ids, ran: said.length, error, limit, ...fast && { fast }, ms: Date.now() - started });
-    if (error) throw new StageError(error, done, said.at(-1) ?? '', command(ids[said.length]));
+    // Every command with what the page answered: those that ran, the one that failed or had nothing to do, and any after it.
+    const commands: PageCommand[] = ids.map((id, i) => ({ id, say: command(id).say,
+      ...i < said.length ? { outcome: 'ran' as const, answer: String(said[i]).slice(0, 2000) }
+        : i === said.length && error ? { outcome: 'failed' as const, answer: error.slice(0, 2000) }
+        : i === said.length && (nothing || limit) ? { outcome: 'nothing to do' as const, ...limit && { answer: limit.slice(0, 2000) } }
+        : { outcome: 'not reached' as const } }));
+    const action = this.record?.({ by, because, tabId, commands, before: placeOf(before), after: placeOf(here), ms: Date.now() - started, ...error && { error } });
+    if (error) throw Object.assign(new StageError(error, done, said.at(-1) ?? '', command(ids[said.length])), { action });
     // Nothing to do there, or the page's answer that it had nothing to do ("Already on the last step"): not a move.
-    if (nothing || limit) throw new StageNothing(limit ?? 'nothing to do there', done, said.at(-1) ?? '', command(ids[said.length]));
-    return { done, onScreen: said.at(-1) ?? '', ...hereOf(here) && { here: hereOf(here) } };
+    if (nothing || limit) throw Object.assign(new StageNothing(limit ?? 'nothing to do there', done, said.at(-1) ?? '', command(ids[said.length])), { action });
+    return { done, onScreen: said.at(-1) ?? '', ...hereOf(here) && { here: hereOf(here) }, ...action && { action } };
   }
   /** Where the viewer is now, without reading the page's commands and parts: undefined without a stage. */
   async here(): Promise<StageHere | undefined> {
@@ -155,16 +178,22 @@ export class Stage {
     return hereOf(await this.browser.evaluate(tabId, `${SCRIPT}\n;window.__fdcStage.here()`, 2000));
   }
   /** Brings another page the agent showed to the front, as the stage; steps before and after it run on their own page. */
-  async switchPage(ids: string[], at: number): Promise<StageRun> {
-    const before = at ? await this.run(ids.slice(0, at)) : { done: [], onScreen: '' };
+  async switchPage(ids: string[], at: number, cause: Partial<StageCause> = {}): Promise<StageRun> {
+    const before = at ? await this.run(ids.slice(0, at), cause) : { done: [], onScreen: '' };
     const tabId = Number(ids[at].slice(4)), page = this.pages.get(tabId), step = { id: ids[at], say: `Switch to the page "${page?.title ?? 'in another tab'}"` };
+    const from = this.tabId;
     try { await this.browser.call('set_tab_focus', { tabId }); }
-    catch (error) { this.pages.delete(tabId); throw new StageError(`That page's tab is gone (${(error as Error).message.slice(0, 120)})`, before.done, before.onScreen, step); }
+    catch (error) {
+      this.pages.delete(tabId);
+      const action = this.record?.({ by: 'tab', because: cause.because, tabId: from, commands: [{ id: step.id, say: step.say, outcome: 'failed', answer: (error as Error).message.slice(0, 300) }], error: (error as Error).message.slice(0, 300) });
+      throw Object.assign(new StageError(`That page's tab is gone (${(error as Error).message.slice(0, 120)})`, before.done, before.onScreen, step), { action });
+    }
     this.log({ type: 'stage.tab', tabId, by: 'voice' });
+    const action = this.record?.({ by: 'tab', because: cause.because, tabId, commands: [{ id: step.id, say: step.say, outcome: 'ran' }], before: { url: this.pages.get(from ?? 0)?.url }, after: { url: page?.url } });
     this.tabId = tabId; this.view = undefined; this.remember(); this.onChange?.();
-    const rest = at + 1 < ids.length ? await this.run(ids.slice(at + 1)) : undefined;
+    const rest = at + 1 < ids.length ? await this.run(ids.slice(at + 1), cause) : undefined;
     const view = rest ? undefined : await this.describe(0).catch(() => undefined);
-    return { done: [...before.done, step, ...rest?.done ?? []], onScreen: rest?.onScreen ?? `The page "${view?.title ?? page?.title}" is in front${view?.where ? `, at: ${view.where}` : ''}.` };
+    return { done: [...before.done, step, ...rest?.done ?? []], onScreen: rest?.onScreen ?? `The page "${view?.title ?? page?.title}" is in front${view?.where ? `, at: ${view.where}` : ''}.`, ...(rest?.action ?? action) && { action: rest?.action ?? action } };
   }
   /**
    * What GPT Live can say to move the page as it talks, after "let's look at" or another turning phrase: a part's name
@@ -183,9 +212,13 @@ export class Stage {
     return cues;
   }
   /** Moves the ring to what GPT Live's sentence is about, among what is on screen; resolves to it, or null. */
-  async follow(sentence: string): Promise<{ on: string; score: number } | null> {
-    if (!this.tabId) return null;
-    return this.browser.evaluate(this.tabId, `${SCRIPT}\n;window.__fdcStage.follow(${JSON.stringify(sentence.slice(-400))})`, 2000);
+  async follow(sentence: string): Promise<{ on: string; score: number; moved?: boolean } | null> {
+    const tabId = this.tabId;
+    if (!tabId) return null;
+    const on = await this.browser.evaluate<{ on: string; score: number; moved?: boolean } | null>(tabId, `${SCRIPT}\n;window.__fdcStage.follow(${JSON.stringify(sentence.slice(-400))})`, 2000);
+    // Only a ring that moved is an action on the page.
+    if (on?.moved) this.record?.({ by: 'ring', because: { said: sentence.slice(-400) }, tabId, after: { ring: { on: true, at: on.on } } });
+    return on;
   }
   close() { this.browser.close(); }
 }
@@ -204,7 +237,13 @@ export function focusOf(value: any): StageFocus | undefined {
 }
 function hereOf(value: any): StageHere | undefined {
   if (!value || typeof value !== 'object') return;
-  return { url: text(value.url, 500), where: text(value.where, 600), ...focusOf(value.focus) && { focus: focusOf(value.focus) }, viewerAt: Number(value.viewerAt) || 0 };
+  const ring = value.ring && typeof value.ring === 'object' ? { on: Boolean(value.ring.on), at: text(value.ring.at, 100) || null } : undefined;
+  return { url: text(value.url, 500), where: text(value.where, 600), ...focusOf(value.focus) && { focus: focusOf(value.focus) }, viewerAt: Number(value.viewerAt) || 0, ...ring && { ring } };
+}
+/** Where the page is, for the page audit: its address, where the viewer is and what the ring is on. */
+function placeOf(value: unknown): PagePlace | undefined {
+  const here = hereOf(value);
+  return here && { url: here.url, where: here.where, ...here.focus && { focus: here.focus }, ...here.ring && { ring: here.ring } };
 }
 /** Where the viewer is, in a line: the parts from the outer one in and the step within the last ("FDC waves › Wave 2, step 2 of 4"). */
 export const focusLine = (focus?: StageFocus) => !focus ? '' : [focus.path?.join(' › '), focus.step && `${focus.step.of ?? 'step'} ${focus.step.index} of ${focus.step.total}`].filter(Boolean).join(', ');

@@ -16,6 +16,7 @@ import { DEFAULT_FEATURES, type Feature, type Features } from './features.ts';
 import { agentInstructions, instructionsRemoved } from './prompts.ts';
 import type { Spoken } from './voice-history.ts';
 import { Stage } from './stage.ts';
+import { PageAudit } from './page-audit.ts';
 import { Presenter } from './presenter.ts';
 import { UsageLedger } from './usage-ledger.ts';
 import { Timeline } from './timeline.ts';
@@ -90,6 +91,8 @@ export class Harness {
   ledger: UsageLedger; timeline: Timeline; outbox: Outbox; voiceSessions: VoiceSessions; endpoints: Endpoints;
   /** The page the agent last showed the operator, which the gate can move (stage.ts). */
   stage: Stage;
+  /** Every action on that page and what GPT Live was told of it, in the run's page.jsonl (page-audit.ts). */
+  pageAudit: PageAudit;
   /** Moves the stage by what GPT Live says: speech cues, the words Jev matches to a command, the following ring. */
   presenter: Presenter;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
@@ -115,7 +118,8 @@ export class Harness {
       this.handOffAudit = new DelegationAudit({ file: path.join(root, '.runs', 'delegation-audit.jsonl'), log: this.log });
     }
     this.companions = new CompanionRegistry(path.join(root, '.runs', 'companions'));
-    this.stage = new Stage({ log: this.log, file: stageFile, onChange: () => void this.voiceSessions?.briefStage() });
+    this.pageAudit = new PageAudit({ file: path.join(runDir, 'page.jsonl'), clean: this.clean });
+    this.stage = new Stage({ log: this.log, file: stageFile, onChange: () => void this.voiceSessions?.briefStage(), record: action => this.pageAudit.action(action) });
     this.presenter = new Presenter(this);
     this.sessionSwitch = new SessionSwitch(this);
     this.voiceSessions = new VoiceSessions(this, { store });

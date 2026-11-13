@@ -335,8 +335,9 @@
       if ((shared >= 3 || (shared >= 2 && score >= 0.6)) && score > bestScore) { best = el; bestScore = score; }
     }
     if (!best) return null;
-    if (best !== stage.at) { stage.at = best; stage.span = null; stage.ringOn = true; best.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); place(); }
-    return { on: text(best).slice(0, 100), score: Math.round(bestScore * 100) / 100 };
+    const moved = best !== stage.at;
+    if (moved) { stage.at = best; stage.span = null; stage.ringOn = true; best.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); place(); }
+    return { on: text(best).slice(0, 100), score: Math.round(bestScore * 100) / 100, moved };
   };
   // Relative moves and non-moves by their ids: the page's own commands and fdc's, never ids made from a heading's or
   // slide's name ("Clear wins", "Back end").
@@ -344,6 +345,8 @@
   const RELATIVE = { test: id => OWN(id) && /(^|_)(next|previous|prev|back|forward|scroll|top|bottom)(_|$)/.test(id) }, NOT_A_MOVE = { test: id => OWN(id) && /(^|_)(clear|here)(_|$)/.test(id) };
   // The named place a page's answer is about: 'Slide 2 of 6: "Margins"' is where the command named "Margins" goes.
   const landed = text => { const title = /["“]([^"”]{2,80})["”]/.exec(String(text ?? ''))?.[1]; return title ? stage.commands().find(c => c.name === title && !RELATIVE.test(c.id))?.id : undefined; };
+  // What the ring is on, for the record of page actions: fdc's own highlight (a page's own command highlights by itself).
+  const ringNow = () => ({ on: !!stage.ringOn && !!stage.at?.isConnected, at: stage.ringOn && stage.at?.isConnected ? text(stage.at).slice(0, 100) : null });
   const stage = window.__fdcStage = {
     version: VERSION, history: [], trail: [], last: {}, at: null, span: null, ringOn: false, quiet: false, fast: false, viewerAt: 0, follow: followSpeech,
     now: () => describe(stage.at?.isConnected ? stage.at : current('paragraph')),
@@ -359,7 +362,7 @@
       };
     },
     /** Where the viewer is, and when they last moved the page themselves: light enough to ask every few seconds. */
-    here() { const { text: where, focus } = whereNow(); return { url: location.href, where, focus, viewerAt: stage.viewerAt ?? 0 }; },
+    here() { const { text: where, focus } = whereNow(); return { url: location.href, where, focus, viewerAt: stage.viewerAt ?? 0, ring: ringNow() }; },
     async run(id, { again = false, fast = false } = {}) {
       const command = stage.commands().find(c => c.id === id);
       if (!command) throw new Error(`No command "${id}" on this page`);

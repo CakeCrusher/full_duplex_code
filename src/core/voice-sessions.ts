@@ -435,6 +435,7 @@ export class VoiceSessions {
     const message = (role: 'developer' | 'user', text: string) => ({ type: 'message', role, content: [{ type: 'input_text', text }] });
     let input = [message('developer', startup), ...history.text ? [message('user', historyIntro(agent) + history.text)] : []];
     const now = seen ? [message('developer', seen.state)] : [], opening = input.length;
+    if (seen) bridge.pageAudit.told(seen.state);
     input = plan === 'seed' ? seedInput(input, record.turns, now) : [...input, ...now];
     // What GPT Live perceives at its start, for Jev: fdc's messages, and the earlier turns a seed puts between them.
     const perceivedInput: PerceivedEntry[] = plan === 'fork' ? [] : input.map((item, i) => i < opening || i >= input.length - now.length
@@ -560,7 +561,9 @@ export class VoiceSessions {
       if (!here.where || here.where === run.toldWhere || run.live.state !== 'active') return;
       run.toldWhere = here.where;
       this.bridge.log({ type: 'stage.viewer_moved', where: here.where.slice(0, 160), focus: focusLine(here.focus) || undefined });
-      run.mediator.context.add('thinking', viewerMoved(here.where, here.focus));
+      const told = viewerMoved(here.where, here.focus), audit = this.bridge.pageAudit;
+      run.mediator.context.add('thinking', told);
+      audit.told(told, audit.action({ by: 'operator', tabId: this.bridge.stage.tabId, after: { url: here.url, where: here.where, ...here.focus && { focus: here.focus }, ...here.ring && { ring: here.ring } } }));
     } finally { run.watching = false; }
   }
   /**
@@ -591,6 +594,7 @@ export class VoiceSessions {
     run.toldWhere = view?.where;
     // Through the same queue as the agent's work: it waits while the operator talks.
     run.mediator.context.add('thinking', seen?.state ?? pageState());
+    this.bridge.pageAudit.told(seen?.state ?? pageState());
   }
   /** What GPT Live is told of the page on the stage (pageState), the words that move it (speech cues), and what it was told, to compare. */
   pageFor(view: StageView) {

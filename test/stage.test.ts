@@ -62,7 +62,7 @@ test('a closed stage tab ends the stage', async () => {
 
 test('the stage runs the script and its commands in the stage tab, in order', async () => {
   const calls: string[] = [];
-  const browser = { evaluate: async (tabId: number, expression: string) => { calls.push(`${tabId}:${expression.slice(-480)}`); return expression.endsWith('window.__fdcStage.describe()') ? { ...view, tabId: undefined } : expression.includes('"next_section"') ? { said: ['one'], error: 'Already broken' } : expression.includes('"back"') ? { said: [], nothing: true } : { said: ['one', 'two'] }; }, close() {} } as any;
+  const browser = { evaluate: async (tabId: number, expression: string) => { calls.push(`${tabId}:${expression.slice(-700)}`); return expression.endsWith('window.__fdcStage.describe()') ? { ...view, tabId: undefined } : expression.includes('"next_section"') ? { said: ['one'], error: 'Already broken' } : expression.includes('"back"') ? { said: [], nothing: true } : { said: ['one', 'two'] }; }, close() {} } as any;
   const stage = new Stage({ log: () => {}, browser });
   assert.equal(await stage.describe(), undefined, 'no stage, no page');
   stage.tabId = 7;

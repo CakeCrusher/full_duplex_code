@@ -59,7 +59,8 @@ try {
   await page.mouse.move(500, 300); await page.mouse.wheel(0, 900); await page.waitForTimeout(400);
   const here = await stage<any>('window.__fdcStage.here()');
   assert.ok(here.viewerAt > 0 && Date.now() - here.viewerAt < 5000, 'their own scroll is seen');
-  assert.deepEqual(Object.keys(here).sort(), ['focus', 'url', 'viewerAt', 'where']);
+  assert.deepEqual(Object.keys(here).sort(), ['focus', 'ring', 'url', 'viewerAt', 'where']);
+  assert.deepEqual(Object.keys(here.ring).sort(), ['at', 'on'], 'what the ring is on, for the record of page actions');
 
   // 4. A step on the way lands without waiting for its scroll to glide; the last one settles.
   await stage('window.scrollTo(0, 0)');

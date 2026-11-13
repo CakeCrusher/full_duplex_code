@@ -14,6 +14,7 @@
 import type { Harness } from './bridge.ts';
 import { CueMatcher, unglue, type SpeechCue } from './speech-cues.ts';
 import { StageError, StageNothing, type StageCommand, type StageRun, type StageView } from './stage.ts';
+import type { PageCause } from './page-audit.ts';
 import { chosenCommand, PAGE_MORE, type Reading } from './jev.ts';
 import type { Spoken } from './voice-history.ts';
 import { cueFailedNote, cueMovedNote, cueShown, pageAnswered, pageMissed } from './prompts.ts';
@@ -77,7 +78,7 @@ export class Presenter {
   cue(cue: SpeechCue) {
     const bridge = this.bridge, started = Date.now();
     this.answered();
-    bridge.stage.run([cue.run]).then(run => {
+    bridge.stage.run([cue.run], { by: 'phrase', because: { said: cue.label } }).then(run => {
       bridge.log({ type: 'stage.cue', run: cue.run, label: cue.label, ms: Date.now() - started });
       this.shown(run, run.done.length ? run.done : [{ id: cue.run, say: cue.label, name: cue.label }]);
     }).catch(error => this.failed(cue.label, error as Error));
@@ -111,7 +112,7 @@ export class Presenter {
         const more = (reading.page?.more ?? 0) >= PAGE_MORE && step + 1 < MOST_STEPS;
         if (!command) { bridge.jevAudit?.decided(reading.id, { command: null, step }, true); break; }
         let ran: { run: StageRun; command: string; instead?: string };
-        try { ran = await this.run(command, view, reading, more); }
+        try { ran = await this.run(command, view, reading, more, { said, jevCall: reading.id, step }); }
         catch (error) { bridge.jevAudit?.decided(reading.id, { command, step, error: (error as Error).message }, true); throw error; }
         bridge.jevAudit?.decided(reading.id, { command: ran.command, step, more, ...ran.instead && { instead: ran.instead } }, true);
         last = ran.run; done.push(...ran.run.done);
@@ -127,17 +128,17 @@ export class Presenter {
     bridge.log({ type: 'stage.judged_none', said: said.slice(-160) });
     // It said it was turning there: it hears the page has nothing for it, rather than talk about what isn't shown.
     const meant = TURNING.exec(said)?.[1];
-    if (meant) bridge.mediator?.context.now('thinking', pageMissed(meant));
+    if (meant) this.tell(pageMissed(meant));
     else this.follow(said);
   }
   /** Runs the command Jev chose; one that has nothing to do (no earlier place to go back to) gives way to the next likeliest. */
-  async run(command: string, view: StageView, reading: Reading, fast: boolean): Promise<{ run: StageRun; command: string; instead?: string }> {
-    try { return { run: await this.bridge.stage.run([command], { fast }), command }; }
+  async run(command: string, view: StageView, reading: Reading, fast: boolean, because: PageCause): Promise<{ run: StageRun; command: string; instead?: string }> {
+    try { return { run: await this.bridge.stage.run([command], { fast, by: 'jev', because }), command }; }
     catch (error) {
       const next = error instanceof StageNothing && reading.page?.likely ? chosenCommand({ probabilities: reading.page.likely }, view, [command]) : undefined;
       if (!next) throw error;
       this.bridge.log({ type: 'stage.cue_instead', tried: command, answer: error instanceof StageNothing ? error.message : '', next });
-      return { run: await this.bridge.stage.run([next], { fast }), command: next, instead: command };
+      return { run: await this.bridge.stage.run([next], { fast, by: 'jev', because }), command: next, instead: command };
     }
   }
   /** The voice's words moved the page: GPT Live hears what is on screen, once, after the last step. */
@@ -164,7 +165,12 @@ export class Presenter {
     bridge.voiceSessions.shown(run.here, done);
     const view = await bridge.stage.describe(0).catch(() => undefined);
     const controls = view?.commands.filter(c => c.part).map(c => c.say.replace(/\s*\([^()]*\)\s*$/, '').replace(/\.$/, '')).slice(0, 8) ?? [];
-    bridge.mediator?.context.now('thinking', cueShown(run.onScreen, run.here?.focus, controls));
+    this.tell(cueShown(run.onScreen, run.here?.focus, controls), run.action);
+  }
+  /** What GPT Live hears about the page at once, recorded as it is sent, with the action it is about (page-audit.ts). */
+  tell(text: string, action?: string) {
+    this.bridge.mediator?.context.now('thinking', text);
+    this.bridge.pageAudit.told(text, action);
   }
   /**
    * The page didn't go where the voice turned: a limit is the page's answer ("Already on the last slide"), which the voice
@@ -172,7 +178,7 @@ export class Presenter {
    */
   failed(label: string, error: Error) {
     const bridge = this.bridge, view = bridge.stage.view;
-    if (error instanceof StageNothing) { bridge.log({ type: 'stage.cue_nothing', label: label.slice(-120), answer: error.message }); bridge.mediator?.context.now('thinking', pageAnswered(error.message)); return; }
+    if (error instanceof StageNothing) { bridge.log({ type: 'stage.cue_nothing', label: label.slice(-120), answer: error.message }); this.tell(pageAnswered(error.message), error.action); return; }
     bridge.log({ type: 'stage.cue_failed', label: label.slice(-120), message: error.message });
     bridge.mediator?.history.cueLatest(cueFailedNote(error instanceof StageError ? error.failed.say : label, error.message, view));
   }
