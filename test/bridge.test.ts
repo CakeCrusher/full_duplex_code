@@ -7,7 +7,8 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { Harness } from '../src/core/bridge.ts';
+import { Harness, QUIET_TURN_MS } from '../src/core/bridge.ts';
+import type { ClaudeObserver } from '../src/adapters/claude/observer.ts';
 import { EventEmitter } from 'node:events';
 import { Mediator } from '../src/core/mediator.ts';
 import { voiceProvenance, voiceRequest } from '../src/core/prompts.ts';
@@ -159,7 +160,8 @@ test('a request held for the end of the agent\'s turn: the voice hears it is hel
   const settle = () => new Promise(resolve => setTimeout(resolve, 20));
   const got: any[] = []; channel.on('message', raw => { const event = JSON.parse(raw.toString()); if (event.type === 'channel.deliver') { got.push(event); channel.send(JSON.stringify({ type: 'channel.sent', id: event.id })); } });
   channel.send(JSON.stringify({ type: 'channel.ready' })); await settle();
-  h.observer.status('working', 'Claude is working');
+  const hook = (event: Record<string, unknown>) => h.observer.hook({ session_id: (h.observer as ClaudeObserver).sessionId, ...event });
+  hook({ hook_event_name: 'UserPromptSubmit', prompt: 'Draw the chart.' });
   assert.ok(h.agentWorking()! >= 0);
   h.deliver({ id: 'later', content: 'A note.\n\nuser: Add a legend when you are done.', voiceSessionId: 'voice-one', said: 'Add a legend when you are done.', followUp: true });
   await settle();
@@ -171,6 +173,28 @@ test('a request held for the end of the agent\'s turn: the voice hears it is hel
   assert.equal(h.outbox.get('later')!.state, 'sent');
   assert.match(got[0].content, /^A note\. The user said this a moment ago, while you were working; .*\n\nuser: Add a legend when you are done\.$/);
   assert.equal(appends[1], 'The operator\'s words were sent to Claude Code, which has them now: "Add a legend when you are done."');
+  // A turn that ends with background work still running is over, though Claude's status stays "working": what was held goes, and the next request is not held.
+  hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash' });
+  h.deliver({ id: 'footer', content: 'A note.\n\nuser: Next, add a footer.', voiceSessionId: 'voice-one', said: 'Next, add a footer.', followUp: true });
+  await settle();
+  assert.equal(h.outbox.get('footer')!.state, 'held');
+  hook({ hook_event_name: 'Stop', last_assistant_message: 'The page is up.', background_tasks: [{ id: 'bash_1', command: 'npm run dev' }] });
+  await settle();
+  assert.deepEqual([h.observer.state, h.agentWorking(), h.outbox.get('footer')!.state], ['working', undefined, 'sent'], 'the turn ended');
+  h.deliver({ id: 'title', content: 'A note.\n\nuser: And a title.', voiceSessionId: 'voice-one', said: 'And a title.', followUp: true });
+  await settle();
+  assert.equal(h.outbox.get('title')!.state, 'sent', 'between turns nothing is held');
+  // A turn that never reports its end (interrupted in the terminal): once the agent has done nothing for three minutes, it is over.
+  hook({ hook_event_name: 'PreToolUse', tool_name: 'Edit' });
+  h.deliver({ id: 'colors', content: 'A note.\n\nuser: Then fix the colors.', voiceSessionId: 'voice-one', said: 'Then fix the colors.', followUp: true });
+  await settle();
+  assert.equal(h.outbox.get('colors')!.state, 'held');
+  h.agentActiveAt = h.workingSince = Date.now() - QUIET_TURN_MS + 60000;
+  assert.ok(h.agentWorking()! > 0, 'two minutes of quiet: still in its turn');
+  h.agentActiveAt = h.workingSince = Date.now() - QUIET_TURN_MS - 1000;
+  assert.equal(h.agentWorking(), undefined, 'three minutes without a sign of the agent');
+  await settle();
+  assert.equal(h.outbox.get('colors')!.state, 'sent');
 });
 
 test('every delivered request is confirmed once', async t => {

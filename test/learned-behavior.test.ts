@@ -27,7 +27,7 @@ test('asked by voice to drop an instruction, the harness that writes instruction
   const { h, lives } = await harness(t, { jevKey: 'jev-key' });
   const checks: any[] = [], publish = h.publish; h.publish = (event, page) => { if (event.type === 'jev_check') checks.push(event); publish(event, page); };
   const prompts: string[] = [], replies: string[] = [];
-  h.ask = async prompt => { prompts.push(prompt); return replies.shift()!; };
+  h.ask = async prompt => { prompts.push(prompt); const reply = replies.shift()!; if (reply === 'fails') throw new Error('Claude took longer than 90 s.'); return reply; };
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   await learn(h, 'Keep answers under two sentences.');
   await learn(h, 'Say who is talking.');
@@ -51,7 +51,7 @@ test('asked by voice to drop an instruction, the harness that writes instruction
   assert.deepEqual(h.status().learned.map((item: any) => [item.id, Boolean(item.removed)]), [['I1', false], ['I2', true]], 'the page lists both, one as removed');
   // One that isn't in force: nothing to remove.
   replies.push('<remove>I7</remove>');
-  h.consider(reading('And drop instruction seven.', .7), 'r3');
+  h.consider(reading('And drop instruction seven.', .7, { id: 'I1', p: .8 }), 'r3');
   await until(() => checks.some(c => c.requestId === 'r3'));
   assert.equal(checks.at(-1).outcome, 'Asked to remove an instruction that is not in force');
   assert.equal(h.voiceSessions.additionalInstructions.length, 1);
@@ -61,6 +61,22 @@ test('asked by voice to drop an instruction, the harness that writes instruction
   await until(() => checks.some(c => c.requestId === 'r4'));
   assert.equal(checks.at(-1).outcome, 'Nothing to change in the instructions');
   assert.equal(h.voiceSessions.additionalInstructions.length, 1);
+  // The harness alone finds a removal where Jev read none: an instruction goes without another in its place only when both find it asked for.
+  replies.push('<remove>I1</remove>');
+  h.consider(reading('Keep it short please from now on.', .9), 'r5');
+  await until(() => checks.some(c => c.requestId === 'r5'));
+  assert.equal(checks.at(-1).outcome, 'Nothing removed: Jev read no request to remove one');
+  // Words that only ask for an instruction to go are not one themselves: when the harness can't be had, nothing is learned from them.
+  replies.push('fails');
+  h.consider(reading('Forget the thing about short answers.', .2, { id: 'I1', p: .9 }), 'r6');
+  await until(() => checks.some(c => c.requestId === 'r6'));
+  assert.equal(checks.at(-1).outcome, 'Could not tell which instruction to remove');
+  // A new instruction that can't be added (too long to append) takes nobody's place.
+  replies.push(`<instruction>${'é'.repeat(300)}</instruction><replaces>I1</replaces>`);
+  h.consider(reading('From now on answer at great length, please.', .9), 'r7');
+  await until(() => checks.some(c => c.requestId === 'r7'));
+  assert.equal(checks.at(-1).outcome, 'The instruction could not be added');
+  assert.deepEqual(h.voiceSessions.additionalInstructions.map(item => item.learned), ['I1'], 'I1 is in force through all three');
   assert.match(liveInstructions(claude, { jev: true }), /Their instructions to you can be withdrawn: one you are told to disregard no longer applies\./);
 });
 

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentDefinition, AgentLaunch, Observation, VoiceRequest } from './adapter.ts';
+import type { AgentAdapter, AgentDefinition, AgentLaunch, Observation, ObservationKind, VoiceRequest } from './adapter.ts';
 import type { AgentObserver } from './agent-observer.ts';
 import { redact } from './redact.ts';
 import { withoutBinary } from './context-rules.ts';
@@ -50,6 +50,15 @@ export interface HarnessOptions {
   stageFile?: string;
 }
 
+/** What the agent does inside a turn, and what ends one (adapter.ts, ObservationKind). */
+const IN_TURN = new Set<ObservationKind>(['prompt', 'tool', 'tool_failure', 'attention']), TURN_ENDS = new Set<ObservationKind>(['turn_end', 'turn_failed', 'session_end']);
+/**
+ * How long an agent in a turn may do nothing before the turn counts as over. Inside Claude's recorded turns (1,102, Nov 1
+ * to 13) the longest stretch without any event passed 2 minutes in 16% and 3 minutes in 3%; a request released during
+ * such a stretch is steered in, as every request was before requests could be held.
+ */
+export const QUIET_TURN_MS = 180000;
+
 // The bridge: one local process between the page, GPT Live and the agent.
 // It owns the shared state; each concern lives in its own module.
 export class Harness {
@@ -74,10 +83,28 @@ export class Harness {
   agentReady = false; stopping = false;
   /** When this companion started serving; 0 until then. */
   startedAt = 0;
-  /** Since when the agent has been in the middle of a turn (working, or waiting on the operator within it). */
+  /** Since when the agent has been in the middle of a turn, by its own events: from its first prompt or tool call after the last turn's end. */
   workingSince?: number;
-  /** How long the agent's turn has been running, or undefined between turns. */
-  agentWorking() { return this.workingSince === undefined ? undefined : Date.now() - this.workingSince; }
+  /** When the agent last did anything, its subagents' work included. */
+  agentActiveAt = 0;
+  heldTimer?: NodeJS.Timeout;
+  /**
+   * How long the agent's turn has been running, or undefined between turns. A turn that reports no end (Claude
+   * interrupted in its terminal) is over once the agent has done nothing for QUIET_TURN_MS.
+   */
+  agentWorking() {
+    const quiet = Date.now() - Math.max(this.agentActiveAt, this.workingSince ?? 0);
+    if (this.workingSince !== undefined && quiet >= QUIET_TURN_MS) { this.log({ type: 'agent.turn_quiet', seconds: Math.round(quiet / 1000) }); this.turnOver(); }
+    return this.workingSince === undefined ? undefined : Date.now() - this.workingSince;
+  }
+  /** The agent's turn is over: what was held for its end goes to it. */
+  turnOver() { this.workingSince = undefined; clearTimeout(this.heldTimer); this.outbox.releaseHeld(); }
+  /** While a request is held, a look now and then at whether the agent has gone quiet. */
+  watchHeld() {
+    clearTimeout(this.heldTimer);
+    this.heldTimer = setTimeout(() => { if (this.agentWorking() !== undefined && [...this.outbox.values()].some(entry => entry.state === 'held')) this.watchHeld(); }, 15000);
+    this.heldTimer.unref();
+  }
   companions: CompanionRegistry;
   /** Turns the voice of running companions on and off, by voice. */
   sessionSwitch: SessionSwitch;
@@ -127,7 +154,7 @@ export class Harness {
       onJudged: judged => { if (!judged.learned) this.jevCheck(judged.requestId, 'instruction', `Not a standing instruction (${judged.behave.toFixed(2)})`, judged); },
       onLearn: instruction => { this.learnInstruction(instruction).catch(error => this.fault(error as Error)); } });
     this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,
-      working: () => this.agentWorking() !== undefined, onHeld: entry => this.voiceSessions.heldDelivery(entry),
+      working: () => this.agentWorking() !== undefined, onHeld: entry => { this.voiceSessions.heldDelivery(entry); this.watchHeld(); },
       publish: event => this.publish(event), fault: error => this.fault(error), onSent: entry => this.voiceSessions.confirmDelivery(entry), onUncertain: entry => this.voiceSessions.uncertainDelivery(entry) });
     this.agentInstructions = agentInstructions(agent);
     this.adapter = agent.create({ root, runDir, cwd, sessionId, observation, agentArgs, instructions: this.agentInstructions, clean: this.clean, log: this.log });
@@ -141,12 +168,15 @@ export class Harness {
     observer.on('observation', (observation: Observation) => { if (!observation.child && observation.kind !== 'event') this.voiceSessions.activity.add(observation.kind); });
     observer.on('observation', (observation: Observation) => { if (!observation.child) this.stage.observe(observer.toolUse(observation), observation.name === this.agent.profile.turnEnd); });
     observer.on('status', event => { this.log({ type: 'agent.status', ...event }); this.publish({ type: 'agent_status', ...event }); });
-    // The agent's turn, from when it began: a request that can wait is held until it ends (outbox.ts).
-    observer.on('status', ({ state }) => {
-      const working = state === 'working' || state === 'needs_attention';
-      if (working) this.workingSince ??= Date.now();
-      else { this.workingSince = undefined; this.outbox.releaseHeld(); }
+    // The agent's turn, by its own events: it begins with a prompt or a tool call and ends where the agent reports its end.
+    // A request that can wait is held until then (outbox.ts). Not by the agent's status: Claude's stays "working" after a
+    // turn that left background work running, and a request held then stayed held with Claude idle.
+    observer.on('observation', (observation: Observation) => {
+      this.agentActiveAt = Date.now();
+      if (observation.child) return;
+      if (TURN_ENDS.has(observation.kind)) this.turnOver(); else if (IN_TURN.has(observation.kind)) this.workingSince ??= Date.now();
     });
+    observer.on('status', ({ state }) => { if (state !== 'working' && state !== 'needs_attention') this.turnOver(); });
     observer.on('fault', error => this.fault(error));
     const { name, transport } = agent.profile;
     this.adapter.on('connection', ready => {
@@ -199,21 +229,26 @@ export class Harness {
       this.log({ type: 'instruction.distilled', said: instruction.said, distilled, requestId: instruction.requestId });
       if ('same' in distilled) return this.jevCheck(instruction.requestId, 'instruction', `Already in force as ${distilled.same}`, instruction);
       if ('none' in distilled) return this.jevCheck(instruction.requestId, 'instruction', 'Nothing to change in the instructions', instruction);
-      // They asked for instructions to go, and gave no new one: those are removed, as the page's Remove takes one out, and the voice says so.
+      // They asked for instructions to go, and gave no new one: those are removed, as the page's Remove takes one out, and
+      // the voice says so. Only when Jev read a removal too: nothing takes a removed instruction's place, so both must
+      // find it asked for (the harness alone changed the list on 1 of 7 made-up requests that were no instruction).
       if ('remove' in distilled) {
-        const gone = inForce.filter(item => distilled.remove.includes(item.id));
+        const gone = instruction.remove ? inForce.filter(item => distilled.remove.includes(item.id)) : [];
         for (const item of gone) await this.removeInstruction(item.id);
         if (gone.length && this.live?.state === 'active') this.mediator?.context.add('commentary', instructionsRemoved(gone));
-        return this.jevCheck(instruction.requestId, 'instruction', gone.length ? `Removed ${gone.map(item => item.id).join(', ')}` : 'Asked to remove an instruction that is not in force', instruction);
+        return this.jevCheck(instruction.requestId, 'instruction', gone.length ? `Removed ${gone.map(item => item.id).join(', ')}` : instruction.remove ? 'Asked to remove an instruction that is not in force' : 'Nothing removed: Jev read no request to remove one', instruction);
       }
       text = distilled.text;
       // Only instructions that are in force: the harness may name one that isn't.
       replaces = (distilled.replaces ?? []).filter(id => inForce.some(item => item.id === id));
     } catch (error) {
-      // Without the harness's wording, the operator's own words are kept, as before.
+      // Without the harness's wording, the operator's own words are kept, as before. Not words that only asked for an
+      // instruction to go: kept, "forget the thing about short answers" became an instruction itself.
       this.log({ type: 'instruction.error', message: `Writing the instruction: ${(error as Error).message}` });
+      if (instruction.removalOnly) return this.jevCheck(instruction.requestId, 'instruction', 'Could not tell which instruction to remove', instruction);
     }
     const id = await this.voiceSessions.learn({ ...instruction, text });
+    if (!id) return this.jevCheck(instruction.requestId, 'instruction', 'The instruction could not be added', instruction);
     // The instructions it takes the place of go, as the page's Remove takes one out.
     for (const old of replaces) await this.removeInstruction(old).catch(error => this.log({ type: 'instruction.error', id: old, message: (error as Error).message }));
     this.jevCheck(instruction.requestId, 'instruction', `Learned ${id}${replaces.length ? ` in place of ${replaces.join(', ')}` : ''}: ${text}`, instruction);

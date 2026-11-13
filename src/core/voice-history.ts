@@ -31,12 +31,18 @@ export interface SpokenRequest {
 }
 // Any sample louder than this is sound; the page's gate sends exact silence, which echoes back at about 1.
 const SOUND_PEAK = 64;
-// Pieces GPT Live transcribes from noise or leaks from its own stream: letters in another script than the conversation's
-// (the voice speaks English: "्क", "બહાર"), or part of a control token ("<|stream", "<"). Never the operator's words. Rare
-// (17 of 31,199 pieces in ten runs, Oct 31 to Nov 12), but one of them, given to a woken connection as the operator's
-// turn, had it speak Hindi (Nov 4), and two went to the agent as requests by themselves.
+// Pieces GPT Live transcribes from noise or leaks from its own stream: part of a control token ("<|stream", "<"), or a
+// single piece in another script in the middle of a conversation in Latin script ("्क", "બહાર"). Never the operator's
+// words. Rare (15 of 31,238 pieces, Oct 30 to Nov 13, never two in a row), but one of them, given to a woken connection as
+// the operator's turn, had it speak Hindi (Nov 4), and two went to the agent as requests by themselves. An operator who
+// does speak in another script is heard in it from their second piece in a row: from then on, for this fdc and all its
+// connections, no piece is noise for its script.
 const LETTER = /[\p{L}\p{M}]/u, LATIN = /\p{Script=Latin}/u;
-export const phantom = (text: string) => /<\||^[\s<>|\uFFFD]*[<>|\uFFFD][\s<>|\uFFFD]*$/.test(text) || (LETTER.test(text) && !LATIN.test(text));
+const otherScript = (text: string) => LETTER.test(text) && !LATIN.test(text);
+let spoken = false;
+export const phantom = (text: string) => /<\||^[\s<>|\uFFFD]*[<>|\uFFFD][\s<>|\uFFFD]*$/.test(text) || (!spoken && otherScript(text));
+/** The script the operator speaks in is unknown again (a new operator, as far as fdc can have one: its tests). */
+export const forgetScript = () => { spoken = false; };
 
 // Each speaker's speech joins until they pause, so the other speaker's
 // backchannels never split it.
@@ -62,6 +68,9 @@ export class VoiceHistory {
   add(event: TranscriptDelta): TranscriptFragment {
     const role = event.type === 'session.input_transcript.delta' ? 'operator' : 'intermediary';
     const fragment: TranscriptFragment = { seq: this.fragments.length, role, text: event.delta, startMs: event.start_ms, endMs: event.end_ms, receivedAt: Date.now() };
+    // Two pieces in a row in another script: that is how they speak.
+    const before = role === 'operator' && otherScript(fragment.text) ? this.fragments.findLast(f => f.role === 'operator') : undefined;
+    if (before && otherScript(before.text) && fragment.receivedAt - before.receivedAt <= 3000) spoken = true;
     this.fragments.push(fragment);
     if (role === 'operator' && !phantom(fragment.text)) this.lastInputAt = fragment.receivedAt;
     return fragment;

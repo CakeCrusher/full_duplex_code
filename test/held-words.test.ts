@@ -7,7 +7,7 @@ import { Mediator, type Decision, type Route } from '../src/core/mediator.ts';
 import { jobTurn, type Waiting } from '../src/core/turn.ts';
 import type { VoiceRequest } from '../src/core/adapter.ts';
 import { settle, until } from './live-fake.ts';
-import { phantom } from '../src/core/voice-history.ts';
+import { forgetScript, phantom } from '../src/core/voice-history.ts';
 
 // A mediator whose job delegation decides by `decide`, given the latest words it reads and what waited before them; quick timers.
 function fixture(t: TestContext, decide: (latest: string, waiting: Waiting, call: number) => Decision) {
@@ -182,6 +182,29 @@ test("when the voice then says it can't answer words that stayed with it, they a
   g.m.reconsider();
   await settle(30);
   assert.equal(g.deliveries.length, 0);
+
+  // The question, then "okay" while the voice looks, both kept: its giving up is read against the question, not the "okay".
+  const h = fixture(t, (_latest, _waiting, call) => call < 3 ? { send: false } : { send: true });
+  h.say('What was the retention rate in the March cohort?');
+  await until(() => h.jobs.length === 1);
+  await settle(50);
+  h.say(' Okay.');
+  await until(() => h.jobs.length === 2);
+  await settle(50);
+  h.m.reconsider();
+  await until(() => h.deliveries.length === 1);
+  assert.equal(h.jobs[2].latest, 'What was the retention rate in the March cohort? Okay.', 'everything kept since the question');
+
+  // The second reading can't be had (Jev fails), or finds the words needed but unfinished: either way they go to the agent now.
+  for (const second of [() => { throw new Error('Jev is unreachable'); }, () => wait]) {
+    const k = fixture(t, (_latest, _waiting, call) => call === 1 ? { send: false } : second());
+    k.say('Which commit broke the build?');
+    await until(() => k.jobs.length === 1);
+    await settle(50);
+    k.m.reconsider();
+    await until(() => k.deliveries.length === 1);
+    assert.match(k.deliveries[0].content, /Which commit broke the build\?/);
+  }
 });
 
 test("moments after a request was held for the turn's end, an acknowledgment stays with the voice, and words that press for it bring it in", async () => {
@@ -210,4 +233,18 @@ test('pieces of transcript that are no speech of the operator (another script, a
   await until(() => f.deliveries.length === 1);
   assert.doesNotMatch(f.deliveries[0].content, /્ક|બહાર/, 'and it is no part of what the agent gets');
   assert.deepEqual(f.m.history.turns().map(turn => turn.text), ['Add a legend.'], 'nor of the conversation a later connection is seeded with');
+  // After such a piece, GPT Live answering again reads nothing a second time: the piece is not the operator's last word.
+  const read = f.jobs.length;
+  f.say(' ్ద');
+  f.m.liveEvent({ type: 'session.output_transcript.delta', delta: ' Done.', start_ms: 90000, end_ms: 90400 });
+  await settle(250);
+  assert.equal(f.jobs.length, read, 'the words before it were read once');
+
+  // An operator who speaks in another script: two pieces in a row are speech, and from then on every piece is.
+  t.after(forgetScript);
+  const g = fixture(t, () => ({ send: true }));
+  for (const piece of ['Добавь', ' легенду', ' к', ' графику.']) g.m.liveEvent({ type: 'session.input_transcript.delta', delta: piece, start_ms: 0, end_ms: 400 });
+  await until(() => g.deliveries.length === 1);
+  assert.match(g.deliveries[0].content, /Добавь легенду к графику\./, 'all of it reaches the agent, the first piece included');
+  assert.deepEqual(['Да', '्क'].map(phantom), [false, false], 'and a single word of theirs is theirs');
 });

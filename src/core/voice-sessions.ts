@@ -230,8 +230,8 @@ export class VoiceSessions {
   async learn({ text, ...judged }: LearnedInstruction) {
     const id = `I${++this.learnedCount}`;
     this.bridge.log({ type: 'instruction.learned', id, text, ...judged });
-    await this.appendInstruction(`${id}: ${text}`, { id, text, scope: judged.scope }).catch(error => this.bridge.log({ type: 'instruction.error', id, message: (error as Error).message }));
-    return id;
+    // Its ID, once it is the companion's (in force, or waiting for the next connection); nothing when it could not be added (too long, or the companion's instructions are full).
+    return this.appendInstruction(`${id}: ${text}`, { id, text, scope: judged.scope }).then(() => id, error => { this.bridge.log({ type: 'instruction.error', id, message: (error as Error).message }); return this.additionalInstructions.some(item => item.learned === id) ? id : undefined; });
   }
   /**
    * Removes a learned instruction: later sessions leave it out, and the session it is in
