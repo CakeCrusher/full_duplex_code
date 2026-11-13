@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PageAudit, type PageAction } from '../src/core/page-audit.ts';
 import { Stage, StageError, StageNothing } from '../src/core/stage.ts';
-import { fakeJev, harness, pageReading, until } from './live-fake.ts';
+import { fakeJev, harness, page, pageReading, until } from './live-fake.ts';
 
 const view = { title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"', viewerAt: 0, parts: [],
   commands: [{ id: 'goto_options', say: 'Go to the section "Options"' }, { id: 'row_fdc', say: 'Highlight the row "FDC"' }, { id: 'next_section', say: 'Go to the next section' }] };
@@ -85,4 +85,27 @@ test('the record is one owner-only file beside the run\'s events, and holds what
   const told = recorded.find(l => l.type === 'told');
   assert.equal(told.action, action.id);
   assert.match(told.text, /^You moved the page; on screen now: heading in "Options": Options — Three ways forward/);
+});
+
+test("each step of a move reaches the voice and Jev's next reading; the voice saying it can't answer has the operator's kept words read again", async t => {
+  const { h, lives } = await harness(t);
+  const moments = fakeJev(h, m => m.trigger === 'cue' ? { page: pageReading({ command: 'goto_options', more: .9, gaveUp: /can't find/.test(m.latest!.text) ? .9 : .1 }) }
+    : m.trigger === 'step' ? { page: pageReading({ command: 'row_fdc', more: 0 }) } : {});
+  const answers = ['heading : Options — Three ways forward. Under it: FDC; Editor.', 'item in "Options": FDC — 231 reply loops'];
+  let ran = 0;
+  h.stage.browser = { evaluate: async (_tabId: number, expression: string) => expression.endsWith('window.__fdcStage.describe()') ? view
+    : { said: [answers[ran++ % 2]], before: place('section "Intro"', null), here: place('section "Options"', 'FDC') }, close() {} } as any;
+  h.stage.tabId = 7;
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  let reconsidered = 0; h.mediator!.reconsider = () => { reconsidered++; };
+  await h.presenter.show('Here are the options, starting with FDC.');
+  const step = moments.find(m => m.trigger === 'step')!;
+  assert.deepEqual(step.done!.map(c => [c.id, c.shown]), [['goto_options', answers[0]]], 'Jev chooses the next step knowing what the first one landed on');
+  const told = () => lives[0].appended.filter(([kind, text]) => kind === 'thinking' && /^(The page is on its way|You moved the page)/.test(text)).map(([, text]) => text);
+  await until(() => told().length === 2);
+  assert.equal(told()[0], `The page is on its way; it has reached: ${answers[0]}`, 'a step on the way, in short');
+  assert.match(told()[1], /^You moved the page; on screen now: item in "Options": FDC — 231 reply loops/);
+  assert.equal(reconsidered, 0);
+  await h.presenter.show("I can't find the March numbers on this page.");
+  assert.equal(reconsidered, 1, 'the words that stayed with the voice are read again for the agent');
 });

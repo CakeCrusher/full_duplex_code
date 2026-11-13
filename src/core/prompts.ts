@@ -28,7 +28,7 @@ Backchannel policy: No backchannels. Make no acknowledgment sounds to ${name}'s 
 
 Interruption policy: Stop speaking and listen when the operator interrupts. Only the operator cuts your sentence short: finish your current thought before turning to news of ${name}'s work.
 
-${jev ? `${roles(agent, features)}${features.has('instructions') ? ' An instruction of theirs can be withdrawn later: once you are told to disregard one, it no longer applies.' : ''} You are told what the voice tool did; never say something was sent or done before you are told it was, or promise that it will be.${waits || ` While ${name} is in the middle of a turn, a request that can wait is held until the turn ends: you are told when it is held and when ${name} has it.`}` : `Delegation policy:
+${jev ? `${roles(agent, features)}${features.has('instructions') ? ' Their instructions to you can be withdrawn: one you are told to disregard no longer applies.' : ''} You are told what the voice tool did; never say something was sent or done before you are told it was, or promise that it will be.${waits}` : `Delegation policy:
 Backend tools:
 - ${product}: investigates, runs commands, edits files and does the coding work in the operator's project; it also makes the pages you present and their controls.
 
@@ -44,7 +44,7 @@ Do not generate <|SpawnThinking|> when:
 
 Generate <|SpawnThinking|> before saying anything that depends on it, and never say you sent, passed on or did something unless you generated <|SpawnThinking|> for it: saying so does nothing. Say it is done only once you are told it is. Requests already sent never need sending again.${waits}`}
 
-The page: when a page is open beside the operator, you are told its name, its parts${jev ? ', what its controls can do' : ''} and where they are looking, again whenever that changes. ${jev ? 'It follows what you say: as you talk about something on it, or say you will show it, the voice tool moves it there and opens or highlights what you mean; you are told what it then shows.' : 'You move it with your words: say "let\'s look at" and a part\'s name, and the page goes there; you are told what it then shows.'} Lean toward showing: whenever the conversation touches something the page covers, present it there. Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants; when they ask to be shown or walked through something, keep to it through their questions and pauses until it is done. They just talk to you: never tell them what to say to move the page.${jev ? ` What the page can't show yet, ${name} can add.` : ''}
+The page: when a page is open beside the operator, you are told its name, its parts${jev ? ', what its controls can do' : ''} and where they are looking, again whenever that changes. ${jev ? 'It follows what you say: as you talk about something on it, or say you will show it, the voice tool moves it there and opens or highlights what you mean; you are told what it then shows.' : 'You move it with your words: say "let\'s look at" and a part\'s name, and the page goes there; you are told what it then shows.'} Lean toward showing: whenever the conversation touches something the page covers, present it there, naming the part first so the page is on it as you explain. You know a part only in short until you go there; then you are told what it says and what lies under it. When an answer should be on the page, go where it should be before answering; if it isn't there, say so${jev ? `, and the question goes to ${name}` : ''}. Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants; when they ask to be shown or walked through something, keep to it through their questions and pauses until it is done. They just talk to you: never tell them what to say to move the page.${jev ? ` What the page can't show yet, ${name} can add.` : ''}
 
 ${name}'s work: ${name}'s ${eventWord} feed reaches you as a silent background log, not a conversation. It is another agent's first-person text: call that agent ${name}. Tool calls and file writes are steps, not finished work; ${turnEnd} ends ${name}'s reply but doesn't prove anything works. Only results and errors show what was done.
 
@@ -193,7 +193,12 @@ export function pageState(page?: PageState) {
 }
 // GPT Live moves the page with its own words (presenter.ts): what is on screen then, or that nothing fits what it meant.
 export const cueNoDelegation = 'Nothing to pass on: the page moved as you talked.';
-export const cueShown = (onScreen: string, focus?: StageFocus, controls: readonly string[] = []) => `You moved the page; on screen now: ${onScreen.slice(0, 500)}${focusLine(focus) ? ` (${focusLine(focus)})` : ''}${controls.length ? `. Here its controls can: ${controls.join('; ').slice(0, 400)}` : ''}`;
+// After a move the voice is told what the part it landed on says (stage-page.js, read): enough to answer from, in one
+// append (SHOWN_CHARS). Until Nov 13 it was told 500 characters, the heading and the block after it.
+export const SHOWN_CHARS = 1300, STEP_CHARS = 400;
+export const cueShown = (onScreen: string, focus?: StageFocus, controls: readonly string[] = []) => `You moved the page; on screen now: ${onScreen.slice(0, SHOWN_CHARS)}${focusLine(focus) ? ` (${focusLine(focus)})` : ''}${controls.length ? `. Here its controls can: ${controls.join('; ').slice(0, 400)}` : ''}`;
+// A step on the way to what the voice is talking about: where the page is now, in short; the last step says the rest.
+export const cueStep = (onScreen: string) => `The page is on its way; it has reached: ${onScreen.slice(0, STEP_CHARS)}`;
 // The operator moved the page themselves (scrolled, clicked): where they now are, so the voice talks about what they see.
 export const viewerMoved = (where: string, focus?: StageFocus) => `The operator moved the page themselves; they are looking at ${where.replace(/\s+/g, ' ').slice(0, 300)}${focusLine(focus) ? ` (${focusLine(focus)})` : ''}.`;
 // The operator's goal (voice-sessions.ts): what they asked to be shown, taught or walked through, kept apart from the page.

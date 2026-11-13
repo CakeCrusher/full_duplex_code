@@ -88,8 +88,17 @@ them, "Stage 3 of 5" in your text still counts as a step. Without `where()`, fdc
 element in view, which can't tell which slide, step or tab is showing.
 
 The controller only moves the page. What the voice knows of the page comes from the page's own text, hidden slides and
-tabs included: each part in short, and what is on screen whenever the page moves. To let it explain something, put it on
-the page, never in the controller.
+tabs included, and it gets that text in two sizes:
+
+- **Before it goes anywhere, each part in short.** All the parts together share about 4,000 characters, so on a long
+  page a part is a line or two, without its sub-headings.
+- **Once the page is on a part, that part.** A move to a heading answers with the heading, its own text up to the first
+  sub-heading (about 1,000 characters), and the names of the headings right under it, which the voice can then go on
+  into. A command of your controller answers with what its `run` returns (up to about 1,300 characters).
+
+So on a long page, give each part a heading, keep what the voice should say about it directly under that heading, and
+put the detail under sub-headings: the voice reads its way in, one part at a time. To let it explain something, put it
+on the page, never in the controller.
 
 Rules that make it work well:
 

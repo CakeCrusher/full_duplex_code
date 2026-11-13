@@ -91,7 +91,7 @@ test("the page command Jev chose for the voice's words is recorded, and so is no
   await h.presenter.show('The options are where it gets interesting.');
   await h.presenter.show('The repeat visit is a separate story.');
   assert.deepEqual(ran, [['goto_options']]);
-  assert.deepEqual(calls().map(c => [c.trigger, c.decision, c.config.thresholds]), [['cue', { command: 'goto_options', step: 0, more: false }, { page_command: .45, page_more: .5 }], ['cue', { command: null, step: 0 }, { page_command: .45, page_more: .5 }]]);
+  assert.deepEqual(calls().map(c => [c.trigger, c.decision, c.config.thresholds]), [['cue', { command: 'goto_options', step: 0, more: false }, { page_command: .45, page_more: .5, gave_up: .7 }], ['cue', { command: null, step: 0 }, { page_command: .45, page_more: .5, gave_up: .7 }]]);
 });
 
 test('a reading fdc has not finished acting on is recorded as it is when fdc stops, or 30 s after the call', async t => {

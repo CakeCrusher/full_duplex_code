@@ -61,7 +61,7 @@ test('asked by voice to drop an instruction, the harness that writes instruction
   await until(() => checks.some(c => c.requestId === 'r4'));
   assert.equal(checks.at(-1).outcome, 'Nothing to change in the instructions');
   assert.equal(h.voiceSessions.additionalInstructions.length, 1);
-  assert.match(liveInstructions(claude, { jev: true }), /An instruction of theirs can be withdrawn later: once you are told to disregard one, it no longer applies\./);
+  assert.match(liveInstructions(claude, { jev: true }), /Their instructions to you can be withdrawn: one you are told to disregard no longer applies\./);
 });
 
 test('a change Jev made to the settings can be reverted: the setting goes back, stays the operator\'s, and the page hears no sound for it', async t => {

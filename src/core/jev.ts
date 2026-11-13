@@ -58,6 +58,9 @@ export const COMPANION_ONLY = .85;
 export const PAGE_STEP = .45;
 // After a command ran, the next is asked for only when Jev finds another needed (page_more).
 export const PAGE_MORE = .5;
+// The voice saying it can't answer or find what the operator asked: their words that stayed with it are then read again
+// for the agent, with all it has said since (mediator.ts, reconsider).
+export const GAVE_UP = .7;
 // The operator's words set a new goal, or end it, from this likelihood.
 export const GOAL = .6;
 // The learner's held-out thresholds from the offline test.
@@ -88,7 +91,7 @@ export const STANDBY = .7;
 // What Jev reads of what the voice companion perceived: its latest 14 KB (perceived.ts).
 export const HISTORY_BYTES = 14000;
 /** For the record (jev-audit.ts): the likelihood at which each question's answer changes what fdc does. */
-const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, now: NOW, remove: REMOVE, standby: STANDBY, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
+const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, now: NOW, remove: REMOVE, gave_up: GAVE_UP, standby: STANDBY, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
 
 /** One utterance of the conversation. */
 export interface Line { role: 'operator' | 'intermediary'; text: string }
@@ -104,6 +107,8 @@ export interface PageJudgment {
   command?: string;
   /** How likely another command is needed after it (page_more); and how likely each command was, to choose again when the first has nothing to do. */
   more?: number; likely?: Record<string, number>;
+  /** How likely the voice is saying that it can't answer or find what the operator asked (trigger cue). */
+  gaveUp?: number;
 }
 /** Whether the operator's latest words set a new goal (what they want shown, taught or walked through), end it, or neither. */
 export interface GoalJudgment { choice: 'keep' | 'new' | 'walk' | 'done'; p: number }
@@ -141,8 +146,8 @@ export interface Moment {
   /** The operator's instructions to the companion in force. */
   instructions?: readonly string[];
   sessions?: Session[]; page?: StageView;
-  /** The page commands already run for the latest words (trigger step). */
-  done?: StageCommand[];
+  /** The page commands already run for the latest words (trigger step), each with what the page answered. */
+  done?: (StageCommand & { shown?: string })[];
   /** The operator's goal in force, as Jev reads it: what they asked to be shown or taught, when, and what was shown since. */
   goal?: string;
   /** What the voice companion has said in reply to the latest words (trigger job). */
@@ -223,7 +228,11 @@ const pageQuestions = (page: StageView, trigger: Trigger) => ({
   page_command: { type: 'choice', instructions: trigger === 'step'
     ? 'Which page command should run next to finish showing what the voice companion is talking about in the latest words, now that the commands in `page_done` have run and the page is where `page` says? A part\'s own controls (its rows, columns, toggles or steps) are listed only while that part is on screen. Choose none when the page now shows it.'
     : 'Which page command, if any, should run now so that the page shows what the voice companion is talking about in the latest words, or what it says it is showing or will show? A part may be named by what it says, by how the page labels it, or by its number said as a word ("section four" is section 4, not the next one). Choose none when the page already shows it, when no command shows it, or when the companion is not talking about anything on the page.',
-    criteria: { none: 'No page command: the page already shows it, no command shows it, or the companion is not talking about the page. Also none when the operator has just moved the page themselves and the companion is talking about what they moved to.', ...Object.fromEntries(page.commands.map(c => [c.id, c.say])) } },
+    criteria: { none: 'No page command: the page already shows it, no command shows it, or the companion is not talking about the page. Also none when the companion only mentions a part in passing or as something to come to later, without turning to it now; and when the operator has just moved the page themselves and the companion is talking about what they moved to.', ...Object.fromEntries(page.commands.map(c => [c.id, c.say])) } },
+  // Asked with the voice's own words only (not between steps): the cue for reading the operator's kept words again.
+  ...trigger === 'cue' && { gave_up: noul('Is the voice companion saying, in the latest words, that it cannot answer or show what the operator asked: that it does not know, could not find it on the page or in what it was told, or that it is for the coding agent to do?',
+    'It says it does not know or is not sure of the answer, that the page does not have it, that it could not find it, or that the coding agent would have to check, answer or do it.',
+    'Anything else: it answers, explains, presents, asks the operator something, acknowledges them, or says it is passing something on or checking.') },
   page_more: noul('Will the page need another command right after this one to show what the voice companion is talking about?',
     'What it talks about is inside or beyond what this command shows: a row, column, toggle, step or highlight within the part this command brings on screen (a part\'s own controls are listed only once it is on screen), or several things it names in turn.',
     'This command alone shows it, or no command should run.'),
@@ -333,7 +342,7 @@ export class Jev {
     if (trigger === 'job' && moment.sent) state.just_sent = `${Math.max(1, Math.round(moment.sent.ago / 1000))} s ago: "${wordsEnd(moment.sent.said)}"`;
     if (sessions) state.sessions = sessionLines(sessions);
     if (page) state.page = pageLine(page);
-    if (trigger === 'step') state.page_done = (moment.done ?? []).map((c, i) => `${i + 1}. ${c.say}`).join('\n') || '(none)';
+    if (trigger === 'step') state.page_done = (moment.done ?? []).map((c, i) => `${i + 1}. ${c.say}${c.shown ? ` → ${c.shown.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`).join('\n') || '(none)';
     if (gate || trigger === 'cue' || trigger === 'step' || trigger === 'job') state.goal = moment.goal || '(none)';
     // The job delegation knows what the page's controller can do: what it can't goes to the agent, to add it.
     if (page && job) state.page_commands = page.commands.map(c => `- ${c.say}`).join('\n').slice(0, 3000) || '(none)';
@@ -383,7 +392,7 @@ export class Jev {
     }
     if (page && (trigger === 'cue' || trigger === 'step')) {
       const answer = answers?.page_command;
-      reading.page = { command: chosenCommand(answer, page), more: p('page_more'), ...answer?.probabilities && { likely: answer.probabilities } };
+      reading.page = { command: chosenCommand(answer, page), more: p('page_more'), ...answer?.probabilities && { likely: answer.probabilities }, ...'gave_up' in questions && { gaveUp: p('gave_up') } };
       // The likeliest commands, for tuning the page question.
       const top = Object.entries(answer?.probabilities ?? {}).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 3).map(([id, v]) => `${id} ${Number(v).toFixed(2)}`).join(', ');
       this.log({ type: 'page.judged', trigger, said: said.slice(-200), command: top, more: Number(reading.page!.more?.toFixed(2)) });

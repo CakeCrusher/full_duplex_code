@@ -81,17 +81,19 @@ test("Jev is asked which page command shows what the voice is talking about and 
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers }) }; } });
   const moment = { history: 'user: What are my choices?\n', latest: { role: 'intermediary', text: "Let's look at the choices you have." } as Line };
   const choice = (id: string, p = .95) => ({ choice: id, probabilities: { [id]: p } });
-  answers = { page_command: choice('goto_options'), page_more: { noul: .2 } };
-  assert.deepEqual((await jev.read({ trigger: 'cue', ...moment, page: view })).page, { command: 'goto_options', more: .2, likely: { goto_options: .95 } });
+  answers = { page_command: choice('goto_options'), page_more: { noul: .2 }, gave_up: { noul: .1 } };
+  assert.deepEqual((await jev.read({ trigger: 'cue', ...moment, page: view })).page, { command: 'goto_options', more: .2, likely: { goto_options: .95 }, gaveUp: .1 });
   assert.match(sent.state.page, /Briefing .*The viewer is at: section "Intro"/);
   assert.deepEqual([sent.state.history, sent.state.latest], ['user: What are my choices?', "voice assistant: Let's look at the choices you have."], 'the voice\'s words, and what happened before them');
-  assert.deepEqual(Object.keys(sent.questions), ['page_command', 'page_more']);
+  assert.deepEqual(Object.keys(sent.questions), ['page_command', 'gave_up', 'page_more'], "with the voice's own words, also whether it is saying it can't answer what the operator asked");
   assert.deepEqual(Object.keys(sent.questions.page_command.criteria), ['none', 'next_section', 'goto_options', 'show_the_recommendation']);
+  assert.match(sent.questions.page_command.criteria.none, /only mentions a part in passing or as something to come to later, without turning to it now/);
   assert.equal(sent.state.goal, '(none)');
   // After a command ran: what ran, where the page now is (in structure too), and the commands it offers there.
   const there: StageView = { ...view, where: 'Wave 2', focus: { path: ['FDC waves', 'Wave 2'], step: { index: 2, total: 4, of: 'wave' } }, commands: [...view.commands, { id: 'page_split_campaigns', say: 'Split the FDC row into its campaigns' }] };
-  await jev.read({ trigger: 'step', ...moment, page: there, done: [{ id: 'goto_options', say: 'Go to the section "Options"' }], goal: '"walk me through the waves" (asked 30 s ago); shown for it since: nothing yet' });
-  assert.equal(sent.state.page_done, '1. Go to the section "Options"');
+  await jev.read({ trigger: 'step', ...moment, page: there, done: [{ id: 'goto_options', say: 'Go to the section "Options"', shown: 'heading : Options — Three ways forward. Under it: FDC waves; Replies.' }], goal: '"walk me through the waves" (asked 30 s ago); shown for it since: nothing yet' });
+  assert.equal(sent.state.page_done, '1. Go to the section "Options" → heading : Options — Three ways forward. Under it: FDC waves; Replies.', 'each command with what the page answered: what Jev chooses the next step from');
+  assert.deepEqual(Object.keys(sent.questions), ['page_command', 'page_more'], 'between steps, only the page');
   assert.match(sent.state.page, /The viewer is at: Wave 2 \(FDC waves › Wave 2, wave 2 of 4\)\./);
   assert.match(sent.state.goal, /^"walk me through the waves"/);
   assert.match(sent.state.why, /Page commands just ran/);

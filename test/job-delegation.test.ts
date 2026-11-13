@@ -151,7 +151,8 @@ test("the page follows what the voice says and leans toward showing; how is its 
   assert.match(state, /Its parts, by name: Intro, Options\. Besides showing its parts, its controls can: Show the error bars; Switch to the table view\./);
   assert.doesNotMatch(pageState({ title: 'Briefing', names: ['Intro'], others: [], parts: [], where: '' }), /controls/);
   for (const text of [liveInstructions(claude, { jev: true }), liveInstructions(claude)]) {
-    assert.match(text, /Lean toward showing: whenever the conversation touches something the page covers, present it there\./);
+    assert.match(text, /Lean toward showing: whenever the conversation touches something the page covers, present it there, naming the part first so the page is on it as you explain\./);
+    assert.match(text, /You know a part only in short until you go there; then you are told what it says and what lies under it\. When an answer should be on the page, go where it should be before answering; if it isn't there, say so/);
     assert.match(text, /Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants; when they ask to be shown or walked through something, keep to it through their questions and pauses until it is done\./);
     assert.match(text, /They just talk to you: never tell them what to say to move the page\./);
     assert.doesNotMatch(text, /moves with the operator's words|follows their own words|Never start presenting|next part follows by itself|say so in a few words|commands, cues or controls/, "no operator page control, no script for after a move");

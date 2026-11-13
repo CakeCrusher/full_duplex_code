@@ -144,3 +144,41 @@ test("while the agent is in the middle of a turn, a request is steered in unless
   assert.equal((await decide(95000, .1, { overdue: true })).later, false, 'words that waited already go in now');
   assert.equal((await decide(95000, .1, { needed: true })).later, false);
 });
+
+test("when the voice then says it can't answer words that stayed with it, they are read once more with all it has said, and go to the agent", async t => {
+  // The job delegation keeps the words at first (the voice said it would look), and sends them once its reply says it can't.
+  const f = fixture(t, (_latest, _waiting, call) => call === 1 ? { send: false } : { send: true });
+  f.say('What was the retention rate in the March cohort?');
+  await until(() => f.jobs.length === 1);
+  await settle(50);
+  assert.equal(f.deliveries.length, 0, 'kept: the voice is looking on the page');
+  assert.ok(f.m.lastKept, 'the words that stayed are remembered');
+  f.m.voiceSaid.push({ at: Date.now(), text: " Let me check the cohort table. I can't find March there; Claude would have to look." });
+  f.m.reconsider();
+  await until(() => f.deliveries.length === 1);
+  assert.equal(f.jobs.length, 2, 'read once more');
+  assert.equal(f.jobs[1].latest, 'What was the retention rate in the March cohort?', 'the same words');
+  assert.match(f.deliveries[0].content, /What was the retention rate in the March cohort\?/);
+  f.m.reconsider();
+  await settle(50);
+  assert.equal(f.jobs.length, 2, 'once sent, nothing is left to read again');
+
+  // Kept again by the second reading: not read a third time. And never once the operator has spoken again.
+  const g = fixture(t, () => ({ send: false }));
+  g.say('Is that the same list?');
+  await until(() => g.jobs.length === 1);
+  await settle(50);
+  g.m.reconsider();
+  await until(() => g.jobs.length === 2);
+  await settle(50);
+  g.m.reconsider();
+  await settle(50);
+  assert.equal(g.jobs.length, 2, 'kept twice: left with the voice');
+  g.say('And the other one?');
+  await until(() => g.jobs.length === 3);
+  await settle(50);
+  g.say('Hmm.');
+  g.m.reconsider();
+  await settle(30);
+  assert.equal(g.deliveries.length, 0);
+});

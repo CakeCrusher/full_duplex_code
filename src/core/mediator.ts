@@ -113,6 +113,10 @@ export class Mediator {
   heldQuietMs = Mediator.HELD_QUIET_MS; heldCapMs = Mediator.HELD_CAP_MS; heldTimer?: NodeJS.Timeout; heldAt = 0;
   /** The job delegation's own reading: the operator's last word it decided on (its next reading's latest words are all after it), since when words wait undecided, and whether a reading found they need the agent. */
   jobRead = -1; undecidedSince = 0; undecidedNeeded = false;
+  /** The operator's words the job delegation last kept with the voice: from where, through where, and when (reconsider). */
+  lastKept?: { since: number; through: number; at: number };
+  /** How long after words stayed with the voice its saying that it can't answer them still sends them. */
+  static RECONSIDER_MS = 90000;
   /** The request that last went to the agent from this connection: when, and the operator's words in it (turn.ts asks whether words right after it add to it). */
   lastSent?: { at: number; said: string };
   onObservation: (event: Observation) => void;
@@ -258,6 +262,8 @@ export class Mediator {
   /** What came of a turn: the words go to the agent, noted with what the voice tool did; or they stay for the next request, noted with it. GPT Live hears what was done (unless the voice tool's own reading told it already: toldBefore). */
   decided(id: string, request: SpokenRequest, { reading, send, later, note, told, wait, needed }: Decision, delegationId?: string, toldBefore?: string) {
     if (told && this.live.state === 'active') this.context.add('thinking', told, delegationId ?? null);
+    // Kept as needing nothing: should the voice then say it can't answer them, they are read again (reconsider).
+    this.lastKept = !send && !wait ? { since: this.jobRead, through: request.through, at: Date.now() } : undefined;
     // Sent, or kept as needing nothing: the job delegation's next reading starts after these words. Not finished: they wait for it.
     if (wait) { this.undecidedSince ||= Date.now(); this.undecidedNeeded ||= Boolean(needed); this.awaitQuiet(); }
     else { this.jobRead = Math.max(this.jobRead, request.through); this.undecidedSince = 0; this.undecidedNeeded = false; clearTimeout(this.heldTimer); }
@@ -266,6 +272,29 @@ export class Mediator {
     this.audit?.record({ handOff: 'kept', said: this.said(request), voiceSessionId: this.live.id, delegationId: delegationId ?? null, requestId: id, jevCall: reading?.id }, reading?.needsAgent ?? null, reading?.transcript);
     this.giveBack(id, note);
     if (delegationId && !told && !toldBefore) this.outcome(delegationId, { send: false });
+  }
+  /**
+   * The voice now says it can't answer or find what the operator asked (presenter.ts: it looked on the page and it isn't
+   * there, or it doesn't know): their words that stayed with it are read once more, with all it has said since, and go to
+   * the agent if they need it. Read with the reply's first words only, "let me check the page" kept them from the agent, and
+   * nothing read them again when the check came up empty. Not once the operator has spoken again: that turn decides.
+   */
+  reconsider() {
+    const kept = this.lastKept, route = this.route;
+    if (!kept || !route || this.live.state !== 'active' || this.pending || Date.now() - kept.at > Mediator.RECONSIDER_MS) return;
+    if (this.history.fragments.some(f => f.role === 'operator' && f.seq > kept.through && !this.history.unheard(f))) return;
+    const request = this.history.request();
+    if (!request) return;
+    this.lastKept = undefined;
+    const id = randomUUID(), spoken = this.history.spoken(kept.through, kept.since), from = spoken.at(-1)?.at ?? kept.at;
+    const reply = this.voiceSaid.filter(d => d.at >= from).map(d => d.text).join('').replace(/\s+/g, ' ').trim().slice(-600) || undefined;
+    this.history.claim(request, id); this.pending++;
+    this.log({ type: 'turn.reconsidered', id, said: this.said(request).slice(-200), reply: reply?.slice(-200) });
+    this.order = this.order.then(() => route.job(request, spoken, reply, {}))
+      // Kept again: these words are not read a third time.
+      .then(decision => { this.decided(id, request, decision); this.lastKept = undefined; })
+      .catch(error => { this.history.release(id); this.log({ type: 'turn.error', message: (error as Error).message }); })
+      .finally(() => { this.pending--; });
   }
   /** Words the job delegation put off because the operator hadn't finished, that no request has taken yet. */
   undecided() { return this.undecidedSince > 0 && this.history.fragments.some(f => f.role === 'operator' && f.seq > this.jobRead && !f.sent && !f.claim); }

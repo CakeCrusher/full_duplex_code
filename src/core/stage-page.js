@@ -101,6 +101,36 @@
     const body = el.matches(UNITS.heading) ? text(el) + (el.nextElementSibling ? ' — ' + text(el.nextElementSibling) : '') : text(el);
     return `${kind} ${section && section !== el ? `in "${text(section).slice(0, 80)}"` : ''}: ${body.slice(0, 600)}`.replace(/\s+/g, ' ');
   };
+  // What a part says, once the page is there: its heading, its own text as shown, up to the first heading under it or the
+  // next part (within READ_CHARS), and the headings that lie right under it, each a part the voice can go on into. A move used to answer with the heading and
+  // the block after it, at most 600 characters, so on a long page the voice was told about 1% of a chapter and none of
+  // its sub-headings, and had nothing to answer from or to go further into (issue 21).
+  const READ_CHARS = 1000;
+  const read = reading(el => {
+    if (!el?.matches?.(UNITS.heading)) return describe(el);
+    const all = units('heading'), at = all.indexOf(el), end = at < 0 ? null : all.slice(at + 1).find(h => level(h) <= level(el)) ?? null;
+    const below = at < 0 ? [] : all.slice(at + 1, end ? all.indexOf(end) : undefined), next = below[0] ?? end;
+    // A short label right above the next heading ("Strand B", "3 of 6") belongs to that heading's part; a short sentence is this part's text.
+    const label = next?.previousElementSibling;
+    const stop = label !== el && isLabel(label) ? label : next;
+    let body = '', block = null;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    walker.currentNode = el;
+    for (let node = walker.nextNode(); node && body.length <= READ_CHARS; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (!parent || el.contains(node)) continue;
+      if (stop && (stop.contains(node) || !before(node, stop))) break;
+      if (parent.closest('script, style, noscript, template, #__fdc_ring') || !(node.textContent || '').trim() || !visible(parent)) continue;
+      const own = parent.closest('p, li, td, th, dd, dt, figcaption, caption, blockquote, pre, h1, h2, h3, h4, div, section');
+      body += (own !== block && body ? ' ' : '') + (node.textContent || '').replace(/\s+/g, ' ');
+      block = own;
+    }
+    body = body.replace(/\s+/g, ' ').trim();
+    const deeper = Math.min(...below.map(level));
+    const under = below.filter(h => level(h) === deeper).map(h => text(h).slice(0, 60));
+    const section = sectionOf(el);
+    return `heading ${section && section !== el ? `in "${text(section).slice(0, 80)}"` : ''}: ${text(el)}${body ? ` — ${body.length > READ_CHARS ? `${body.slice(0, READ_CHARS)}…` : body}` : ''}${under.length ? ` Under it: ${under.slice(0, 12).join('; ')}${under.length > 12 ? `; and ${under.length - 12} more` : ''}.` : ''}`.replace(/\s+/g, ' ');
+  });
   const go = async (el, block = 'center') => {
     if (!el) return null;
     // Where the viewer was, even before any move (the paragraph at the top of the view): back returns there.
@@ -110,7 +140,7 @@
     reveal(el, block);
     await settle();
     if (!stage.fast) glow();
-    return describe(el);
+    return read(el);
   };
   // The element the viewer is looking at: the first unit near the top of the view.
   const current = kind => stage.at?.isConnected ? stage.at : units(kind).find(el => el.getBoundingClientRect().bottom > innerHeight * 0.15) ?? null;
@@ -126,7 +156,9 @@
   // people call it. Headings that repeat ("Landed" in several sections) are left to next/previous.
   // The short label just above a heading, without a counter before it ("3 · Results"); and how many headings carry each.
   const labelOver = h => h.previousElementSibling ? text(h.previousElementSibling).replace(/^\d+\s*[·.:-]\s*/, '') : '';
-  const labelAbove = h => h.previousElementSibling && text(h.previousElementSibling).length < 40 ? labelOver(h) : '';
+  // Short, and not a sentence: "Without training." above a heading is the end of the part before it, not its label.
+  const isLabel = el => !!el && !el.matches(UNITS.heading) && text(el).length < 40 && !/[.!?]["”’)]?$/.test(text(el));
+  const labelAbove = h => isLabel(h.previousElementSibling) ? labelOver(h) : '';
   const labelsAbove = () => once('labels above', () => { const counts = new Map(); for (const h of units('heading')) { const label = labelOver(h); if (label) counts.set(label, (counts.get(label) ?? 0) + 1); } return counts; });
   const short = h => {
     const section = h.closest('section[id], article[id]'), id = h.id || (section?.querySelector(UNITS.heading) === h ? section.id : '');

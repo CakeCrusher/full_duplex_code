@@ -95,5 +95,27 @@ try {
   assert.deepEqual((await stage<any>('window.__fdcStage.here()')).focus, { step: { index: 3, total: 5, of: 'stage' } });
   await page.setContent(REPORT + `<script>window.fdcController = { commands() { return []; }, async run() {}, where() { throw new Error('broken'); } };</script>`);
   assert.match((await stage<any>('window.__fdcStage.describe()')).where, /^heading|^paragraph/, "a broken where() doesn't break reading the page");
-  console.log('Stage script checks passed: structured where, table rows and columns, the viewer\'s own moves, a part\'s controls once on screen, fast steps. No API spending.');
+  // A move to a part answers with what that part says and what lies under it: what the voice answers from, and where it
+  // can go further in. A part's own text stops at its first sub-heading; a short label above the next heading isn't its.
+  const LONG = `<!doctype html><title>Handbook</title><body style="font:16px sans-serif;max-width:800px;margin:auto">
+<h1>Handbook</h1>
+<h2 id="learning">Where the learning lives</h2><p>The claim is that the weights hold it. ${'The evidence is in three places. '.repeat(40)}</p>
+<h3>Claim against evidence</h3><p>What each claim rests on.</p><h4>The control run</h4><p>Without training.</p>
+<h3>Case study: DOOMFLY</h3><p>It plays the game from pixels.</p>
+<div class="kicker">Part two</div><h2 id="files">What your files add</h2><p>Counts from your own data, in full.</p>
+<h2 id="bar">The bar for a learning claim</h2><p>Three tests.</p>${filler(30)}</body>`;
+  await page.setContent(LONG);
+  const learning = await stage<string>('window.__fdcStage.run("goto_learning", { fast: true })');
+  assert.match(learning, /^heading : Where the learning lives — The claim is that the weights hold it\./);
+  assert.match(learning, /… Under it: Claim against evidence; Case study: DOOMFLY\.$/, 'cut to its length, then the headings right under it (not those further down)');
+  assert.ok(learning.length > 1000 && learning.length < 1200, `about a thousand characters of the part (${learning.length})`);
+  assert.doesNotMatch(learning, /What each claim rests on|The control run|Part two/, 'its own text only: what lies under a sub-heading is read by going there');
+  const claim = await stage<string>('window.__fdcStage.run("goto_claim_against_evidence", { fast: true })');
+  assert.equal(claim, 'heading in "Where the learning lives": Claim against evidence — What each claim rests on. Under it: The control run.');
+  const files = await stage<string>('window.__fdcStage.run("goto_files", { fast: true })');
+  assert.equal(files, 'heading : What your files add — Counts from your own data, in full.', 'a part with nothing under it, whole');
+  const doomfly = await stage<string>('window.__fdcStage.run("goto_case_study_doomfly", { fast: true })');
+  assert.equal(doomfly, 'heading in "Where the learning lives": Case study: DOOMFLY — It plays the game from pixels.', 'the label above the next part is not this part\'s');
+
+  console.log('Stage script checks passed: structured where, table rows and columns, the viewer\'s own moves, a part\'s controls once on screen, fast steps, a part read on arrival. No API spending.');
 } finally { await browser.close(); }

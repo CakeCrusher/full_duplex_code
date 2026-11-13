@@ -15,9 +15,9 @@ import type { Harness } from './bridge.ts';
 import { CueMatcher, unglue, type SpeechCue } from './speech-cues.ts';
 import { StageError, StageNothing, type StageCommand, type StageRun, type StageView } from './stage.ts';
 import type { PageCause } from './page-audit.ts';
-import { chosenCommand, PAGE_MORE, type Reading } from './jev.ts';
+import { chosenCommand, GAVE_UP, PAGE_MORE, type Reading } from './jev.ts';
 import type { Spoken } from './voice-history.ts';
-import { cueFailedNote, cueMovedNote, cueShown, pageAnswered, pageMissed } from './prompts.ts';
+import { cueFailedNote, cueMovedNote, cueShown, cueStep, pageAnswered, pageMissed } from './prompts.ts';
 
 /** The most commands run for one stretch of the voice's words: a section, a part's own control in it, a highlight there. */
 export const MOST_STEPS = 4;
@@ -100,12 +100,16 @@ export class Presenter {
     let view = await bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; });
     if (!view) return;
     const spoken: Spoken[] = [...bridge.mediator?.history.spoken() ?? [], { role: 'intermediary', text: said, at: Date.now() }];
-    const done: StageCommand[] = [];
+    // Each command run for these words, with what the page answered: Jev reads it before choosing the next (page_done).
+    const done: (StageCommand & { shown?: string })[] = [];
     let last: StageRun | undefined;
     try {
       for (let step = 0; step < MOST_STEPS && view; step++) {
         const reading = await bridge.read({ trigger: step ? 'step' : 'cue', spoken, page: view, done: [...done] }).catch(error => { bridge.log({ type: 'jev.error', message: (error as Error).message }); return undefined; });
         if (!reading) break;
+        // The voice says it can't answer or find what the operator asked: their words that stayed with it are read again,
+        // with what it has said since, and go to the agent if they need it (mediator.ts).
+        if (!step && (reading.page?.gaveUp ?? 0) >= GAVE_UP) { bridge.log({ type: 'voice.gave_up', said: said.slice(-160), p: reading.page!.gaveUp }); bridge.mediator?.reconsider(); }
         let command = reading.page?.command;
         if (command && !RELATIVE.test(command) && done.some(c => c.id === command)) command = undefined;
         if (command?.startsWith('tab_') && Date.now() - bridge.stage.shownAt < AGENT_SHOWN_MS) { bridge.log({ type: 'stage.kept_page', instead: command }); command = undefined; }
@@ -115,8 +119,10 @@ export class Presenter {
         try { ran = await this.run(command, view, reading, more, { said, jevCall: reading.id, step }); }
         catch (error) { bridge.jevAudit?.decided(reading.id, { command, step, error: (error as Error).message }, true); throw error; }
         bridge.jevAudit?.decided(reading.id, { command: ran.command, step, more, ...ran.instead && { instead: ran.instead } }, true);
-        last = ran.run; done.push(...ran.run.done);
+        last = ran.run; done.push(...ran.run.done.map(c => ({ ...c, shown: ran.run.onScreen })));
         if (!more) break;
+        // A step on the way: the voice hears where the page has got to, as Jev does with its next reading.
+        this.tell(cueStep(ran.run.onScreen), ran.run.action);
         view = await bridge.stage.describe(0).catch(() => undefined);
       }
     } catch (error) {
