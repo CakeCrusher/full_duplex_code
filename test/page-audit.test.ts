@@ -109,3 +109,28 @@ test("each step of a move reaches the voice and Jev's next reading; the voice sa
   await h.presenter.show("I can't find the March numbers on this page.");
   assert.equal(reconsidered, 1, 'the words that stayed with the voice are read again for the agent');
 });
+
+test('one command runs once for the same words, a step included; and a part already on screen is not moved to again for the next sentence about it', async t => {
+  const { h } = await harness(t);
+  // Jev keeps finding another move needed, and choosing the same command.
+  fakeJev(h, m => m.trigger === 'cue' || m.trigger === 'step' ? { page: pageReading({ command: /options/.test(m.latest!.text) ? 'goto_options' : 'next_section', more: .9 }) } : {});
+  let ran: string[] = [];
+  h.stage.browser = { evaluate: async (_tabId: number, expression: string) => {
+    if (expression.endsWith('window.__fdcStage.describe()')) return view;
+    const ids = /of (\[[^\]]*\])\.entries/.exec(expression)?.[1];
+    if (ids) ran.push(...JSON.parse(ids));
+    return { said: ['heading : The next part'], before: place('a', null), here: place('b', null) };
+  }, close() {} } as any;
+  h.stage.tabId = 7;
+  await h.presenter.show('Next is the soma.');
+  assert.deepEqual(ran, ['next_section'], '"next" for one mention is one step, however sure Jev is that more is needed');
+  ran = [];
+  await h.presenter.show('Here are the options.');
+  await h.presenter.show('The options are three ways forward.');
+  assert.deepEqual(ran, ['goto_options'], 'the second sentence about the part on screen moves nothing');
+  // Once the operator has moved the page themselves, the same command goes there again.
+  (view as any).viewerAt = Date.now() + 1000; h.stage.viewAt = 0;
+  await h.presenter.show('Back to the options.');
+  (view as any).viewerAt = 0;
+  assert.deepEqual(ran, ['goto_options', 'goto_options']);
+});

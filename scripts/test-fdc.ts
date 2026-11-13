@@ -9,8 +9,10 @@ import { root, synthesize, connectVoice, until, delay } from './test-support.ts'
 // The required end-to-end run (CONTRIBUTING.md), through the fdc command a user
 // runs, found on the PATH as the shell finds it, never through the bridge
 // directly: fdc <agent> in a new project folder, Enter, voice; work typed in the
-// agent's terminal; a spoken request while the agent works, which must arrive
-// mid-turn and be acted on; a spoken question about the work; exit; then the
+// agent's terminal; a spoken request while the agent works, which is steered into
+// the turn or, when Jev finds it can wait, held for the turn's end; then words that
+// can't wait, which must arrive mid-turn and bring a held request in before them;
+// both acted on; a spoken question about the work; exit; then the
 // session resumed with the agent's own option, and a spoken question its
 // history must answer. Spends GPT Live and the agent's own usage.
 //   npm run test:fdc -- pi        (or claude, codex)
@@ -29,8 +31,9 @@ if (!fdc) { console.error('fdc is not on the PATH: run npm link first.'); proces
 const label = `fdc-${agent}-${Date.now()}`, testDir = path.join(root, '.runs', label), cwd = path.join(testDir, 'project');
 fs.mkdirSync(cwd, { recursive: true }); spawnSync('git', ['init', '--quiet'], { cwd });
 const evidence: Record<string, any> = { agent, fdc, passed: false };
-const work = 'Create three files one at a time, in this order: a.txt, b.txt, c.txt. Each contains just its letter. Before each file, run the shell command `sleep 15`. Write one short sentence before each file saying which file is next. When all are done, say DONE.';
+const work = 'Create five files one at a time, in this order: a.txt, b.txt, c.txt, d.txt, e.txt. Each contains just its letter. Before each file, run the shell command `sleep 15`. Write one short sentence before each file saying which file is next. When all are done, say DONE.';
 const request = synthesize('fdc-request', 'Please also create one more file, named voice dot txt, containing the word voice.');
+const pressing = synthesize('fdc-pressing', 'Wait, this cannot wait: do not create the last file, e dot txt. Skip that one.');
 const question = synthesize('fdc-question', 'Which files have been created so far?');
 const recall = synthesize('fdc-recall', 'Which files were created earlier in this session?');
 
@@ -101,18 +104,28 @@ try {
   await delay(2500);
   assert.equal((await run.status()).agent, 'working', `${agent} is still working when the request is spoken`);
   await voice.speak(request);
-  const task = await until(() => run!.events().find(e => e.type === 'task' && e.state === 'sent'), { label: 'Live delegated the request and it was sent', timeout: 60000 });
-  const received = await until(() => run!.events().find(e => e.type === 'agent.input' && String(e.text).includes(task.id)), { label: `${agent} received the request`, timeout: 120000 });
+  // The request is on its way: steered into the running turn, or (with Jev) held until the turn ends when it can wait.
+  const task = await until(() => run!.events().find(e => e.type === 'task' && ['held', 'sent'].includes(e.state)), { label: 'the request went, or is held for the end of the turn', timeout: 60000 });
+  // Words that can't wait reach the agent mid-turn, and bring a held request in before them.
+  await delay(3000);
+  assert.equal((await run.status()).agent, 'working', `${agent} is still working when the pressing words are spoken`);
+  await voice.speak(pressing);
+  const urgent = await until(() => run!.events().find(e => e.type === 'task' && e.id !== task.id && e.state === 'sent'), { label: 'the words that cannot wait were sent', timeout: 60000 });
+  const arrival = (id: string) => until(() => run!.events().find(e => e.type === 'agent.input' && String(e.text).includes(id)), { label: `${agent} received request ${id.slice(0, 8)}`, timeout: 120000 });
+  const received = await arrival(task.id), pressed = await arrival(urgent.id);
   const idles = () => run!.events().filter(e => e.type === 'agent.status' && e.state === 'idle' && e.at >= typedAt);
-  await until(() => fs.existsSync(path.join(cwd, 'voice.txt')) && files().length >= 4, { label: 'the work and the request done', timeout: 360000 });
+  await until(() => fs.existsSync(path.join(cwd, 'voice.txt')) && files().length >= 5, { label: 'the work and the request done', timeout: 360000 });
   await waitFor(async () => (await run!.status()).agent === 'idle', `${agent} idle`, 120000);
   const firstIdle = idles()[0];
-  assert.ok(received.at < firstIdle.at, 'the request arrived mid-turn, before the agent first finished');
+  assert.ok(pressed.at < firstIdle.at, 'the words that cannot wait arrived mid-turn, before the agent first finished');
+  assert.ok(received.at <= pressed.at, 'the first request arrived before them: steered in itself, or brought in by them');
+  evidence.firstRequest = task.state === 'held' ? 'held for the end of the turn, then brought in by words that could not wait' : 'steered into the turn';
+  evidence.lastFileSkipped = !fs.existsSync(path.join(cwd, 'e.txt'));
   assert.match(fs.readFileSync(path.join(cwd, 'voice.txt'), 'utf8'), /voice/i);
   await delay(4000);
   const asked = Date.now();
   await voice.speak(question);
-  const answer = await until(() => { const text = said(voice!, asked); return /voice/i.test(text) && /\b[abc]\b|[abc]\.txt|three/i.test(text) ? text : ''; }, { label: 'an answer naming the files', timeout: 45000 });
+  const answer = await until(() => { const text = said(voice!, asked); return /voice/i.test(text) && /\b[abcd]\b|[abcd]\.txt|three|four|five/i.test(text) ? text : ''; }, { label: 'an answer naming the files', timeout: 45000 });
   await delay(3000); await voice.close(); voice = undefined;
   Object.assign(evidence, { sessionId: run.sessionId, request: task.id, receivedMidTurn: true, files: files(), answer });
   await run.quit();

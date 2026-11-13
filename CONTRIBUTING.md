@@ -20,7 +20,7 @@ These are required, not optional, for every change:
 1. `npm run typecheck`, `npm test` and `npm run test:pages` pass.
 2. **An end-to-end run through the `fdc` command itself**, the one `npm link` installs, started the way a user starts it, with every agent the change touches (every agent, for a core change):
    - `fdc <agent>` in a project folder, press Enter, open the link, click **Start voice**;
-   - ask for work by voice, and while the agent works, ask for more: it arrives mid-turn and the agent acts on it;
+   - ask for work by voice, and while the agent works, ask for more: it arrives mid-turn, or at the end of the turn when it can wait (with Jev), and the agent acts on it; then say something that can't wait: it arrives mid-turn;
    - ask the companion what the agent did, and check the answer;
    - exit, then resume the same session with the agent's own option and check its history is there.
 

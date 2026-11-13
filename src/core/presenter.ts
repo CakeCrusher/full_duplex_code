@@ -32,8 +32,10 @@ const ACK = new Set('okay ok sure yeah yes yep yup right alright all got it than
 export const saysSomething = (sentence: string) => (sentence.toLowerCase().match(/[a-z']+/g) ?? []).some(word => !ACK.has(word.replace(/'/g, '')));
 // The voice saying it turns to something ("let's look at the error bars"): when no command shows it, it hears so.
 const TURNING = /\blet(?:'|’)?s\s+(?:look at|go to|go on to|go back to|turn to|head to|move to|move on to|jump to|look)\s+(.{3,80}?)\s*[.,;:!?]/i;
-// Only a step (next, previous, back, scrolling) runs twice for the same words: a part reached again is no further on.
+// A step from where the page is (next, previous, back, scrolling): run again later it goes further, so it is never "already there".
 const RELATIVE = /(^|_)(next|previous|prev|back|forward|scroll_up|scroll_down)(_|$)/;
+/** How long after a move the same command, chosen again for the voice's next sentence about the same part, is not run again. */
+export const SAME_PLACE_MS = 30000;
 
 export class Presenter {
   bridge: Harness;
@@ -47,6 +49,8 @@ export class Presenter {
   queued: string[] = []; judging = false;
   /** The operator's words (when they last spoke) whose reply's first sentence was read. */
   repliedTo = 0;
+  /** The command that last put the page where it is, and when: its part is on screen until something else moves the page. */
+  landed?: { id: string; at: number };
   constructor(bridge: Harness) { this.bridge = bridge; }
   /** GPT Live said more: a cue in it moves the page now; each sentence it ends is read for the page. */
   heard(delta: string) {
@@ -79,6 +83,7 @@ export class Presenter {
     const bridge = this.bridge, started = Date.now();
     this.answered();
     bridge.stage.run([cue.run], { by: 'phrase', because: { said: cue.label } }).then(run => {
+      this.landed = { id: cue.run, at: Date.now() };
       bridge.log({ type: 'stage.cue', run: cue.run, label: cue.label, ms: Date.now() - started });
       this.shown(run, run.done.length ? run.done : [{ id: cue.run, say: cue.label, name: cue.label }]);
     }).catch(error => this.failed(cue.label, error as Error));
@@ -111,7 +116,18 @@ export class Presenter {
         // with what it has said since, and go to the agent if they need it (mediator.ts).
         if (!step && (reading.page?.gaveUp ?? 0) >= GAVE_UP) { bridge.log({ type: 'voice.gave_up', said: said.slice(-160), p: reading.page!.gaveUp }); bridge.mediator?.reconsider(); }
         let command = reading.page?.command;
-        if (command && !RELATIVE.test(command) && done.some(c => c.id === command)) command = undefined;
+        // One command runs once for the same words, a step included: "Next is the X" ran "next term" four times, Jev finding
+        // another move needed after each, and landed three terms past (Nov 4, twice in five minutes; the operator's
+        // instruction "move the page only one step at a time" didn't stop it, since the voice doesn't decide this).
+        if (command && done.some(c => c.id === command)) command = undefined;
+        // The page is on that part already: the voice's next sentence about it doesn't move it there again, or tell the voice
+        // again what it says (the same command ran for three sentences in a row, Nov 13). Not once the viewer has moved the page.
+        if (command && !step && !RELATIVE.test(command) && this.landed?.id === command && Date.now() - this.landed.at < SAME_PLACE_MS && (view.viewerAt ?? 0) < this.landed.at) {
+          bridge.log({ type: 'stage.already_there', command, said: said.slice(-120) });
+          bridge.jevAudit?.decided(reading.id, { command: null, step, already: command }, true);
+          this.landed.at = Date.now();
+          break;
+        }
         if (command?.startsWith('tab_') && Date.now() - bridge.stage.shownAt < AGENT_SHOWN_MS) { bridge.log({ type: 'stage.kept_page', instead: command }); command = undefined; }
         const more = (reading.page?.more ?? 0) >= PAGE_MORE && step + 1 < MOST_STEPS;
         if (!command) { bridge.jevAudit?.decided(reading.id, { command: null, step }, true); break; }
@@ -151,6 +167,7 @@ export class Presenter {
   moved(said: string, done: StageCommand[], run: StageRun, started: number) {
     const bridge = this.bridge;
     this.answered();
+    this.landed = done.length ? { id: done.at(-1)!.id, at: Date.now() } : undefined;
     bridge.log({ type: 'stage.cue', run: done.at(-1)?.id, steps: done.map(c => c.id), label: said.slice(-120), judged: true, ms: Date.now() - started });
     this.shown(run, done);
   }
