@@ -9,11 +9,11 @@ import { decides } from './live-fake.ts';
 import type { VoiceRequest } from '../src/core/adapter.ts';
 
 type Append = { kind: string; content: string; delegationId?: string | null };
-function fixture(t: TestContext, state = 'active', observer = new ClaudeObserver({ sessionId: 'test' })) {
+function fixture(t: TestContext, state = 'active', observer = new ClaudeObserver({ sessionId: 'test' }), options: { replays?: boolean } = {}) {
   const live: any = new EventEmitter(); live.state = state; live.close = () => { live.state = 'closed'; };
   const appends: Append[] = []; live.append = async (kind: string, content: string, delegationId?: string | null) => { appends.push({ kind, content, delegationId }); };
   const deliveries: VoiceRequest[] = [];
-  const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null });
+  const mediator = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, ...options });
   t.after(() => { mediator.stop(); observer.close(); });
   const hook = (event: Record<string, any>) => observer.hook({ session_id: 'test', ...event });
   return { live, observer, mediator, appends, deliveries, hook };
@@ -201,6 +201,21 @@ test('agent updates wait while the operator talks: heard by the microphone, or b
   assert.equal(f.appends.length, 2, 'the transcript of the operator also holds updates');
   t.mock.timers.tick(2000);
   assert.equal(f.appends.length, 3);
+});
+
+test("a connection the operator's voice woke starts with their held words: what waited for its start goes in after them", async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const start = (f: ReturnType<typeof fixture>) => { f.mediator.context.add('thinking', 'The page open beside the operator now: a report.'); f.live.state = 'active'; f.live.emit('event', { type: 'session.started' }); };
+  const woken = fixture(t, 'starting', undefined, { replays: true }); start(woken);
+  assert.equal(woken.appends.length, 0, 'their words are about to be replayed: nothing goes in on top of them');
+  t.mock.timers.tick(1500);
+  woken.mediator.hear({ at: Date.now(), inputRms: 0, backlogMs: 1800 });
+  t.mock.timers.tick(1900);
+  assert.equal(woken.appends.length, 0, 'the replay was still going');
+  t.mock.timers.tick(200);
+  assert.equal(woken.appends.length, 1, 'two seconds after the last of it');
+  const reconnected = fixture(t, 'starting'); start(reconnected);
+  assert.equal(reconnected.appends.length, 1, 'any other connection gets it at its start');
 });
 
 test("the operator's turn ends when GPT Live starts answering, or after a moment's quiet; a backchannel doesn't end it, and the same words are read once", async t => {

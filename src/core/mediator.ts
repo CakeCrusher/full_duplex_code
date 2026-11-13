@@ -119,17 +119,20 @@ export class Mediator {
   static RECONSIDER_MS = 90000;
   /** The request that last went to the agent from this connection: when, and the operator's words in it (turn.ts asks whether words right after it add to it). */
   lastSent?: { at: number; said: string; held?: boolean };
+  replays: boolean;
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
-  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, audit, route, read, consider, firstRecordId = 0 }: {
+  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, audit, route, read, consider, firstRecordId = 0, replays = false }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
     publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; audit?: DelegationAudit;
     route?: Route; read?: Mediator['read']; consider?: (reading: Reading, requestId?: string) => void;
     /** Context records are numbered after this one: a fork's context already holds its source's. */
     firstRecordId?: number;
+    /** The connection begins with the operator's held words: their voice woke it from Standby, and the page replays them to it. */
+    replays?: boolean;
   }) {
     this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.audit = audit; this.route = route; this.read = read; this.consider = consider;
-    this.agent = agent;
+    this.agent = agent; this.replays = replays;
     this.floor = new Floor({ thinkMs: tuning.thinkMs, pauseMs: tuning.pauseMs });
     if (hold === undefined) hold = holdOf(tuning);
     this.context = new ContextQueue(live, error => {
@@ -152,7 +155,11 @@ export class Mediator {
   }
   fault(error: Error) { this.log({ type: 'bridge.fault', message: error.message }); this.publish({ type: 'fault', message: error.message }); }
   liveEvent(event: any) {
-    if (event.type === 'session.started') { this.feed.flush(); this.context.pump(); }
+    // A connection the operator's voice woke begins with their held words: they have the floor from its start. The floor
+    // had not heard them on this connection, so what waited for the start (the page, their goal, the agent's work) went
+    // in as the replay began, and GPT Live spoke over their words: in 52 of the 112 such wakes of Nov 1 to 12, against 3
+    // of the 26 where nothing was sent meanwhile.
+    if (event.type === 'session.started') { if (this.replays) this.floor.hear(); this.feed.flush(); this.context.pump(); }
     if (event.type === 'session.input_audio.append' && typeof event.audio === 'string') this.history.hearAudio(event);
     if (event.type === 'session.input_transcript.delta' || event.type === 'session.output_transcript.delta') {
       const fragment = this.history.add(event);

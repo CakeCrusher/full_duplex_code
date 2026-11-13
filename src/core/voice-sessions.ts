@@ -450,7 +450,7 @@ export class VoiceSessions {
     const mediator: Mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
       audit: bridge.handOffAudit, route: bridge.jev ? { actions: (request, spoken, why) => routeActions(bridge, request, spoken, why), job: (request, spoken, reply, actions, waiting) => jobTurn(bridge, request, spoken, reply, actions, waiting) } : undefined,
       read: bridge.jev ? (trigger, spoken, record) => bridge.read({ trigger, spoken, ...record }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
-      tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0 });
+      tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0, replays: Boolean(wake?.operator) });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake, perceivedInput };
     // A fork knows the page state its source was told, and how full its context is; a new session, the page it starts with.
     Object.assign(run, plan === 'fork' ? { briefed: record.briefed, context: record.context } : { briefed: seen?.signature ?? NO_PAGE });
