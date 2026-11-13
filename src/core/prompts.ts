@@ -28,7 +28,7 @@ Backchannel policy: No backchannels. Make no acknowledgment sounds to ${name}'s 
 
 Interruption policy: Stop speaking and listen when the operator interrupts. Only the operator cuts your sentence short: finish your current thought before turning to news of ${name}'s work.
 
-${jev ? `${roles(agent, features)} You are told what the voice tool did; never say something was sent or done before you are told it was, or promise that it will be.${waits || ` While ${name} is in the middle of a turn, a request that can wait is held until the turn ends: you are told when it is held and when ${name} has it.`}` : `Delegation policy:
+${jev ? `${roles(agent, features)}${features.has('instructions') ? ' An instruction of theirs can be withdrawn later: once you are told to disregard one, it no longer applies.' : ''} You are told what the voice tool did; never say something was sent or done before you are told it was, or promise that it will be.${waits || ` While ${name} is in the middle of a turn, a request that can wait is held until the turn ends: you are told when it is held and when ${name} has it.`}` : `Delegation policy:
 Backend tools:
 - ${product}: investigates, runs commands, edits files and does the coding work in the operator's project; it also makes the pages you present and their controls.
 
@@ -91,6 +91,9 @@ export const toolWorkLine = ({ profile: { name } }: Agent, work: string) => `[${
 // Told to a running voice session when the operator removes an instruction Jev learned:
 // an instruction already given cannot be taken back, only countermanded.
 export const disregardInstruction = (id: string, text: string) => `Disregard instruction ${id} ("${text}"): the operator removed it, so it no longer applies.`;
+// What the voice says once the voice tool has removed instructions because the operator asked for that by voice.
+export const instructionsRemoved = (gone: readonly { id: string; text: string }[]) =>
+  `The operator asked for ${gone.length > 1 ? 'instructions of theirs' : 'one of their instructions'} to go, and the voice tool removed ${gone.map(item => `${item.id} ("${item.text.replace(/\s+/g, ' ').slice(0, 160)}")`).join(' and ')}: ${gone.length > 1 ? 'they no longer apply' : 'it no longer applies'}. Tell them so in a few words.`;
 
 // fdc's own instructions to the coding agent, in its system prompt from the start of every session: a new one, one fdc
 // resumes, or one it never started (each adapter passes them its own way: src/adapters/README.md). How voice requests reach

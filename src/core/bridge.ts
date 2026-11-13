@@ -13,7 +13,7 @@ import { tuningFrom, type TuningChange } from './jev-tuner.ts';
 import { HISTORY_BYTES, Jev, type Moment, type Reading } from './jev.ts';
 import { perceivedText } from './perceived.ts';
 import { DEFAULT_FEATURES, type Feature, type Features } from './features.ts';
-import { agentInstructions } from './prompts.ts';
+import { agentInstructions, instructionsRemoved } from './prompts.ts';
 import type { Spoken } from './voice-history.ts';
 import { Stage } from './stage.ts';
 import { Presenter } from './presenter.ts';
@@ -60,7 +60,7 @@ export class Harness {
   /** Settings the operator set by hand (FDC_TUNING), which Jev leaves alone; the latest ask for settings (only its answer counts), and the one waiting. */
   pinned: (keyof Tuning)[] = []; tuneAsks = 0; tuneTimer?: NodeJS.Timeout;
   /** Every change to the settings in this run, newest last: when, by whom, from what to what (Developer mode lists them). */
-  tuningHistory: { at: number; by: string; changes: TuningChange[] }[] = [];
+  tuningHistory: { id?: string; at: number; by: string; changes: TuningChange[]; /** When the operator took it back (revertTuning). */ reverted?: number }[] = [];
   root: string; runDir: string; cwd: string; sessionId?: string; apiKey: string;
   voice: string; observation: string; port: number; portFallback: boolean;
   /** How agent updates reach GPT Live; a running voice session takes a change at once. */
@@ -188,19 +188,31 @@ export class Harness {
   // operator's words are speech), or finds there is none or one in force already says it.
   async learnInstruction(instruction: LearnedInstruction) {
     const inForce = this.voiceSessions.additionalInstructions.filter(item => item.learned).map(item => ({ id: item.learned!, text: item.text.replace(`${item.learned}: `, '') }));
-    let text = instruction.text;
+    let text = instruction.text, replaces: string[] = [];
     try {
-      const reply = await this.ask(distillPrompt({ said: instruction.said ?? instruction.text, transcript: instruction.transcript, inForce, scores: instruction }));
+      const reply = await this.ask(distillPrompt({ said: instruction.said ?? instruction.text, transcript: instruction.transcript, inForce, scores: instruction, remove: instruction.remove }));
       const distilled = parseDistilled(this.clean(reply));
       this.log({ type: 'instruction.distilled', said: instruction.said, distilled, requestId: instruction.requestId });
       if ('same' in distilled) return this.jevCheck(instruction.requestId, 'instruction', `Already in force as ${distilled.same}`, instruction);
+      if ('none' in distilled) return this.jevCheck(instruction.requestId, 'instruction', 'Nothing to change in the instructions', instruction);
+      // They asked for instructions to go, and gave no new one: those are removed, as the page's Remove takes one out, and the voice says so.
+      if ('remove' in distilled) {
+        const gone = inForce.filter(item => distilled.remove.includes(item.id));
+        for (const item of gone) await this.removeInstruction(item.id);
+        if (gone.length && this.live?.state === 'active') this.mediator?.context.add('commentary', instructionsRemoved(gone));
+        return this.jevCheck(instruction.requestId, 'instruction', gone.length ? `Removed ${gone.map(item => item.id).join(', ')}` : 'Asked to remove an instruction that is not in force', instruction);
+      }
       text = distilled.text;
+      // Only instructions that are in force: the harness may name one that isn't.
+      replaces = (distilled.replaces ?? []).filter(id => inForce.some(item => item.id === id));
     } catch (error) {
       // Without the harness's wording, the operator's own words are kept, as before.
       this.log({ type: 'instruction.error', message: `Writing the instruction: ${(error as Error).message}` });
     }
     const id = await this.voiceSessions.learn({ ...instruction, text });
-    this.jevCheck(instruction.requestId, 'instruction', `Learned ${id}: ${text}`, instruction);
+    // The instructions it takes the place of go, as the page's Remove takes one out.
+    for (const old of replaces) await this.removeInstruction(old).catch(error => this.log({ type: 'instruction.error', id: old, message: (error as Error).message }));
+    this.jevCheck(instruction.requestId, 'instruction', `Learned ${id}${replaces.length ? ` in place of ${replaces.join(', ')}` : ''}: ${text}`, instruction);
   }
   /**
    * New settings for how agent updates reach GPT Live, from now on. A change is learned behavior, as an instruction Jev
@@ -208,9 +220,26 @@ export class Harness {
    */
   setTuning(next: Tuning, changes: TuningChange[] = [], by = 'Jev') {
     this.tuning = next; this.mediator?.applyTuning(next);
-    if (changes.length) { this.tuningHistory.push({ at: Date.now(), by, changes }); if (this.tuningHistory.length > 200) this.tuningHistory.shift(); }
     const id = changes.length ? randomUUID() : undefined;
-    this.log({ type: 'tuning.changed', id, tuning: next, changes }); this.publish({ type: 'tuning', id, tuning: next, changes }); this.publish(this.status());
+    if (changes.length) { this.tuningHistory.push({ id, at: Date.now(), by, changes }); if (this.tuningHistory.length > 200) this.tuningHistory.shift(); }
+    this.log({ type: 'tuning.changed', id, by, tuning: next, changes }); this.publish({ type: 'tuning', id, by, tuning: next, changes }); this.publish(this.status());
+  }
+  /**
+   * The operator takes back a change to the settings (Revert on the page): each setting it changed returns to its value
+   * before it, and is theirs from then on: Jev leaves a setting the operator set alone, as it does those set with FDC_TUNING.
+   */
+  revertTuning(id: unknown) {
+    const entry = this.tuningHistory.find(item => item.id !== undefined && item.id === id);
+    if (!entry || entry.reverted) return;
+    const next = { ...this.tuning }, changes: TuningChange[] = [];
+    for (const { name, from } of entry.changes) {
+      if (next[name] !== from) changes.push({ name, from: next[name], to: from });
+      next[name] = from;
+      if (!this.pinned.includes(name)) this.pinned.push(name);
+    }
+    entry.reverted = Date.now();
+    this.log({ type: 'tuning.reverted', id, changes });
+    this.setTuning(next, changes, 'you (reverted)');
   }
   /**
    * Jev's reading of a moment (jev.ts): the latest words (the last of `spoken`), with the latest of what the voice companion
@@ -227,6 +256,7 @@ export class Harness {
     return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(perceivedText(record, spoken.slice(0, -1), latest.at, HISTORY_BYTES)) },
       goal: moment.goal ?? this.voiceSessions.goalLine(),
       instructions: this.voiceSessions.additionalInstructions.map(item => item.text), learn: (words && this.features.has('instructions')) || undefined,
+      removable: words && this.features.has('instructions') ? this.voiceSessions.additionalInstructions.filter(item => item.learned).map(item => ({ id: item.learned!, text: item.text.replace(`${item.learned}: `, '') })) : undefined,
       tune: tune ? { earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined }, timeoutMs)
       .then(reading => Object.assign(reading, ask ? { tuneAsk: ask } : {}));
   }

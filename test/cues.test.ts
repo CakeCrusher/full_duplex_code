@@ -27,6 +27,10 @@ test('each delegated request cues once, and restored history stays silent', () =
   assert.equal(cues.cue({ type: 'task', id: 'new', state: 'dispatching' }), null);
   assert.equal(cues.cue({ type: 'task', id: 'new', state: 'sent' }), null);
   assert.equal(cues.cue({ type: 'voice_started', sessionId: 'c' }, { replaying: true }), null);
+  // A request held for the end of the agent's turn sounds when it goes to the agent.
+  assert.equal(cues.cue({ type: 'task', id: 'later', state: 'held' }), null);
+  assert.equal(cues.cue({ type: 'task', id: 'later', state: 'queued' }), 'delegate');
+  assert.equal(cues.cue({ type: 'task', id: 'later', state: 'sent' }), null);
 });
 
 test('an instruction Jev added cues once, with its own sound, and restored history stays silent', () => {

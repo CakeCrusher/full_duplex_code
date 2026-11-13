@@ -117,6 +117,8 @@ export class VoiceSessions {
   createLive = (options: ConstructorParameters<typeof LiveSession>[0]) => new LiveSession(options);
   /** How many instructions Jev has learned for this agent session, for their IDs. */
   learnedCount = 0;
+  /** The instructions Jev learned that this run knows of, oldest first, with when each was added (unknown for one restored after a restart of fdc) and removed: the page lists them (status.ts). */
+  learnedHistory: { id: string; text: string; at?: number; removed?: number }[] = [];
   /** Whether voice sessions ask OpenAI to store them for forking: off with --no-store, or once OpenAI refuses. */
   store: boolean;
   resumeStore: ResumeStore;
@@ -241,6 +243,8 @@ export class VoiceSessions {
     if (index < 0) return;
     const [item] = this.additionalInstructions.splice(index, 1), run = this.run;
     this.bridge.log({ type: 'instruction.removed', id: item.learned, text: item.text });
+    const listed = this.learnedHistory.findLast(entry => entry.id === item.learned && !entry.removed);
+    if (listed) listed.removed = Date.now();
     this.bridge.learned.remove({ session: item.learnedIn ?? this.bridge.sessionId, id: item.learned! }); this.bridge.tuneFromInstructions();
     this.rememberInstructions();
     this.bridge.publish({ type: 'instruction_removed', id: item.learned }); this.bridge.publish(this.bridge.status());
@@ -276,6 +280,7 @@ export class VoiceSessions {
     this.learnedCount = Math.max(this.learnedCount, this.record.learnedCount ?? 0);
     if (this.additionalInstructions.length || !this.record.instructions?.length) return;
     this.additionalInstructions = this.record.instructions.map(item => ({ ...item, state: 'next_session' }));
+    for (const item of this.additionalInstructions) if (item.learned) this.learnedHistory.push({ id: item.learned, text: item.text.replace(`${item.learned}: `, '') });
     this.learnedCount = Math.max(this.learnedCount, ...this.additionalInstructions.map(item => Number(item.learned?.slice(1)) || 0));
     // With Jev's tuning on, the settings fit these instructions again.
     this.bridge.tuneFromInstructions();
@@ -309,7 +314,7 @@ export class VoiceSessions {
     this.additionalInstructions.push(item);
     log({ type: 'voice.instruction', ...item });
     // Jev's: recorded, shown with Remove and announced the moment it is accepted.
-    if (learned) { this.bridge.learned.add({ session: item.learnedIn, id: learned.id, text: learned.text, scope: learned.scope }); publish({ type: 'instruction_learned', id: learned.id, text: learned.text, state: item.state }); }
+    if (learned) { this.bridge.learned.add({ session: item.learnedIn, id: learned.id, text: learned.text, scope: learned.scope }); this.learnedHistory.push({ id: learned.id, text: learned.text, at: Date.now() }); publish({ type: 'instruction_learned', id: learned.id, text: learned.text, state: item.state }); }
     publish(this.bridge.status()); this.bridge.tuneFromInstructions();
     this.rememberInstructions();
     if (!active) return item;

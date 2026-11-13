@@ -108,6 +108,24 @@ try {
   await waitFor(async () => await text(laptop, '#agentState') === 'Working' && await text(phone, '#agentState') === 'Working', 'both pages follow the session');
   harness.observer.status('idle', 'Ready');
 
+  // What Jev learned and changed is one table that scrolls, newest first: Remove for an instruction, Revert for a setting change.
+  for (const instruction of ['Keep answers under two sentences.', 'Say who is talking.']) await harness.voiceSessions.learn({ text: instruction, scope: 'session', behave: .9, design: .1, lasting: 'this_session' });
+  harness.setTuning({ ...harness.tuning, standbyAfterMs: 30000 }, [{ name: 'standbyAfterMs', from: 60000, to: 30000 }]);
+  await waitFor(async () => await laptop.locator('#learned tbody tr').count() === 3, 'a row for each instruction and each setting change');
+  assert.match((await text(laptop, '#learned tbody tr:first-child'))!, /Setting: standbyAfterMs 60 s → 30 s.*Revert/, 'the newest first, in seconds');
+  await laptop.locator('#learned tbody tr:first-child button').click();
+  await waitFor(async () => /Reverted/.test((await text(laptop, '#learned tbody tr:first-child'))!), 'Revert puts the setting back and the row says so');
+  assert.equal(harness.tuning.standbyAfterMs, 60000);
+  await laptop.getByRole('button', { name: 'Remove' }).first().click();
+  await waitFor(async () => harness.voiceSessions.additionalInstructions.length === 1 && await laptop.locator('#learned tr.undone').count() === 2, 'Remove takes the instruction out and the row says so');
+  for (let i = 1; i <= 12; i++) harness.setTuning({ ...harness.tuning, wakeThreshold: 50 + i }, [{ name: 'wakeThreshold', from: 49 + i, to: 50 + i }]);
+  await waitFor(async () => await laptop.locator('#learned tbody tr').count() === 15 && await phone.locator('#learned tbody tr').count() === 15, 'every change is listed, on every page');
+  const learnedBox = (await laptop.locator('#learned').boundingBox())!;
+  assert.ok(learnedBox.height <= 240, `the list stays contained and scrolls (${learnedBox.height}px high)`);
+  // Back to how the session started, for the rest of the run.
+  await harness.removeInstruction('I1');
+  harness.setTuning({ ...harness.tuning, wakeThreshold: 50 }, [{ name: 'wakeThreshold', from: 62, to: 50 }]);
+
   // 3. Voice runs in one page; the other can move it.
   await laptop.getByRole('button', { name: 'Start voice' }).click();
   await waitFor(async () => await text(laptop, '#connection') === 'Listening', 'voice runs on the laptop');

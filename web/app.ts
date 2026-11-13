@@ -46,17 +46,11 @@ function handle(event: BridgeEvent) {
   if (event.type === 'page') pageId = event.id;
   if (event.type === 'status') {
     currentStatus = event;
-    // The companion's learned instructions as it lists them: a card for each, and one it no longer lists was removed.
-    const listed = (event.prompt?.additional ?? []).filter((item: any) => item.learned);
-    for (const item of listed) learned({ type: 'instruction_learned', id: item.learned, text: item.text.replace(`${item.learned}: `, '') });
-    for (const card of document.querySelectorAll<HTMLElement>('.learned[id^="learned-"]:not(.removed)')) if (!listed.some((item: any) => card.id === `learned-${item.learned}`)) removed(card.id.slice('learned-'.length));
+    showLearned(event);
     showStatus(event, { active, muted, starting, standby, waking, elsewhere: Boolean(event.voicePage) && event.voicePage !== pageId });
     settingsPanel?.update(event);
   }
   if (event.type === 'agent_status') $('agentState').textContent = event.detail;
-  if (event.type === 'instruction_learned') learned(event);
-  if (event.type === 'instruction_removed') removed(event.id);
-  if (event.type === 'tuning' && event.changes?.length) tuned(event);
   // Sessions turned on or off by voice: what fdc is doing, and another companion asking this one to start voice.
   if (event.type === 'sessions' && !replaying) notice(event.text);
   // The page beside the conversation moved without the agent: by the voice's own words, or by the voice tool.
@@ -89,32 +83,41 @@ function handle(event: BridgeEvent) {
     notice(/^(Turned off|Switched to)\b/.test(event.reason ?? '') ? `${event.reason}.` : event.dropped ? `Voice dropped (${event.reason}). Click Resume voice to continue the conversation.` : event.moved ? 'Voice moved to another tab or device. Click Move voice here to bring it back.' : event.reserved === false ? 'Voice did not start. No API connection was opened.' : event.finalized ? `Voice session ended. ${profile.name} is still available in your terminal.` : 'Voice connection ended. Final usage was not confirmed; the last reported usage is saved and may be incomplete.');
   }
 }
-// Jev heard a standing instruction and added it: show what was added, under its ID, with a way to remove it.
-function learned(event: BridgeEvent) {
-  if (document.getElementById(`learned-${event.id}`)) return;
-  const card = document.createElement('article'); card.className = 'learned'; card.id = `learned-${event.id}`;
-  const text = document.createElement('p');
-  text.append(`Added instruction ${event.id}: `, Object.assign(document.createElement('q'), { textContent: event.text }));
-  const remove = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Remove' });
-  remove.onclick = () => { if (bridge.open) { bridge.send({ type: 'instruction_remove', id: event.id }); remove.disabled = true; } };
-  card.append(text, remove, Object.assign(document.createElement('small'), { textContent: 'Heard by Jev from what you said. Removing it tells this voice session to disregard it, and later sessions leave it out.' }));
-  $('learned').prepend(card);
-}
-// Jev changed how agent updates reach GPT Live: the settings and their old values, for the record, once each.
-function tuned({ id, changes }: BridgeEvent) {
-  if (id && document.getElementById(`tuned-${id}`)) return;
-  const card = document.createElement('article'); card.className = 'learned'; if (id) card.id = `tuned-${id}`;
-  const text = document.createElement('p');
-  text.textContent = `Jev adjusted the companion to your instructions: ${changes.map((c: { name: string; from: number; to: number }) => `${c.name} ${c.from} → ${c.to}`).join(', ')}.`;
-  card.append(text, Object.assign(document.createElement('small'), { textContent: 'Developer mode shows what each setting does.' }));
-  $('learned').prepend(card);
-}
-function removed(id: unknown) {
-  const card = document.getElementById(`learned-${id}`);
-  if (!card) return;
-  card.classList.add('removed');
-  card.querySelector('p')!.prepend('Removed. ');
-  card.querySelector('button')?.remove();
+// What Jev learned and changed, in one table that scrolls, newest first: the standing instructions it added from what the
+// operator said (Remove tells this voice session to disregard one, and later sessions leave it out) and the settings it
+// adjusted to them (Revert puts a setting back and keeps it there). Drawn from the companion's status, so a reload shows the
+// same table. Each used to be a card in a list that grew without bound.
+const clock = (at?: number) => at ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'earlier';
+const setting = (name: string, value: number) => name.endsWith('Ms') ? `${value / 1000} s` : String(value);
+let learnedShown = '';
+function showLearned(status: BridgeEvent) {
+  const instructions = (status.learned ?? []).map((item: any) => ({ at: item.at ?? 0, id: `learned-${item.id}`, undone: item.removed, undoneWord: 'Removed',
+    what: [`Instruction ${item.id}: `, Object.assign(document.createElement('q'), { textContent: item.text })] as (string | Node)[],
+    action: { label: 'Remove', send: { type: 'instruction_remove', id: item.id }, title: 'Heard by Jev from what you said. Removing it tells this voice session to disregard it, and later sessions leave it out.' } }));
+  // Jev's changes only: one the operator made (a revert, FDC_TUNING) is theirs, not learned behavior.
+  const settings = (status.tuningHistory ?? []).filter((entry: any) => entry.by === 'Jev' && entry.id).map((entry: any) => ({ at: entry.at, id: `tuned-${entry.id}`, undone: entry.reverted, undoneWord: 'Reverted',
+    what: [`Setting: ${entry.changes.map((c: { name: string; from: number; to: number }) => `${c.name} ${setting(c.name, c.from)} → ${setting(c.name, c.to)}`).join(', ')}`] as (string | Node)[],
+    action: { label: 'Revert', send: { type: 'tuning_revert', id: entry.id }, title: 'Jev adjusted the companion to your instructions. Reverting puts the setting back and keeps it there; Developer mode shows what each setting does.' } }));
+  // Newest first; what happened at the same moment stays in the order it happened.
+  const rows = [...instructions, ...settings].sort((a, b) => a.at - b.at).reverse();
+  const key = JSON.stringify(rows.map(row => [row.id, row.undone ?? 0]));
+  if (key === learnedShown) return; learnedShown = key;
+  if (!rows.length) { $('learned').replaceChildren(); return; }
+  const table = document.createElement('table'), body = document.createElement('tbody');
+  table.innerHTML = '<thead><tr><th>When</th><th>What Jev learned or changed</th><th></th></tr></thead>';
+  for (const row of rows) {
+    const tr = document.createElement('tr'); tr.id = row.id; if (row.undone) tr.className = 'undone';
+    const when = Object.assign(document.createElement('td'), { textContent: clock(row.at) }), what = document.createElement('td'), last = document.createElement('td');
+    what.append(...row.what);
+    if (row.undone) last.textContent = `${row.undoneWord} ${clock(row.undone)}`;
+    else {
+      const button = Object.assign(document.createElement('button'), { type: 'button', textContent: row.action.label, title: row.action.title });
+      button.onclick = () => { if (bridge.open) { bridge.send(row.action.send); button.disabled = true; } };
+      last.append(button);
+    }
+    tr.append(when, what, last); body.append(tr);
+  }
+  table.append(body); $('learned').replaceChildren(table);
 }
 
 $<HTMLFormElement>('instruction-form').onsubmit = event => {

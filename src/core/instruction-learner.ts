@@ -7,9 +7,9 @@
 // instructions, 5 borderline ones and nothing else.
 
 import fs from 'node:fs';
-import { BEHAVE, DESIGN, type Reading } from './jev.ts';
+import { BEHAVE, DESIGN, REMOVE, type Reading } from './jev.ts';
 
-export interface LearnedInstruction { text: string; scope: 'session' | 'always'; behave: number; design: number; lasting: string; /** What the operator said, and the conversation Jev read it in, for writing the instruction. */ said?: string; transcript?: string; /** The request to the harness it came from. */ requestId?: string }
+export interface LearnedInstruction { text: string; scope: 'session' | 'always'; behave: number; design: number; lasting: string; /** The instruction in force that Jev finds the words ask to remove, if any: a hint for the harness that writes what changes. */ remove?: string; /** What the operator said, and the conversation Jev read it in, for writing the instruction. */ said?: string; transcript?: string; /** The request to the harness it came from. */ requestId?: string }
 export interface Judged { requestId?: string; said: string; behave: number; design: number; lasting: string; learned: boolean }
 
 export class InstructionLearner {
@@ -21,17 +21,19 @@ export class InstructionLearner {
     this.onLearn = onLearn; this.onJudged = onJudged; this.log = log;
   }
   /** Learns the latest words Jev read when they are a lasting instruction to the companion. */
-  consider({ said, transcript, instruction }: Reading, requestId?: string): LearnedInstruction | undefined {
+  consider({ said, transcript, instruction, remove }: Reading, requestId?: string): LearnedInstruction | undefined {
     const text = said.replace(/\s+/g, ' ').trim();
     if (!instruction || text.split(' ').length < 3) return;
     const { behave, design, lasting } = instruction;
     this.log({ type: 'instruction.judged', behave, design, lasting, requestId });
-    const learned = behave >= BEHAVE && design < DESIGN && lasting !== 'this_moment';
+    // Also when Jev finds they ask for an instruction in force to go: the harness then decides what changes (instruction-distiller.ts).
+    const drop = remove && remove.p >= REMOVE ? remove.id : undefined;
+    const learned = (behave >= BEHAVE && design < DESIGN && lasting !== 'this_moment') || Boolean(drop);
     this.onJudged?.({ requestId, said: text, behave, design, lasting, learned });
     if (!learned) return;
     // What gets kept is the operator's own words, within an appended instruction's size limit.
     let kept = text; while (Buffer.byteLength(kept) > 400) kept = kept.slice(0, -10);
-    const learnedInstruction: LearnedInstruction = { text: kept === text ? text : `${kept.trim()}…`, scope: lasting === 'always' ? 'always' : 'session', behave, design, lasting, said: text, transcript, requestId };
+    const learnedInstruction: LearnedInstruction = { text: kept === text ? text : `${kept.trim()}…`, scope: lasting === 'always' ? 'always' : 'session', behave, design, lasting, said: text, transcript, requestId, ...drop && { remove: drop } };
     this.onLearn(learnedInstruction);
     return learnedInstruction;
   }

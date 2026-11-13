@@ -62,6 +62,12 @@ export const PAGE_MORE = .5;
 export const GOAL = .6;
 // The learner's held-out thresholds from the offline test.
 export const BEHAVE = .6, DESIGN = .5;
+// Words that ask for an instruction Jev learned to go are passed to the harness's one-off run, which decides what changes
+// in the list (instruction-distiller.ts), when Jev is this sure of which one. On 14 made-up removal requests over real
+// moments it chose the right one 13 times, at .79 or more; on 117 real turns it chose one once, at .70, where the operator
+// was replacing it. In the recordings of Oct 31 to Nov 12 nobody asked by voice: the eight removals since Oct 11 were
+// clicks on the page.
+export const REMOVE = .7;
 // The operator's words go to the coding agent from this likelihood that they need it, read once the voice companion has
 // replied, and once they have finished saying them (READY). The companion answers from what it was told and general
 // knowledge and says when it doesn't know (prompts.ts), so its reply shows what it can't handle. On the 56 validation
@@ -82,7 +88,7 @@ export const STANDBY = .7;
 // What Jev reads of what the voice companion perceived: its latest 14 KB (perceived.ts).
 export const HISTORY_BYTES = 14000;
 /** For the record (jev-audit.ts): the likelihood at which each question's answer changes what fdc does. */
-const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, now: NOW, standby: STANDBY, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
+const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, now: NOW, remove: REMOVE, standby: STANDBY, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
 
 /** One utterance of the conversation. */
 export interface Line { role: 'operator' | 'intermediary'; text: string }
@@ -118,6 +124,8 @@ export interface Reading {
   now?: number;
   sessions?: SessionsJudgment; companionOnly?: number;
   page?: PageJudgment; instruction?: InstructionJudgment; goal?: GoalJudgment;
+  /** The learned instruction the words ask to remove, and how likely (asked only while some are in force). */
+  remove?: { id: string; p: number };
   /** The level of each setting Jev chose (jev-tuner.ts). */
   tuning?: Record<string, unknown>;
   /** That the latest words end the conversation for now (the companion then goes on Standby). */
@@ -145,6 +153,8 @@ export interface Moment {
   sent?: { ago: number; said: string };
   /** Ask whether the words give a standing instruction (the learner). */
   learn?: boolean;
+  /** The instructions Jev learned that are in force (their IDs and text): ask whether the words ask for one of them to be removed. */
+  removable?: { id: string; text: string }[];
   /** Ask which settings fit (the tuner): the instructions from earlier sessions, the current settings and those set by hand. */
   tune?: { earlier: string[]; current: Tuning; pinned: (keyof Tuning)[] };
   /** For the record only (jev-audit.ts), not sent: the request the words go to the agent by, and how words already sent went (trigger unsent). */
@@ -293,6 +303,13 @@ const LEARNER = {
     criteria: { this_moment: 'Only right now, e.g. stop the current sentence or skip this one.', this_session: 'For the rest of this conversation, task or phase.', always: 'In every session: a standing preference.' } },
 };
 
+// Asked with the learner's questions while instructions Jev learned are in force: adding was all it could do, and the
+// operator had to click Remove on the page.
+const removeQuestion = (removable: { id: string; text: string }[]) => ({ remove: { type: 'choice',
+  instructions: 'In the latest words, does the operator ask the voice companion to drop one of their standing instructions (`operator_instructions`): to forget it, stop following it, or go back to how it was before it?',
+  criteria: { none: "No instruction is to be dropped: they give a new instruction, repeat or tighten one, complain, ask for something once, or say to ignore or forget something that isn't one of these instructions (a request, a remark, something the companion said).",
+    ...Object.fromEntries(removable.map(item => [item.id, `They ask to drop ${item.id} ("${item.text.replace(/\s+/g, ' ').slice(0, 200)}"): to forget it, stop following it, undo it, or they say it no longer applies.`])) } } });
+
 export class Jev {
   apiKey: string; fetch: Fetch;
   log: (event: Record<string, unknown>) => void;
@@ -305,7 +322,7 @@ export class Jev {
   }
   /** What one call sends Jev about a moment: the state it reads and the questions asked of it (a recorded moment can be put to it again). */
   ask(moment: Moment): { state: Record<string, string>; questions: Record<string, unknown> } {
-    const { trigger, latest, history = '', instructions, sessions, page, learn, tune, reply } = moment;
+    const { trigger, latest, history = '', instructions, sessions, page, learn, tune, reply, removable } = moment;
     const gate = trigger === 'turn' || trigger === 'delegation', job = trigger === 'job' || trigger === 'unsent';
     // The latest words in their own field: marked inside the conversation instead, Jev read plain page moves as likelier
     // work for the agent (page_work up by .1 on average, Oct 21).
@@ -326,7 +343,7 @@ export class Jev {
       // Words about how the companion behaves are for the learner and the tuner: asked only while either is on.
       ...gate && { ...(learn || tune) && { companion_only: GATE.companion_only }, standby: GATE.standby, ...GOAL_QUESTION, ...sessions && sessionQuestions(sessions) },
       ...page && (trigger === 'cue' || trigger === 'step') && pageQuestions(page, trigger),
-      ...learn && LEARNER,
+      ...learn && LEARNER, ...learn && gate && removable?.length && removeQuestion(removable),
       ...tune && tunerQuestions(tune.current, tune.pinned, trigger !== 'settings'),
     };
     return { state, questions };
@@ -372,6 +389,8 @@ export class Jev {
       this.log({ type: 'page.judged', trigger, said: said.slice(-200), command: top, more: Number(reading.page!.more?.toFixed(2)) });
     }
     if (learn) reading.instruction = { behave: p('behave', NaN), design: p('design_talk', NaN), lasting: answers?.lasting?.choice };
+    const drop = answers?.remove;
+    if (drop?.choice && drop.choice !== 'none' && moment.removable?.some(item => item.id === drop.choice)) reading.remove = { id: drop.choice, p: Number(drop.probabilities?.[drop.choice] ?? drop.confidence ?? 1) };
     if (tune) reading.tuning = answers;
     this.log({ type: 'jev.read', id: call.id, trigger, said: said.slice(-200), questions: Object.keys(questions).length, chars: JSON.stringify(state).length, ms: Date.now() - started, needsAgent: reading.needsAgent, ready: reading.ready, ...trigger === 'job' && { reply: state.voice_reply.slice(-200) }, companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions, instruction: reading.instruction });
     return reading;

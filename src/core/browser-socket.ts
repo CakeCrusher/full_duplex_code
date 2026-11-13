@@ -41,6 +41,7 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
       if (event.type === 'page_ready' && ['granted', 'prompt', 'denied', 'unknown'].includes(event.microphone)) { page.ready = { microphone: event.microphone, clicked: event.clicked === true }; bridge.publish(bridge.status()); }
       if (event.type === 'voice_on_failed') { bridge.log({ type: 'sessions.voice_on_failed', page: page.id, message: event.message }); bridge.sessionSwitch.failed(event.message); }
       if (event.type === 'instruction_remove') bridge.removeInstruction(event.id).catch(error => bridge.fault(error));
+      if (event.type === 'tuning_revert') bridge.revertTuning(event.id);
       // Only pages that held a microphone send this, after their voice ended.
       if (event.type === 'audio_stopped') { bridge.log({ type: 'audio_stopped', liveRun: bridge.live?.reservation, page: page.id }); bridge.publish({ type: 'audio_stopped' }); bridge.saveTimeline(); }
       // Recorded from the page that is about to start voice too.

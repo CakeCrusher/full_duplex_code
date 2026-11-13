@@ -3,7 +3,7 @@
 // change in this run, newest first.
 interface Knob { min: number; max: number; describe: string; levels: { value: number; consequence: string }[] }
 interface Change { name: string; from: number; to: number }
-interface Status { tuning?: Record<string, number>; tuningPinned?: string[]; tuningHistory?: { at: number; by: string; changes: Change[] }[]; jevTuning?: boolean }
+interface Status { tuning?: Record<string, number>; tuningPinned?: string[]; tuningHistory?: { at: number; by: string; changes: Change[]; reverted?: number }[]; jevTuning?: boolean }
 
 const GROUPS: [title: string, names: string[]][] = [
   ['How agent updates reach GPT Live', ['holdFirstMs', 'holdPerUpdateMs', 'holdLongestMs', 'thinkMs', 'pauseMs', 'compactTokens']],
@@ -28,14 +28,14 @@ export function mountSettings(section: HTMLElement, token: string | null) {
   function setBy(name: string, status: Status) {
     const entry = [...status.tuningHistory ?? []].reverse().find(item => item.changes.some(change => change.name === name));
     if (entry) { const change = entry.changes.find(c => c.name === name)!; return `${entry.by} at ${clock(entry.at)}, from ${format(name, change.from)}`; }
-    return status.tuningPinned?.includes(name) ? 'FDC_TUNING' : 'default';
+    return status.tuningPinned?.includes(name) ? 'you' : 'default';
   }
   // The bridge's status event, sent every second.
   function update(event: Record<string, any>) {
     const status = event as Status;
     last = status;
     if (!knobs || !status.tuning) return;
-    const key = JSON.stringify([status.tuning, status.tuningPinned, status.tuningHistory?.length, status.jevTuning]);
+    const key = JSON.stringify([status.tuning, status.tuningPinned, status.tuningHistory?.map(entry => entry.reverted ?? 0), status.jevTuning]);
     if (key === shown) return; shown = key;
     jev.textContent = status.jevTuning ? 'Jev tuning is on: Jev picks the levels from your instructions and words; settings set with FDC_TUNING are left to you.' : 'Jev tuning is off (--features configuration with TYPESAFE_API_KEY turns it on): the settings are the defaults and FDC_TUNING.';
     body.replaceChildren(...GROUPS.map(([title, names]) => {
@@ -70,7 +70,7 @@ export function mountSettings(section: HTMLElement, token: string | null) {
     const changes = [...status.tuningHistory ?? []].reverse();
     history.replaceChildren(...(changes.length ? changes.map(entry => {
       const item = tag('li');
-      item.append(tag('time', clock(entry.at)), tag('b', entry.by), ` ${entry.changes.map(c => `${c.name} ${format(c.name, c.from)} → ${format(c.name, c.to)}`).join(', ')}`);
+      item.append(tag('time', clock(entry.at)), tag('b', entry.by), ` ${entry.changes.map(c => `${c.name} ${format(c.name, c.from)} → ${format(c.name, c.to)}`).join(', ')}${entry.reverted ? ` (reverted at ${clock(entry.reverted)})` : ''}`);
       return item;
     }) : [tag('li', 'No changes in this run: the settings are as they started.')]));
   }

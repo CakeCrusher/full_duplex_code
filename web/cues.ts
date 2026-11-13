@@ -26,13 +26,14 @@ export class CueTracker {
     if (event.type === 'voice_closed' && event.waking) return null;
     if (event.type === 'voice_closed') return this.end();
     // Behavior Jev learned, an instruction or a change to the settings: once each, and never from restored history.
-    const learned = event.type === 'instruction_learned' || (event.type === 'tuning' && event.changes?.some((change: any) => change.from !== change.to));
+    const learned = event.type === 'instruction_learned' || (event.type === 'tuning' && (event.by === undefined || event.by === 'Jev') && event.changes?.some((change: any) => change.from !== change.to));
     if (learned && typeof event.id === 'string') {
       if (this.tasks.has(`learned-${event.id}`)) return null;
       this.tasks.add(`learned-${event.id}`);
       return replaying ? null : 'learned';
     }
-    if (event.type === 'task' && typeof event.id === 'string') {
+    // A request held for the end of the agent's turn sounds when it goes, not when it is held.
+    if (event.type === 'task' && typeof event.id === 'string' && event.state !== 'held') {
       if (this.tasks.has(event.id)) return null;
       this.tasks.add(event.id);
       return replaying ? null : 'delegate';

@@ -126,4 +126,12 @@ test('a learned instruction is written by a one-off run of the harness, told Jev
   assert.equal(harness.voiceSessions.additionalInstructions[1].text, 'I2: Keep every answer short from now on');
   const log = fs.readFileSync(path.join(root, 'run', 'events.jsonl'), 'utf8');
   assert.match(log, /"type":"instruction\.distilled","said":"Oh and um never like read the paths out loud to me okay"/, 'the operator\'s words stay in the log');
+  // An instruction that takes the place of others in force: they are removed, and the list holds what the operator wants now.
+  replies.push('<instruction>Give long, detailed answers.</instruction>\n<replaces>I2, I9</replaces>');
+  harness.consider(read('Actually no, I want long detailed answers from now on', .9, .1, 'always'), 'r4');
+  await until(() => checks.length === 4);
+  assert.match(prompts[3], /add <replaces>IDs<\/replaces> only if the new instruction takes the place of instructions already in force/);
+  assert.deepEqual(harness.voiceSessions.additionalInstructions.map(i => i.text), ["I1: Don't read file paths out loud.", 'I3: Give long, detailed answers.'], 'I2 is gone; I9 was never in force');
+  assert.equal(checks[3].outcome, 'Learned I3 in place of I2: Give long, detailed answers.');
+  assert.deepEqual(harness.status().learned.map((item: any) => [item.id, Boolean(item.removed)]), [['I1', false], ['I2', true], ['I3', false]]);
 });
