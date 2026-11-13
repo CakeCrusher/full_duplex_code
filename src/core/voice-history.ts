@@ -31,6 +31,12 @@ export interface SpokenRequest {
 }
 // Any sample louder than this is sound; the page's gate sends exact silence, which echoes back at about 1.
 const SOUND_PEAK = 64;
+// Pieces GPT Live transcribes from noise or leaks from its own stream: letters in another script than the conversation's
+// (the voice speaks English: "्क", "બહાર"), or part of a control token ("<|stream", "<"). Never the operator's words. Rare
+// (17 of 31,199 pieces in ten runs, Oct 31 to Nov 12), but one of them, given to a woken connection as the operator's
+// turn, had it speak Hindi (Nov 4), and two went to the agent as requests by themselves.
+const LETTER = /[\p{L}\p{M}]/u, LATIN = /\p{Script=Latin}/u;
+export const phantom = (text: string) => /<\||^[\s<>|\uFFFD]*[<>|\uFFFD][\s<>|\uFFFD]*$/.test(text) || (LETTER.test(text) && !LATIN.test(text));
 
 // Each speaker's speech joins until they pause, so the other speaker's
 // backchannels never split it.
@@ -57,7 +63,7 @@ export class VoiceHistory {
     const role = event.type === 'session.input_transcript.delta' ? 'operator' : 'intermediary';
     const fragment: TranscriptFragment = { seq: this.fragments.length, role, text: event.delta, startMs: event.start_ms, endMs: event.end_ms, receivedAt: Date.now() };
     this.fragments.push(fragment);
-    if (role === 'operator') this.lastInputAt = fragment.receivedAt;
+    if (role === 'operator' && !phantom(fragment.text)) this.lastInputAt = fragment.receivedAt;
     return fragment;
   }
   hearAudio({ audio, start_ms: startMs, end_ms: endMs }: { audio: string; start_ms: number; end_ms: number }) {
@@ -96,8 +102,8 @@ export class VoiceHistory {
     }
     return covered >= .9 * (to - from) ? false : undefined;
   }
-  /** Operator words GPT Live transcribed from silence (see audible). */
-  unheard(fragment: TranscriptFragment) { return fragment.role === 'operator' && !fragment.carried && this.audible(fragment.startMs, fragment.endMs) === false; }
+  /** Operator words GPT Live transcribed from silence (see audible), or pieces that are no speech of theirs (phantom). */
+  unheard(fragment: TranscriptFragment) { return fragment.role === 'operator' && (phantom(fragment.text) || (!fragment.carried && this.audible(fragment.startMs, fragment.endMs) === false)); }
   // The conversation since the previous request: anything said before it went with the previous request, unless the agent
   // never got it. Transcript arrival can trail the end of the operator's turn, so the caller waits briefly for it first.
   request(): SpokenRequest | null {

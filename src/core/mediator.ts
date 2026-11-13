@@ -3,7 +3,7 @@ import type { EventEmitter } from 'node:events';
 import type { Observation, VoiceRequest } from './adapter.ts';
 import type { AgentObserver, ObservedAgent } from './agent-observer.ts';
 import { ContextQueue, type ContextSink } from './context-queue.ts';
-import { VoiceHistory, type Spoken, type SpokenRequest } from './voice-history.ts';
+import { phantom, VoiceHistory, type Spoken, type SpokenRequest } from './voice-history.ts';
 import { ObservationFeed, type Hold } from './observation-feed.ts';
 import { Floor, operatorSpeaking, type MicrophoneLevel } from './floor.ts';
 import { DEFAULT_TUNING, holdOf, type Tuning } from './tuning.ts';
@@ -160,7 +160,7 @@ export class Mediator {
     }
     // The operator's turn ends when GPT Live starts answering them, after a moment's quiet, or when GPT Live asks to pass
     // their words on. Their transcript also shows they are talking, for pages that send no levels.
-    if (event.type === 'session.input_transcript.delta' && String(event.delta ?? '').trim()) { this.floor.hear(); this.listen(); }
+    if (event.type === 'session.input_transcript.delta' && String(event.delta ?? '').trim() && !phantom(String(event.delta))) { this.floor.hear(); this.listen(); }
     if (event.type === 'session.output_transcript.delta') this.answered(String(event.delta ?? ''));
     if (event.type === 'session.delegation.created' && event.delegation?.target === 'client' && !this.seenDelegations.has(event.delegation.id)) {
       this.seenDelegations.add(event.delegation.id);
@@ -226,6 +226,8 @@ export class Mediator {
     // Jev failing, the words go to the agent: keeping work from it is the costly mistake.
     const decided = Promise.all([actions, this.order]).then(async ([done]): Promise<Decision> => {
       if (!route || !done) return { send: true };
+      // The wait for a reply that never begins (replyStartMs) is not idle: in 70 of the 215 turns the voice didn't answer
+      // (Oct 31 to Nov 12), the operator went on speaking during it, and their words then waited instead of going in pieces.
       const reply = await this.replyTo(spoken.at(-1)?.at ?? heardAt, heardAt);
       // They went on speaking before the decision, so they haven't finished: nothing is sent yet, and the end of their turn
       // reads these words with what they add. Sent at once, they went in pieces ("Actually, I like the soft shapes one the"
@@ -271,7 +273,7 @@ export class Mediator {
     this.log({ type: 'turn.kept', id, said: this.said(request).slice(-200), needsAgent: reading?.needsAgent ?? null, handled: Boolean(note), ...wait && { waiting: true } });
     this.audit?.record({ handOff: 'kept', said: this.said(request), voiceSessionId: this.live.id, delegationId: delegationId ?? null, requestId: id, jevCall: reading?.id }, reading?.needsAgent ?? null, reading?.transcript);
     this.giveBack(id, note);
-    if (delegationId && !told && !toldBefore) this.outcome(delegationId, { send: false });
+    if (delegationId && !told && !toldBefore) this.outcome(delegationId, { send: false, wait });
   }
   /**
    * The voice now says it can't answer or find what the operator asked (presenter.ts: it looked on the page and it isn't

@@ -125,8 +125,11 @@ export function companionNoted({ profile: { name } }: Agent, features: Features)
 export const nothingToSend = ({ profile: { name } }: Agent) =>
   `No new operator speech is available to send. Answer from the observed ${name} session; already submitted requests must not be resent.`;
 // GPT Live asked to pass on words the voice tool had already read: what came of them.
-export const turnOutcome = ({ profile: { name, product } }: Agent, { send }: { send: boolean }) => send
+// Words that wait because the operator hasn't finished are not "nothing for the agent": told so, the voice contradicted
+// itself when they went a moment later (Nov 4).
+export const turnOutcome = ({ profile: { name, product } }: Agent, { send, wait }: { send: boolean; wait?: boolean }) => send
   ? `The operator's words went to ${product} already; you'll be told when it has them.`
+  : wait ? `Nothing was sent to ${product} yet: the operator hasn't finished saying it. Their words go once they have, if they need ${name}; you'll be told.`
   : `Nothing was sent to ${product}: the voice tool found the operator's words need nothing from ${name}. Answer them yourself; whatever they ask ${name} to do goes to it when they say so.`;
 export const queueFailed = ({ profile: { name } }: Agent) =>
   `The voice bridge failed to queue the user’s request for ${name}. The request was not delivered; the terminal connection needs attention.`;

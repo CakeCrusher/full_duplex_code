@@ -33,7 +33,8 @@ fs.mkdirSync(cwd, { recursive: true }); spawnSync('git', ['init', '--quiet'], { 
 const evidence: Record<string, any> = { agent, fdc, passed: false };
 const work = 'Create five files one at a time, in this order: a.txt, b.txt, c.txt, d.txt, e.txt. Each contains just its letter. Before each file, run the shell command `sleep 15`. Write one short sentence before each file saying which file is next. When all are done, say DONE.';
 const request = synthesize('fdc-request', 'Please also create one more file, named voice dot txt, containing the word voice.');
-const pressing = synthesize('fdc-pressing', 'Wait, this cannot wait: do not create the last file, e dot txt. Skip that one.');
+// Words that change the work under way and name no file: a transcript that drops a word must not leave the agent asking which one.
+const pressing = synthesize('fdc-pressing', 'Wait, this cannot wait: from now on use sleep five instead of sleep fifteen.');
 const question = synthesize('fdc-question', 'Which files have been created so far?');
 const recall = synthesize('fdc-recall', 'Which files were created earlier in this session?');
 
@@ -114,13 +115,13 @@ try {
   const arrival = (id: string) => until(() => run!.events().find(e => e.type === 'agent.input' && String(e.text).includes(id)), { label: `${agent} received request ${id.slice(0, 8)}`, timeout: 120000 });
   const received = await arrival(task.id), pressed = await arrival(urgent.id);
   const idles = () => run!.events().filter(e => e.type === 'agent.status' && e.state === 'idle' && e.at >= typedAt);
-  await until(() => fs.existsSync(path.join(cwd, 'voice.txt')) && files().length >= 5, { label: 'the work and the request done', timeout: 360000 });
+  await until(() => fs.existsSync(path.join(cwd, 'voice.txt')) && files().length >= 6, { label: 'the work and the request done', timeout: 360000 });
   await waitFor(async () => (await run!.status()).agent === 'idle', `${agent} idle`, 120000);
   const firstIdle = idles()[0];
   assert.ok(pressed.at < firstIdle.at, 'the words that cannot wait arrived mid-turn, before the agent first finished');
   assert.ok(received.at <= pressed.at, 'the first request arrived before them: steered in itself, or brought in by them');
   evidence.firstRequest = task.state === 'held' ? 'held for the end of the turn, then brought in by words that could not wait' : 'steered into the turn';
-  evidence.lastFileSkipped = !fs.existsSync(path.join(cwd, 'e.txt'));
+  evidence.shorterSleepUsed = run.events().some(e => e.type === 'agent.hook' && e.at > pressed.at && /sleep 5\b/.test(JSON.stringify(e.tool_input ?? '')));
   assert.match(fs.readFileSync(path.join(cwd, 'voice.txt'), 'utf8'), /voice/i);
   await delay(4000);
   const asked = Date.now();

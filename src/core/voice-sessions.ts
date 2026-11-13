@@ -544,8 +544,13 @@ export class VoiceSessions {
   walkOn(run: Run, now = Date.now()) {
     const goal = this.goal, mediator = run.mediator, presented = this.bridge.presenter.presentedAt;
     if (!goal?.walk || this.run !== run || run.live.state !== 'active' || mediator.pending) return;
-    if (presented <= Math.max(mediator.history.lastInputAt, run.walkedOnAt ?? 0, goal.at)) return;
+    // Only this connection's own presenting counts, and its quiet: a connection just woken from Standby had neither heard nor
+    // said anything, which read as a long quiet, and was told to go on 2.5 s in (all nine wakes with a walkthrough, Nov 4).
+    const begun = run.live.startedAt ?? now;
+    if (presented <= Math.max(mediator.history.lastInputAt, run.walkedOnAt ?? 0, goal.at, begun)) return;
     if (now - mediator.history.lastInputAt < WALK_QUIET_MS || now - mediator.answerAt < WALK_QUIET_MS || now - presented < WALK_QUIET_MS) return;
+    // Not while the agent is still working on what the operator asked from here: its answer comes first.
+    if (this.bridge.agentWorking() !== undefined && mediator.lastSent && mediator.lastSent.at > Math.max(run.walkedOnAt ?? 0, goal.at)) return;
     run.walkedOnAt = now;
     this.bridge.log({ type: 'goal.walk_on', shown: goal.shown.length });
     mediator.context.add('commentary', walkOn(goal));

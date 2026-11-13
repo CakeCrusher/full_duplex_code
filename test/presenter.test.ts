@@ -157,6 +157,15 @@ test('a walkthrough goes on while the operator listens, as long as the voice car
   const at = Date.now();
   // They asked; the voice presented a part after their words; then both went quiet.
   h.voiceSessions.goal!.at = at - 9500; mediator.history.lastInputAt = at - 9000; mediator.answerAt = at - 7000; h.presenter.presentedAt = at - 8000;
+  // A connection that began after the voice last presented (one woken from Standby) has carried nothing yet: no cue.
+  h.voiceSessions.walkOn(run, at);
+  assert.equal(cues().length, 0, 'a connection that has just begun is not told to go on');
+  run.live.startedAt = at - 20000;
+  // Nor while the agent is still working on something the operator asked from here: its answer comes first.
+  h.workingSince = at - 5000; mediator.lastSent = { at: at - 4000, said: 'Check that number for me.' };
+  h.voiceSessions.walkOn(run, at);
+  assert.equal(cues().length, 0, "the agent's answer to their request comes before the next part");
+  h.workingSince = undefined;
   h.voiceSessions.walkOn(run, at);
   assert.equal(cues().length, 1, 'told to go on');
   assert.match(cues()[0][1], /\("Walk me through the whole report, section by section\."\): go on to the next part now\. If it is all covered, say so in a sentence\.$/);

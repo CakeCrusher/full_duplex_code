@@ -7,6 +7,7 @@ import { Mediator, type Decision, type Route } from '../src/core/mediator.ts';
 import { jobTurn, type Waiting } from '../src/core/turn.ts';
 import type { VoiceRequest } from '../src/core/adapter.ts';
 import { settle, until } from './live-fake.ts';
+import { phantom } from '../src/core/voice-history.ts';
 
 // A mediator whose job delegation decides by `decide`, given the latest words it reads and what waited before them; quick timers.
 function fixture(t: TestContext, decide: (latest: string, waiting: Waiting, call: number) => Decision) {
@@ -195,4 +196,18 @@ test("moments after a request was held for the turn's end, an acknowledgment sta
   assert.deepEqual(await decide(.1, .8, true), { send: true, later: false, held: true }, '"no, send it now": steered in, which brings the held request with it');
   assert.deepEqual(await decide(.1, .8, false), { send: false, later: false, held: undefined }, 'after a request already delivered, words that add nothing stay with the voice');
   assert.deepEqual(await decide(.9, .1, true), { send: true, later: true, held: true }, 'an addition that can wait is held too');
+});
+
+test('pieces of transcript that are no speech of the operator (another script, a control token) are not their words: no turn, no request, no seed', async t => {
+  assert.deepEqual(['्क', 'બહાર', '<|stream', '<', ' <| ', '\uFFFD'].map(phantom), [true, true, true, true, true, true]);
+  assert.deepEqual([' Yeah', 'café', '4', '?', ' ', 'naïve résumé', 'a < b'].map(phantom), [false, false, false, false, false, false, false], 'speech, digits and punctuation stay');
+  const f = fixture(t, () => ({ send: true }));
+  f.say('्क');
+  await settle(250);
+  assert.deepEqual([f.jobs.length, f.deliveries.length, f.m.history.lastInputAt], [0, 0, 0], 'no turn is read for it');
+  f.say('Add a legend.');
+  f.say(' બહાર');
+  await until(() => f.deliveries.length === 1);
+  assert.doesNotMatch(f.deliveries[0].content, /્ક|બહાર/, 'and it is no part of what the agent gets');
+  assert.deepEqual(f.m.history.turns().map(turn => turn.text), ['Add a legend.'], 'nor of the conversation a later connection is seeded with');
 });
