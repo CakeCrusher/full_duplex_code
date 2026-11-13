@@ -12,6 +12,7 @@ import { root, synthesize, connectVoice, until, delay } from './test-support.ts'
 // agent's terminal; a spoken request while the agent works, which is steered into
 // the turn or, when Jev finds it can wait, held for the turn's end; then words that
 // can't wait, which must arrive mid-turn and bring a held request in before them;
+// later a request that says it can wait, which held must arrive when the turn ends;
 // both acted on; a spoken question about the work; exit; then the
 // session resumed with the agent's own option, and a spoken question its
 // history must answer. Spends GPT Live and the agent's own usage.
@@ -36,6 +37,8 @@ const request = synthesize('fdc-request', 'Please also create one more file, nam
 // Words that change the work under way and name no file: a transcript that drops a word must not leave the agent asking which one.
 const pressing = synthesize('fdc-pressing', 'Wait, this cannot wait: from now on use sleep five instead of sleep fifteen.');
 const question = synthesize('fdc-question', 'Which files have been created so far?');
+// Words that say themselves they can wait: held while the agent works, they must reach it when its turn ends.
+const waiting = synthesize('fdc-waiting', 'No rush on this one. Once you have finished what you are doing, create a file named later dot txt containing the word later.');
 const recall = synthesize('fdc-recall', 'Which files were created earlier in this session?');
 
 // One fdc run in a terminal, as a user starts it. Accepts the agent's own first-run prompts.
@@ -85,6 +88,8 @@ async function waitFor(check: () => Promise<boolean>, label: string, timeout: nu
 }
 const said = (voice: Awaited<ReturnType<typeof connectVoice>>, since: number) => voice.events.filter(e => e.type === 'caption' && e.role === 'intermediary' && e.at >= since).map(e => e.text).join('');
 const files = () => fs.readdirSync(cwd).filter(f => f.endsWith('.txt')).sort();
+// A file named as the voice says it ("a.txt", "a dot txt", "a dot t-x-t"): the greeting's own "voice companion" is no answer.
+const namesFile = (text: string) => /\b[a-e](\.| dot )t(xt|-x-t)\b/i.test(text);
 
 let run: Awaited<ReturnType<typeof launch>> | undefined, voice: Awaited<ReturnType<typeof connectVoice>> | undefined;
 try {
@@ -126,7 +131,29 @@ try {
   await delay(4000);
   const asked = Date.now();
   await voice.speak(question);
-  const answer = await until(() => { const text = said(voice!, asked); return /voice/i.test(text) && /\b[abcd]\b|[abcd]\.txt|three|four|five/i.test(text) ? text : ''; }, { label: 'an answer naming the files', timeout: 45000 });
+  const answer = await until(() => { const text = said(voice!, asked); return /voice/i.test(text) && namesFile(text) ? text : ''; }, { label: 'an answer naming the files', timeout: 45000 });
+  // A request that can wait, spoken while the agent works on something else: held, it reaches the agent when its turn
+  // ends (by the agent's own report of the end), and is done then.
+  const again = Date.now();
+  // Two short sleeps: Claude runs a long one in the background and ends its turn, or declines to wait in the foreground.
+  run.terminal.write('Run the shell command `sleep 15`, then run it once more, then say READY.'); await delay(500); run.terminal.write('\r');
+  await until(() => run!.events().some(e => e.type === 'agent.status' && e.at >= again && / is using bash$/i.test(e.detail ?? '')), { label: `${agent} started the second piece of work`, timeout: 90000 });
+  await delay(2500);
+  await voice.speak(waiting);
+  const later = await until(() => run!.events().find(e => e.type === 'task' && e.at >= again && ['held', 'sent'].includes(e.state)), { label: 'the request that can wait went, or is held', timeout: 60000 });
+  await until(() => fs.existsSync(path.join(cwd, 'later.txt')), { label: 'the request that could wait was done', timeout: 300000 });
+  if (later.state === 'held') {
+    const released = run.events().find(e => e.type === 'task.released' && e.id === later.id), ended = run.events().find(e => e.type === 'agent.status' && e.state === 'idle' && e.at >= again);
+    assert.ok(released && !released.pressed, 'the held request was released by the end of the turn, not pressed');
+    assert.ok(ended && Math.abs(released.at - ended.at) < 2000, `released as the agent finished (${released.at - ended!.at} ms from its going idle)`);
+    evidence.waitingRequest = `held ${released.heldSeconds} s, delivered when the turn ended, and done`;
+  } else {
+    // Delivered at once. Between turns that is right (the agent ended its turn early, with the command left running in
+    // the background); in the middle of one, Jev read words that say they can wait as needed now.
+    const asked = run.events().findLast(e => e.type === 'turn.job' && e.at >= again)?.now;
+    assert.equal(asked, undefined, `words that say they can wait were steered into the turn (Jev read now at ${asked})`);
+    evidence.waitingRequest = 'delivered at once and done: the agent was between turns, so holding was not exercised';
+  }
   await delay(3000); await voice.close(); voice = undefined;
   Object.assign(evidence, { sessionId: run.sessionId, request: task.id, receivedMidTurn: true, files: files(), answer });
   await run.quit();
@@ -140,7 +167,7 @@ try {
   await delay(1500);
   const recalled = Date.now();
   await voice.speak(recall);
-  evidence.recall = await until(() => { const text = said(voice!, recalled); return /voice/i.test(text) ? text : ''; }, { label: 'history recalled after resume', timeout: 45000 });
+  evidence.recall = await until(() => { const text = said(voice!, recalled); return namesFile(text) ? text : ''; }, { label: 'history recalled after resume', timeout: 45000 });
   await delay(3000); await voice.close(); voice = undefined;
   await run.quit(); run = undefined;
   evidence.passed = true;
