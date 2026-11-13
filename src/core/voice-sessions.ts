@@ -10,7 +10,7 @@ import { jobTurn, routeActions } from './turn.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { recentHistory } from './recent-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
-import { attachment, catchUp, disregardInstruction, goalState, greeting, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, sentWords, standbyNews, standbyWake, viewerMoved, walkOn } from './prompts.ts';
+import { attachment, catchUp, disregardInstruction, goalState, greeting, heldWords, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, sentWords, standbyNews, standbyWake, viewerMoved, walkOn } from './prompts.ts';
 import { focusLine, Stage, type StageCommand, type StageHere, type StageView } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
@@ -746,13 +746,20 @@ export class VoiceSessions {
     clearTimeout(timer); this.carried = undefined;
     mediator.handOff(reason);
   }
-  /** A request reached the agent: its speech counts as delegated. */
+  /** A request is held until the agent's turn ends: the voice session that made it is told, so it never says the agent has it. */
+  heldDelivery(task: OutboxEntry) {
+    const live = this.live;
+    if (!task.voiceSessionId || live?.state !== 'active' || task.voiceSessionId !== live.id) return;
+    live.append('thinking', heldWords(this.bridge.agent, task.said), task.delegationId ?? null).catch(() => {});
+  }
   /** A request may not have reached the agent: its speech goes with that session's next request. */
   uncertainDelivery(task: OutboxEntry) { this.senders.get(task.id)?.undelivered(task.id); }
+  /** A request reached the agent: its speech counts as delegated, and the voice is told which words went. */
   confirmDelivery(task: OutboxEntry) {
     this.senders.get(task.id)?.delivered(task.id); this.senders.delete(task.id);
     const live = this.live;
-    if (task.confirmationSent || !task.voiceSessionId || live?.state !== 'active' || task.voiceSessionId !== live.id) return;
+    // One that was held is news to whichever voice session is on when it arrives: the one that made it was told only that it was held.
+    if (task.confirmationSent || !task.voiceSessionId || live?.state !== 'active' || (task.voiceSessionId !== live.id && !task.heldAt)) return;
     task.confirmationSent = true;
     // Delivery is an operator-facing fact, independent of the observation
     // backlog. The adapter confirms its own write; this does not claim that the

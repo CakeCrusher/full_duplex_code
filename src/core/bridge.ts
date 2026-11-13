@@ -73,6 +73,10 @@ export class Harness {
   agentReady = false; stopping = false;
   /** When this companion started serving; 0 until then. */
   startedAt = 0;
+  /** Since when the agent has been in the middle of a turn (working, or waiting on the operator within it). */
+  workingSince?: number;
+  /** How long the agent's turn has been running, or undefined between turns. */
+  agentWorking() { return this.workingSince === undefined ? undefined : Date.now() - this.workingSince; }
   companions: CompanionRegistry;
   /** Turns the voice of running companions on and off, by voice. */
   sessionSwitch: SessionSwitch;
@@ -119,6 +123,7 @@ export class Harness {
       onJudged: judged => { if (!judged.learned) this.jevCheck(judged.requestId, 'instruction', `Not a standing instruction (${judged.behave.toFixed(2)})`, judged); },
       onLearn: instruction => { this.learnInstruction(instruction).catch(error => this.fault(error as Error)); } });
     this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,
+      working: () => this.agentWorking() !== undefined, onHeld: entry => this.voiceSessions.heldDelivery(entry),
       publish: event => this.publish(event), fault: error => this.fault(error), onSent: entry => this.voiceSessions.confirmDelivery(entry), onUncertain: entry => this.voiceSessions.uncertainDelivery(entry) });
     this.agentInstructions = agentInstructions(agent);
     this.adapter = agent.create({ root, runDir, cwd, sessionId, observation, agentArgs, instructions: this.agentInstructions, clean: this.clean, log: this.log });
@@ -132,6 +137,12 @@ export class Harness {
     observer.on('observation', (observation: Observation) => { if (!observation.child && observation.kind !== 'event') this.voiceSessions.activity.add(observation.kind); });
     observer.on('observation', (observation: Observation) => { if (!observation.child) this.stage.observe(observer.toolUse(observation), observation.name === this.agent.profile.turnEnd); });
     observer.on('status', event => { this.log({ type: 'agent.status', ...event }); this.publish({ type: 'agent_status', ...event }); });
+    // The agent's turn, from when it began: a request that can wait is held until it ends (outbox.ts).
+    observer.on('status', ({ state }) => {
+      const working = state === 'working' || state === 'needs_attention';
+      if (working) this.workingSince ??= Date.now();
+      else { this.workingSince = undefined; this.outbox.releaseHeld(); }
+    });
     observer.on('fault', error => this.fault(error));
     const { name, transport } = agent.profile;
     this.adapter.on('connection', ready => {
@@ -275,6 +286,8 @@ export class Harness {
   async close() {
     if (this.stopping) return; this.stopping = true;
     if (this.startedAt) try { this.companions.remove(this.companionEntry()); } catch (error) { this.log({ type: 'companions.failed', message: (error as Error).message }); }
+    // fdc stopping: nothing stays held.
+    this.outbox.releaseHeld();
     const agentClosed = this.adapter.close();
     clearInterval(this.statusTimer); clearInterval(this.voiceSessions.audioWatchdog); clearInterval(this.voiceSessions.standbyTimer); clearTimeout(this.agentLostTimer); clearTimeout(this.tuneTimer);
     if (this.live) await this.live.close('harness stopped');

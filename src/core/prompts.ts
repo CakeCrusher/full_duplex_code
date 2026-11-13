@@ -28,7 +28,7 @@ Backchannel policy: No backchannels. Make no acknowledgment sounds to ${name}'s 
 
 Interruption policy: Stop speaking and listen when the operator interrupts. Only the operator cuts your sentence short: finish your current thought before turning to news of ${name}'s work.
 
-${jev ? `${roles(agent, features)} You are told what the voice tool did; never say something was sent or done before you are told it was, or promise that it will be.${waits}` : `Delegation policy:
+${jev ? `${roles(agent, features)} You are told what the voice tool did; never say something was sent or done before you are told it was, or promise that it will be.${waits || ` While ${name} is in the middle of a turn, a request that can wait is held until the turn ends: you are told when it is held and when ${name} has it.`}` : `Delegation policy:
 Backend tools:
 - ${product}: investigates, runs commands, edits files and does the coding work in the operator's project; it also makes the pages you present and their controls.
 
@@ -140,6 +140,16 @@ export const wordsEnd = (said: string, max = 140) => {
 // another within 30 s (Oct 31 to Nov 12), 31 added nothing for the agent, 13 of the 25 within 10 s (two blind judges).
 export const sentWords = ({ profile: { product } }: Agent, said?: string) =>
   said?.trim() ? `The operator's words were sent to ${product}, which has them now: "${wordsEnd(said)}"` : `The request has been delivered to ${product}.`;
+// A request that can wait is held until the agent's turn ends (outbox.ts): the voice is told, so that it never says the
+// agent has it, and the operator can ask for it to go at once.
+export const heldWords = ({ profile: { name, product } }: Agent, said?: string) =>
+  `The operator's words are held for ${product} until ${name} finishes the turn it is in; ${name} doesn't have them yet${said?.trim() ? `: "${wordsEnd(said)}"` : '.'}`;
+// The same request as the agent reads it once it arrives: why it comes when it does.
+const span = (seconds: number) => seconds < 2 ? 'a moment' : seconds < 90 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
+export const heldForTurnEnd = (seconds: number) => `The user said this ${span(seconds)} ago, while you were working; the voice tool judged that it could wait and held it until your turn ended.`;
+export const heldThenPressed = (seconds: number) => `The user said this ${span(seconds)} ago; the voice tool was holding it until your turn ended, and delivers it now because what they said next can't wait: that is the request that follows this one.`;
+/** A note added to a request already written: after its opening note, before the conversation. */
+export const withNote = (request: string, note: string) => request.includes('\n\n') ? request.replace('\n\n', ` ${note}\n\n`) : `${request} ${note}`;
 
 // A delegated request as the agent receives it: a note on how to read it, then
 // the conversation since the previous request, one utterance per line.

@@ -90,6 +90,8 @@ export interface VoiceRequest {
   queuedAt?: number;
   /** The operator's own words in it: what the voice is told was sent (prompts.ts, sentWords). */
   said?: string;
+  /** It can wait for the end of the turn the agent is running: fdc holds it until then (outbox.ts). Otherwise it is steered into the turn. */
+  followUp?: boolean;
 }
 
 /** How far a delivery got. */

@@ -17,6 +17,8 @@ export interface Decision {
   reading?: Reading;
   /** Their words go to the agent. */
   send: boolean;
+  /** They can wait for the end of the turn the agent is running (turn.ts): fdc holds them until then. */
+  later?: boolean;
   /** For the agent, with their words: what the voice tool did already, or what failed. Words kept carry it to the next request. */
   note?: string;
   /** For GPT Live: what the voice tool did or found (the page tells it its own news). */
@@ -254,12 +256,12 @@ export class Mediator {
     });
   }
   /** What came of a turn: the words go to the agent, noted with what the voice tool did; or they stay for the next request, noted with it. GPT Live hears what was done (unless the voice tool's own reading told it already: toldBefore). */
-  decided(id: string, request: SpokenRequest, { reading, send, note, told, wait, needed }: Decision, delegationId?: string, toldBefore?: string) {
+  decided(id: string, request: SpokenRequest, { reading, send, later, note, told, wait, needed }: Decision, delegationId?: string, toldBefore?: string) {
     if (told && this.live.state === 'active') this.context.add('thinking', told, delegationId ?? null);
     // Sent, or kept as needing nothing: the job delegation's next reading starts after these words. Not finished: they wait for it.
     if (wait) { this.undecidedSince ||= Date.now(); this.undecidedNeeded ||= Boolean(needed); this.awaitQuiet(); }
     else { this.jobRead = Math.max(this.jobRead, request.through); this.undecidedSince = 0; this.undecidedNeeded = false; clearTimeout(this.heldTimer); }
-    if (send) return this.send(id, request, this.clean(voiceRequest(request.utterances, [...request.notes ?? [], ...note ? [note] : []])), delegationId ?? null, reading);
+    if (send) return this.send(id, request, this.clean(voiceRequest(request.utterances, [...request.notes ?? [], ...note ? [note] : []])), delegationId ?? null, reading, 'passed', later);
     this.log({ type: 'turn.kept', id, said: this.said(request).slice(-200), needsAgent: reading?.needsAgent ?? null, handled: Boolean(note), ...wait && { waiting: true } });
     this.audit?.record({ handOff: 'kept', said: this.said(request), voiceSessionId: this.live.id, delegationId: delegationId ?? null, requestId: id, jevCall: reading?.id }, reading?.needsAgent ?? null, reading?.transcript);
     this.giveBack(id, note);
@@ -334,10 +336,10 @@ export class Mediator {
     if (!this.pending) { step(); return; }
     this.order = this.order.then(step).catch(error => this.fault(error as Error));
   }
-  send(id: string, request: SpokenRequest, content: string, delegationId: string | null, reading?: Reading, handOff: HandOff = 'passed') {
+  send(id: string, request: SpokenRequest, content: string, delegationId: string | null, reading?: Reading, handOff: HandOff = 'passed', followUp = false) {
     try {
       const said = this.said(request);
-      this.deliver({ id, content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now(), said });
+      this.deliver({ id, content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now(), said, ...followUp && { followUp } });
       this.lastSent = { at: Date.now(), said };
       this.check(id, request, handOff, delegationId, reading).catch(error => this.fault(error as Error));
     } catch (error) {

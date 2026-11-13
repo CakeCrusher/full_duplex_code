@@ -19,7 +19,7 @@ Judge a change on all five at once. A change that gains on one objective by givi
 ## The experience
 
 - You care about the outcome, not the code. The companion tells you what happened, so you never have to watch the terminal.
-- Talk any time, from the moment the agent starts. Interrupt the companion whenever you like; your requests reach the agent mid-turn.
+- Talk any time, from the moment the agent starts. Interrupt the companion whenever you like; your requests reach the agent mid-turn, or wait for the end of its turn when they can.
 - The companion relays what the agent did. It never makes it up.
 
 ## The architecture

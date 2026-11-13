@@ -150,6 +150,29 @@ test('the delivery confirmation follows channel success once, independently of h
   assert.ok(h.uiEvents.some(e => e.type === 'fault' && /request was sent.*voice confirmation failed/i.test(e.message)));
 });
 
+test('a request held for the end of the agent\'s turn: the voice hears it is held, then that the agent has it', async t => {
+  const h = await fixture(t), appends: string[] = [];
+  h.live = { id: 'voice-one', state: 'active', append: async (_kind: string, content: string) => appends.push(content), close: async () => { h.live!.state = 'closed'; } } as any;
+  const channel = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/channel', { headers: { Authorization: `Bearer ${h.agentToken}` } });
+  t.after(() => channel.terminate());
+  await new Promise(resolve => channel.on('open', resolve));
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+  const got: any[] = []; channel.on('message', raw => { const event = JSON.parse(raw.toString()); if (event.type === 'channel.deliver') { got.push(event); channel.send(JSON.stringify({ type: 'channel.sent', id: event.id })); } });
+  channel.send(JSON.stringify({ type: 'channel.ready' })); await settle();
+  h.observer.status('working', 'Claude is working');
+  assert.ok(h.agentWorking()! >= 0);
+  h.deliver({ id: 'later', content: 'A note.\n\nuser: Add a legend when you are done.', voiceSessionId: 'voice-one', said: 'Add a legend when you are done.', followUp: true });
+  await settle();
+  assert.equal(h.outbox.get('later')!.state, 'held');
+  assert.deepEqual([got.length, appends], [0, ['The operator\'s words are held for Claude Code until Claude finishes the turn it is in; Claude doesn\'t have them yet: "Add a legend when you are done."']]);
+  h.observer.status('idle', 'Claude finished');
+  await settle();
+  assert.equal(h.agentWorking(), undefined);
+  assert.equal(h.outbox.get('later')!.state, 'sent');
+  assert.match(got[0].content, /^A note\. The user said this a moment ago, while you were working; .*\n\nuser: Add a legend when you are done\.$/);
+  assert.equal(appends[1], 'The operator\'s words were sent to Claude Code, which has them now: "Add a legend when you are done."');
+});
+
 test('every delivered request is confirmed once', async t => {
   const h = await fixture(t), appends: { kind: string; content: string }[] = [];
   h.live = { id: 'voice-one', state: 'active', append: async (kind: string, content: string) => appends.push({ kind, content }), close: async () => { h.live!.state = 'closed'; } } as any;

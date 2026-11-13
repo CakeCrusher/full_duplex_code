@@ -13,7 +13,7 @@ import type { Harness } from './bridge.ts';
 import type { Decision } from './mediator.ts';
 import type { StageView } from './stage.ts';
 import type { Spoken, SpokenRequest } from './voice-history.ts';
-import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, READY, RECENT_MS, STANDBY, type Reading, type Trigger } from './jev.ts';
+import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, NOW, READY, RECENT_MS, STANDBY, type Reading, type Trigger } from './jev.ts';
 import { companionNoted, handledNote, lookingNote, sessionsChanging } from './prompts.ts';
 
 /** What the voice tool did itself for the operator's turn: for GPT Live at once (told), and for the agent with their words (note). */
@@ -52,7 +52,10 @@ export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: S
   // Moments after a request reached the agent, Jev is also asked whether these words add to it: its tail, a repeat, an
   // acknowledgment or noise stays with the voice (jev.ts, ADDS). Not for words already found to need the agent.
   const recent = sent && sent.ago <= RECENT_MS && !neededBefore ? sent : undefined;
-  const reading = await bridge.read({ trigger: 'job', spoken, reply, page: actions.view, requestId: request.id, ...recent && { sent: recent } });
+  // While the agent is in the middle of a turn it can be steered in, Jev is also asked whether these words must reach it
+  // now or can wait for the turn to end (jev.ts, NOW): fdc then holds them until it does (outbox.ts).
+  const working = bridge.agent.profile.canSteer ? bridge.agentWorking() : undefined;
+  const reading = await bridge.read({ trigger: 'job', spoken, reply, page: actions.view, requestId: request.id, ...recent && { sent: recent }, ...working !== undefined && { working } });
   const adds = reading.adds === undefined || reading.adds >= ADDS;
   // Once found to need the agent, waiting words keep needing it: a later reading of the whole stretch never drops them
   // (read with the talk around them, a request was sometimes found to need nothing and waited minutes for another).
@@ -62,9 +65,11 @@ export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: S
   // Not finished, or still being said: no decision yet. The next reading takes these words with what the operator adds, or
   // they go once the conversation stays quiet (mediator.ts). There is a next time, so a pause is no reason to send half a request.
   const wait = !send && (needed || continued);
-  bridge.log({ type: 'turn.job', said: request.fresh.slice(-200), reply: reply?.slice(-200) ?? null, needsAgent: reading.needsAgent, ready: reading.ready, ...reading.adds !== undefined && { adds: reading.adds }, send, ...wait && { wait }, ...continued && { continued }, ...overdue && { overdue } });
-  bridge.jevAudit?.decided(reading.id, { outcome: send ? 'send' : wait ? 'wait' : 'keep', needed, finished: ready, ...reading.adds !== undefined && { adds }, ...neededBefore && { neededBefore }, ...continued && { continued }, ...overdue && { overdue } }, true);
-  return { reading, send, wait, needed: wait && needed, note: send ? actions.note : actions.keptNote };
+  // Held only on Jev's clear word that it can wait; words that waited already (overdue, or found needed before) go in now.
+  const later = send && !overdue && !neededBefore && reading.now !== undefined && reading.now < NOW;
+  bridge.log({ type: 'turn.job', said: request.fresh.slice(-200), reply: reply?.slice(-200) ?? null, needsAgent: reading.needsAgent, ready: reading.ready, ...reading.adds !== undefined && { adds: reading.adds }, ...reading.now !== undefined && { now: reading.now }, send, ...later && { later }, ...wait && { wait }, ...continued && { continued }, ...overdue && { overdue } });
+  bridge.jevAudit?.decided(reading.id, { outcome: send ? 'send' : wait ? 'wait' : 'keep', needed, finished: ready, ...reading.adds !== undefined && { adds }, ...reading.now !== undefined && { delivery: later ? 'follow-up' : 'steer' }, ...neededBefore && { neededBefore }, ...continued && { continued }, ...overdue && { overdue } }, true);
+  return { reading, send, later, wait, needed: wait && needed, note: send ? actions.note : actions.keptNote };
 }
 
 /** Both calls in turn, without waiting for a reply: the turn as the tests (and a voice tool that heard none) read it. */

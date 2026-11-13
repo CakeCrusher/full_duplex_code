@@ -69,7 +69,7 @@ export class TimelineView {
     $('detail-message-label').textContent = item?.notification ? (['sent', 'observed'].includes(item.state) ? `Full ${transport} message content · sent as shown` : `Full ${transport} message content · delivery not confirmed`) : `Prompt captured from ${name}`;
     $('detail-payload').hidden = !item?.notification;
     $('detail-json').textContent = item?.notification ? JSON.stringify(item.notification, null, 2) : '';
-    $('detail-json-label').textContent = item?.track === 'context' ? 'Exact JSON sent to Live' : ['queued', 'dispatching', 'uncertain'].includes(item?.state) ? `${capitalized(wire)} JSON · delivery not confirmed` : `${capitalized(wire)} JSON`;
+    $('detail-json-label').textContent = item?.track === 'context' ? 'Exact JSON sent to Live' : ['queued', 'held', 'dispatching', 'uncertain'].includes(item?.state) ? `${capitalized(wire)} JSON · delivery not confirmed` : `${capitalized(wire)} JSON`;
     $('detail-observed').hidden = !item?.observedPrompt;
     $('detail-observed-text').textContent = item?.observedPrompt ?? '';
     this.showChecks(item?.track === 'requests' ? item.checks ?? [] : []);
@@ -81,7 +81,7 @@ export class TimelineView {
     const extras: string[] = [];
     if (item?.index !== undefined) extras.push(`Batch ${item.index + 1}${item.final ? ' · final' : ''}`);
     if (item?.state && item.track === 'context') extras.push(item.state === 'sent' ? 'Sent to Live; waiting for acknowledgment' : 'Acknowledged by Live');
-    else if (item?.state) extras.push(({ queued: 'Queued', dispatching: 'Sending', sent: `Delivered to ${transport}`, observed: `Received by ${name}`, uncertain: 'Delivery uncertain' } as Record<string, string>)[item.state] ?? item.state);
+    else if (item?.state) extras.push(({ queued: 'Queued', held: 'Held until the turn ends', dispatching: 'Sending', sent: `Delivered to ${transport}`, observed: `Received by ${name}`, uncertain: 'Delivery uncertain' } as Record<string, string>)[item.state] ?? item.state);
     if (item?.receivedAt) extras.push(`Transcript received at ${elapsed(item.receivedAt - this.origin, true)}`);
     if (item?.peak) extras.push(`Peak level ${Math.round(item.peak * 100)}%`);
     if (item?.injectionStartMs !== undefined) extras.push(`API injection estimate: ${(item.injectionStartMs / 1000).toFixed(2)}–${(item.injectionEndMs / 1000).toFixed(2)}s into voice`);

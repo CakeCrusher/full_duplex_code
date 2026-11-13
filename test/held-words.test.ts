@@ -2,6 +2,7 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { ClaudeObserver } from '../src/adapters/claude/observer.ts';
+import { claude } from '../src/adapters/claude/index.ts';
 import { Mediator, type Decision, type Route } from '../src/core/mediator.ts';
 import { jobTurn, type Waiting } from '../src/core/turn.ts';
 import type { VoiceRequest } from '../src/core/adapter.ts';
@@ -114,7 +115,7 @@ test('words that have waited too long are read as overdue even while the operato
 
 test("the job delegation's rule: sent once needed and finished; waits while unfinished or still being said; once needed, never dropped", async () => {
   const decide = async (needsAgent: number, ready: number, waiting: Waiting = {}) => {
-    const bridge: any = { read: async () => ({ trigger: 'job', said: '', transcript: '', needsAgent, ready }), log: () => {} };
+    const bridge: any = { agent: claude, agentWorking: () => undefined, read: async () => ({ trigger: 'job', said: '', transcript: '', needsAgent, ready }), log: () => {} };
     const { send, wait, needed } = await jobTurn(bridge, { utterances: [], through: 0, seqs: [0], fresh: 'x' }, [], undefined, {}, waiting);
     return { send, wait, needed };
   };
@@ -125,4 +126,21 @@ test("the job delegation's rule: sent once needed and finished; waits while unfi
   assert.deepEqual(await decide(.1, .9, { needed: true }), { send: true, wait: false, needed: false }, 'found needed before: a later reading of the whole stretch keeps it needed');
   assert.deepEqual(await decide(.1, .9), { send: false, wait: false, needed: false }, 'talk that needs nothing is kept');
   assert.deepEqual(await decide(.1, .9, { continued: true }), { send: false, wait: true, needed: false }, 'still being said: read again with the rest');
+});
+
+test("while the agent is in the middle of a turn, a request is steered in unless Jev finds it can wait; then it is held for the turn's end", async () => {
+  const decide = async (working: number | undefined, now: number, waiting: Waiting = {}) => {
+    const asked: any[] = [];
+    const bridge: any = { agent: claude, agentWorking: () => working, log: () => {},
+      read: async (moment: any) => { asked.push(moment); return { trigger: 'job', said: '', transcript: '', needsAgent: .9, ready: .9, ...moment.working !== undefined && { now } }; } };
+    const { send, later } = await jobTurn(bridge, { utterances: [], through: 0, seqs: [0], fresh: 'x' }, [], undefined, {}, waiting);
+    return { send, later, asked: asked[0].working };
+  };
+  assert.deepEqual(await decide(undefined, .1), { send: true, later: false, asked: undefined }, 'between turns nothing is asked: the request starts a turn');
+  assert.deepEqual(await decide(95000, .1), { send: true, later: true, asked: 95000 }, 'it can wait: held until the turn ends');
+  assert.deepEqual(await decide(95000, .6), { send: true, later: false, asked: 95000 }, 'it must go in now: steered into the turn');
+  assert.equal((await decide(95000, .29)).later, true);
+  assert.equal((await decide(95000, .3)).later, false, 'held only on a clear word that it can wait');
+  assert.equal((await decide(95000, .1, { overdue: true })).later, false, 'words that waited already go in now');
+  assert.equal((await decide(95000, .1, { needed: true })).later, false);
 });

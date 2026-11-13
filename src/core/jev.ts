@@ -73,12 +73,16 @@ export const NEEDS_AGENT = .4, READY = .2;
 // it (ADDS): its tail, a repeat, an acknowledgment or noise stays with the voice. Jev used to send them as a second
 // request seconds later (prompts.ts, sentWords).
 export const ADDS = .4, RECENT_MS = 10000;
+// While the agent is in the middle of a turn, a request is steered into it unless Jev finds it can wait (below NOW): then
+// fdc holds it until the turn ends (outbox.ts). Steering is the default: a correction made to wait costs the operator more
+// than an interruption that could have waited.
+export const NOW = .3;
 // The operator is done for now: the companion goes on Standby as soon as it has answered.
 export const STANDBY = .7;
 // What Jev reads of what the voice companion perceived: its latest 14 KB (perceived.ts).
 export const HISTORY_BYTES = 14000;
 /** For the record (jev-audit.ts): the likelihood at which each question's answer changes what fdc does. */
-const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, standby: STANDBY, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
+const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, now: NOW, standby: STANDBY, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
 
 /** One utterance of the conversation. */
 export interface Line { role: 'operator' | 'intermediary'; text: string }
@@ -110,6 +114,8 @@ export interface Reading {
   needsAgent: number | null; ready?: number;
   /** Whether they add to the request the agent got moments before (asked only then). */
   adds?: number;
+  /** Whether they must reach the agent in the middle of the turn it is running (asked only while it is working). */
+  now?: number;
   sessions?: SessionsJudgment; companionOnly?: number;
   page?: PageJudgment; instruction?: InstructionJudgment; goal?: GoalJudgment;
   /** The level of each setting Jev chose (jev-tuner.ts). */
@@ -133,6 +139,8 @@ export interface Moment {
   goal?: string;
   /** What the voice companion has said in reply to the latest words (trigger job). */
   reply?: string;
+  /** The agent is in the middle of a turn, for this long (trigger job): Jev is asked whether the words must reach it now or can wait for the turn's end. */
+  working?: number;
   /** The request that reached the agent moments before this reading, within RECENT_MS (trigger job): how long ago, and the operator's words in it. The latest words may only be its tail. */
   sent?: { ago: number; said: string };
   /** Ask whether the words give a standing instruction (the learner). */
@@ -157,6 +165,10 @@ const JOB = {
   ready: noul('Have the operator finished saying what they want for now, so that a good listener would act on it at this moment, or are they still in the middle of saying it?',
     "They have said a whole request or question, enough to act on, and stopped: even if it trails off into filler ('um', 'yeah', 'so', 'and yeah') or they might add more later. A short cue or command is whole as soon as it is said ('show them', 'take it from here', 'carry on', 'send it').",
     "They broke off in the middle of a sentence or a list ('and the…', 'I want you to…', 'can you also'), or are still building up to what they want (setting context before the actual ask), so acting now would miss its point."),
+  // Asked only while the agent is in the middle of a turn: steered into it now, or held until it ends (issue 24).
+  now: noul('The coding agent is in the middle of a turn (`agent_turn`: how long it has been working; `history` shows its latest work). Must the latest words reach it now, in the middle of that turn, rather than when the turn ends?',
+    'They correct, stop, redirect or change the work under way; answer something the agent asked or is waiting on; give information without which the current work would come out wrong or be wasted; or the operator says it is urgent or wants it right away.',
+    "They can wait for the turn to end: a new, separate task; an addition that doesn't change what the agent is doing now; a question or remark about results the agent will produce anyway; anything where interrupting would only disturb work that should finish first."),
   // Asked only when a request reached the agent moments before these words.
   adds: noul('A request reached the coding agent moments ago (`just_sent`: how long ago, and the operator\'s words it carried). Do the latest words give the agent anything it needs beyond that request?',
     "They hold something that request didn't: an instruction, detail, constraint, correction, decision or question the agent needs; an addition to it, a change to it, or another request.",
@@ -300,6 +312,7 @@ export class Jev {
     const state: Record<string, string> = { setting: this.setting + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : '') + (tune ? ` ${TUNER_SETTING}` : ''), why: WHY[trigger], history: history.trim() || '(none)', latest: latest ? spokenLine(latest) : '(none)' };
     if (instructions) state.operator_instructions = instructions.join('\n') || '(none)';
     if (trigger === 'job') state.voice_reply = reply?.trim() || '(the companion has not replied)';
+    if (trigger === 'job' && moment.working !== undefined) state.agent_turn = `working for ${moment.working < 90000 ? `${Math.max(1, Math.round(moment.working / 1000))} s` : `${Math.round(moment.working / 60000)} min`}`;
     if (trigger === 'job' && moment.sent) state.just_sent = `${Math.max(1, Math.round(moment.sent.ago / 1000))} s ago: "${wordsEnd(moment.sent.said)}"`;
     if (sessions) state.sessions = sessionLines(sessions);
     if (page) state.page = pageLine(page);
@@ -309,7 +322,7 @@ export class Jev {
     if (page && job) state.page_commands = page.commands.map(c => `- ${c.say}`).join('\n').slice(0, 3000) || '(none)';
     if (tune) Object.assign(state, { earlier_sessions: tune.earlier.join('\n').slice(0, 4000) || '(none)', current_settings: JSON.stringify(tune.current) });
     const questions = {
-      ...job && { needs_agent: JOB.needs_agent }, ...trigger === 'job' && { ready: JOB.ready }, ...trigger === 'job' && moment.sent && { adds: JOB.adds },
+      ...job && { needs_agent: JOB.needs_agent }, ...trigger === 'job' && { ready: JOB.ready }, ...trigger === 'job' && moment.sent && { adds: JOB.adds }, ...trigger === 'job' && moment.working !== undefined && { now: JOB.now },
       // Words about how the companion behaves are for the learner and the tuner: asked only while either is on.
       ...gate && { ...(learn || tune) && { companion_only: GATE.companion_only }, standby: GATE.standby, ...GOAL_QUESTION, ...sessions && sessionQuestions(sessions) },
       ...page && (trigger === 'cue' || trigger === 'step') && pageQuestions(page, trigger),
@@ -340,7 +353,7 @@ export class Jev {
     // Its record waits for what fdc does with the answers (jev-audit.ts).
     this.record?.(call);
     const p = (name: string, missing = 0) => { const value = Number(answers?.[name]?.noul); return Number.isFinite(value) ? value : missing; };
-    const reading: Reading = { trigger, id: call.id, said, transcript: `${history}${latest ? `► ${spokenLine(latest)}` : ''}`, needsAgent: 'needs_agent' in questions ? p('needs_agent') : null, ...'ready' in questions && { ready: p('ready', 1) }, ...'adds' in questions && { adds: p('adds', 1) } };
+    const reading: Reading = { trigger, id: call.id, said, transcript: `${history}${latest ? `► ${spokenLine(latest)}` : ''}`, needsAgent: 'needs_agent' in questions ? p('needs_agent') : null, ...'ready' in questions && { ready: p('ready', 1) }, ...'adds' in questions && { adds: p('adds', 1) }, ...'now' in questions && { now: p('now', 1) } };
     if (gate) {
       if ('companion_only' in questions) reading.companionOnly = p('companion_only');
       reading.standby = p('standby');
