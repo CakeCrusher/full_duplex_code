@@ -4,8 +4,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { forkArgs } from '../src/adapters/claude/arguments.ts';
+import { piForkArgs } from '../src/adapters/pi/arguments.ts';
+import { pi } from '../src/adapters/pi/index.ts';
 import { openWindow, writeScript } from '../src/core/window.ts';
 import { Jev } from '../src/core/jev.ts';
 import { claude } from '../src/adapters/claude/index.ts';
@@ -13,11 +17,29 @@ import { routeActions } from '../src/core/turn.ts';
 import { fakeJev, harness, page, until } from './live-fake.ts';
 
 const settle = (ms = 30) => new Promise(resolve => setTimeout(resolve, ms));
+// The hook command Claude runs for each event: what it complains about, if anything.
+const relay = (url: string, token: string, event: Record<string, unknown>) => new Promise<string>(resolve => {
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/core/hook-relay.ts', import.meta.url)), url], { env: { ...process.env, FD_BRIDGE_TOKEN: token }, stdio: ['pipe', 'pipe', 'pipe'] });
+  let complaint = ''; child.stderr.on('data', chunk => complaint += chunk);
+  child.on('close', () => resolve(complaint));
+  child.stdin.end(JSON.stringify(event));
+});
 
 test("a fork keeps the operator's options for how Claude works, not their choice of session or first prompt", () => {
   assert.deepEqual(forkArgs(['--dangerously-skip-permissions', '--resume', 'main', '--model', 'opus', '--add-dir', 'a', 'b', '-c', '--name', 'x', 'Explain this']),
     ['--dangerously-skip-permissions', '--model', 'opus', '--add-dir', 'a', 'b']);
   assert.deepEqual(forkArgs(['--resume=abc', '--fork-session', '--permission-mode', 'acceptEdits', '--session-id', 'u']), ['--permission-mode', 'acceptEdits']);
+  assert.deepEqual(forkArgs(['--debug-file', '/run/debug.log', '--model', 'opus'], '/run/fork-1'), ['--debug-file', '/run/fork-1/debug.log', '--model', 'opus'], 'the fork logs to a file of its own');
+});
+
+test("a Pi fork: Pi's own --fork of the session, its extension on the fork's routes, with the operator's options but not their choice of session", async () => {
+  assert.deepEqual(piForkArgs(['--model', 'x', '-c', '--session', 'abc', '--thinking', 'high', 'hello']), ['--model', 'x', '--thinking', 'high']);
+  const adapter = pi.create({ root: '/r', runDir: '/tmp', cwd: '/tmp', observation: 'events', agentArgs: ['-c', '--model', 'x'], instructions: 'fdc', clean: String, log: () => {}, forkOf: 'abcd1234', prefix: '/fork' });
+  const launch = await adapter.launch({ baseUrl: 'http://127.0.0.1:1', token: 't' });
+  assert.deepEqual(launch.args.slice(2), ['--model', 'x', '--fork', 'abcd1234']);
+  assert.equal(launch.env.FD_BRIDGE_PREFIX, '/fork');
+  assert.ok(Object.hasOwn(adapter.sockets, '/fork/pi'));
+  adapter.close();
 });
 
 test("the fork's window runs the agent by its full path, in the project, with fdc's variables; the operator's terminal app opens it", () => {
@@ -85,7 +107,7 @@ test("a tangent opens a fork in a window of its own: Claude's fork of the sessio
   assert.ok(lives[0].appended.some(([, text]) => text === 'The operator\'s words went to the fork of Claude Code\'s session: "Check why the build is slow."'));
   // The fork's hooks reach the fork's observer; the main session's work doesn't reach the voice meanwhile.
   const post = (route: string, event: Record<string, unknown>) => fetch(h.baseUrl + route, { method: 'POST', headers: { Authorization: `Bearer ${h.agentToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(event) });
-  assert.equal((await post('/fork/hook', { session_id: 'fork-session', hook_event_name: 'SessionStart' })).status, 200);
+  assert.equal(await relay(h.baseUrl + '/fork/hook', h.agentToken, { session_id: 'fork-session', hook_event_name: 'SessionStart' }), '', "Claude's hook command takes the fork's route");
   assert.equal((h.forks.adapter!.observations as any).sessionId, 'fork-session');
   const fed: string[] = [], add = mediator.feed.add.bind(mediator.feed);
   mediator.feed.add = ((observation: any) => { fed.push(observation.text); return add(observation); }) as typeof mediator.feed.add;

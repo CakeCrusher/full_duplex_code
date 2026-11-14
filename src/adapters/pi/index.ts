@@ -6,7 +6,7 @@ import { runCommand } from '../../core/command.ts';
 import type { AgentAdapter, AgentDefinition, AgentLaunch, AgentSession, VoiceRequest } from '../../core/adapter.ts';
 import { piProfile } from './profile.ts';
 import { piContext } from './context.ts';
-import { readPiArgs } from './arguments.ts';
+import { piForkArgs, readPiArgs } from './arguments.ts';
 import { PiObserver } from './observer.ts';
 import { PiDelivery } from './delivery.ts';
 import { receivedRequest, turnText } from './message.ts';
@@ -28,10 +28,13 @@ export class PiAdapter extends EventEmitter implements AgentAdapter {
     this.observations.on('session', id => this.emit('session', id));
     this.delivery = new PiDelivery(session.log);
     for (const name of ['connection', 'delivery', 'update', 'fault']) this.delivery.on(name, value => this.emit(name, value));
-    this.sockets = { '/pi': this.delivery };
+    this.sockets = { [`${session.prefix ?? ''}/pi`]: this.delivery };
   }
   launch({ baseUrl, token }: { baseUrl: string; token: string }): AgentLaunch {
-    return { command: 'pi', args: piArgs(this.session.root, this.session.agentArgs), env: { FD_BRIDGE_URL: baseUrl, FD_BRIDGE_TOKEN: token, [INSTRUCTIONS_VARIABLE]: this.session.instructions }, files: {} };
+    const { forkOf, prefix } = this.session;
+    // A fork (forks.ts): Pi's own --fork of the session, with the operator's options but not their choice of session.
+    const args = forkOf ? [...piForkArgs(this.session.agentArgs), '--fork', forkOf] : this.session.agentArgs;
+    return { command: 'pi', args: piArgs(this.session.root, args), env: { FD_BRIDGE_URL: baseUrl, FD_BRIDGE_TOKEN: token, [INSTRUCTIONS_VARIABLE]: this.session.instructions, ...prefix && { FD_BRIDGE_PREFIX: prefix } }, files: {} };
   }
   deliver(request: VoiceRequest) { return this.delivery.deliver(request); }
   history() { return this.observations.observations; }
@@ -49,6 +52,7 @@ export function doctor() {
 }
 
 export const pi: AgentDefinition = {
+  canFork: true,
   ask: prompt => ({ command: 'pi', args: ['-p', '--no-session', '--no-tools', prompt] }),
   profile: piProfile,
   context: piContext,

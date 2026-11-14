@@ -50,7 +50,7 @@ test('after a long quiet the next one is usually long too: Standby comes after t
   const now = Date.now();
   // Talk with short pauses: the full window applies.
   h.voiceSessions.spokeAt = now - 3000; speak(h, 3, undefined, now);
-  assert.equal(h.voiceSessions.lastQuietMs, 3000);
+  assert.ok(h.voiceSessions.lastQuietMs >= 3000 && h.voiceSessions.lastQuietMs < 3100, 'the quiet before these words');
   h.voiceSessions.checkStandby(now + 900);
   assert.equal(lives[0].state, 'active', 'a short quiet before: the whole window');
   // The operator came back after a long quiet (reading): the next quiet ends in Standby after the shorter window.

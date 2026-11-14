@@ -7,3 +7,4 @@ export const extensionFile = (root: string) => path.join(root, 'src/adapters/pi/
 export function piArgs(root: string, agentArgs: readonly string[]): string[] {
   return ['-e', extensionFile(root), ...agentArgs];
 }
+

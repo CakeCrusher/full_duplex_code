@@ -31,7 +31,7 @@ export class ClaudeAdapter extends EventEmitter implements AgentAdapter {
     const { root, runDir, sessionId, agentArgs, instructions, prefix, forkOf } = this.session;
     const config = makeClaudeConfig({ root, runDir, baseUrl, channelToken: token, instructions, prefix });
     // A fork: Claude's own fork of the session, with the operator's options but not their choice of session or prompt.
-    if (forkOf) return { command: 'claude', args: claudeArgs({ config, extraArgs: ['--resume', forkOf, '--fork-session', ...forkArgs(agentArgs)] }), env: { FD_BRIDGE_TOKEN: token }, files: { ...config } };
+    if (forkOf) return { command: 'claude', args: claudeArgs({ config, extraArgs: ['--resume', forkOf, '--fork-session', ...forkArgs(agentArgs, runDir)] }), env: { FD_BRIDGE_TOKEN: token }, files: { ...config } };
     // A new conversation gets the launcher's session ID; otherwise Claude's own arguments choose it.
     const assigned = readClaudeArgs(agentArgs).assignSession ? sessionId : undefined;
     return { command: 'claude', args: claudeArgs({ config, sessionId: assigned, extraArgs: agentArgs }), env: { FD_BRIDGE_TOKEN: token }, files: { ...config } };

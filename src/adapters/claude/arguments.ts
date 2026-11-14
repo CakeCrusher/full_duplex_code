@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import type { AgentArguments } from '../../core/adapter.ts';
 
 // Reads Claude's own command line, unchanged: which session it opens, whether it
@@ -73,9 +74,10 @@ export function readClaudeArgs(args: readonly string[]): AgentArguments {
 /**
  * The operator's options for a fork of their session (forks.ts): everything that shapes how Claude works (permissions,
  * model, tools, directories), without what chooses the session (--resume, --continue, --session-id, --fork-session,
- * --from-pr, --teleport, a name) or a first prompt: the fork continues the session it forks.
+ * --from-pr, --teleport, a name) or a first prompt: the fork continues the session it forks. A debug file becomes the
+ * fork's own, in its run's folder.
  */
-export function forkArgs(args: readonly string[]): string[] {
+export function forkArgs(args: readonly string[], runDir?: string): string[] {
   const out: string[] = [], DROP = new Set(['-r', '--resume', '-c', '--continue', '--session-id', '--fork-session', '--from-pr', '--teleport', '-n', '--name']);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -85,7 +87,10 @@ export function forkArgs(args: readonly string[]): string[] {
     const next = args[i + 1], takes = inline === undefined && (ONE_VALUE.has(name) || (OPTIONAL_VALUE.has(name) && next !== undefined && !next.startsWith('-')));
     const values: string[] = takes ? [args[++i]] : [];
     if (VARIADIC.has(name)) while (inline === undefined && i + 1 < args.length && !args[i + 1].startsWith('-')) values.push(args[++i]);
-    if (!DROP.has(name)) out.push(arg, ...values);
+    if (DROP.has(name)) continue;
+    // The fork's own debug file, beside its run's other files: two sessions in one file can't be told apart.
+    if (name === '--debug-file' && runDir) out.push(name, path.join(runDir, 'debug.log'));
+    else out.push(arg, ...values);
   }
   return out;
 }

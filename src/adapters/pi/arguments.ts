@@ -31,3 +31,21 @@ export function readPiArgs(args: readonly string[]): AgentArguments {
   // Pi names the session; the companion's extension reports it as Pi starts.
   return { direct: false, resume, sessionId: undefined, assignSession: false };
 }
+
+/**
+ * The operator's options for a fork of their session (forks.ts): everything that shapes how Pi works, without what chooses
+ * the session (--continue, --resume, --session, --session-id, --fork, a name) or a first prompt: the fork continues the
+ * session it forks.
+ */
+export function piForkArgs(args: readonly string[]): string[] {
+  const out: string[] = [], DROP = new Set([...SESSIONS, '--session-id', '-n', '--name']);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') break;
+    if (!arg.startsWith('-')) continue;
+    const [name, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
+    const values = inline === undefined && ONE_VALUE.has(name) && i + 1 < args.length ? [args[++i]] : [];
+    if (!DROP.has(name)) out.push(arg, ...values);
+  }
+  return out;
+}
