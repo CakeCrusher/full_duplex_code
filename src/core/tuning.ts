@@ -90,10 +90,10 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     levels: [
     { value: 0, consequence: 'Never on Standby: voice stays connected and billed the whole time it is on, as before Standby. Nothing wakes and GPT Live misses nothing.' },
     { value: 10000, consequence: "Cheapest: saved 26% of the cost of recorded conversations, but woke 26 times an hour (4.5 of them for noise), and GPT Live missed 84 s an hour of what it would have said. A 10 s pause while the operator thinks disconnects it." },
-    { value: 15000, consequence: 'The operator\'s choice until Oct 28: saved 21%, woke 18 times an hour (3.3 of them for noise); GPT Live missed 52 s an hour of what it would have said.' },
+    { value: 15000, consequence: 'The default, the operator\'s choice again on Nov 14 (and until Oct 28): saved 21%, woke 18 times an hour (3.3 of them for noise); GPT Live missed 52 s an hour of what it would have said.' },
     { value: 20000, consequence: 'Saved 18%, woke 13 times an hour (2.4 for noise); GPT Live missed 34 s an hour.' },
     { value: 30000, consequence: 'Saved 14%, woke 8 times an hour (1.6 for noise); GPT Live missed 19 s an hour.' },
-    { value: 60000, consequence: 'The default, the operator\'s choice (Oct 28): saved 8%, woke 3 times an hour (0.7 for noise); GPT Live missed 3 s an hour. It rarely disconnects except when the operator steps away.' },
+    { value: 60000, consequence: 'The operator\'s choice Oct 28 to Nov 14: saved 8%, woke 3 times an hour (0.7 for noise); GPT Live missed 3 s an hour. It rarely disconnects except when the operator steps away.' },
     { value: 120000, consequence: 'Saved 5%, woke less than once an hour: only long absences disconnect it.' },
   ] },
   // Measured on every moment the conversation fell quiet while voice was connected, Oct 31 to Nov 13 (3,431 moments, 16.7 h
@@ -192,7 +192,7 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
 };
 
 // Standby's defaults are the operator's choice in the Standby sandbox (Oct 18).
-export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 60000, wakeThreshold: 50, standbyQuickMs: 5000, standbyQuickAfterMs: 60000,
+export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 15000, wakeThreshold: 50, standbyQuickMs: 5000, standbyQuickAfterMs: 60000,
   speechPrice: 20, liveSpeechPrice: 20, toolPrice: 1, promptPrice: 1, messagePrice: 10, turnEndPrice: 50, failurePrice: 50, approvalPrice: 100, requestPrice: 100 };
 
 /** Settings from partial overrides: unknown names and values out of range are refused. */
