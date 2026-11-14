@@ -44,6 +44,25 @@ test('a quiet conversation goes on Standby: GPT Live closes, voice stays on, and
   assert.equal(lives.length, 1);
 });
 
+test('after a long quiet the next one is usually long too: Standby comes after the shorter window, and only then', async t => {
+  const { h, lives } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10, standbyQuickMs: 500, standbyQuickAfterMs: 5000 } });
+  const logged: any[] = [], log = h.log.bind(h); h.log = (event: any) => { logged.push(event); log(event); };
+  const now = Date.now();
+  // Talk with short pauses: the full window applies.
+  h.voiceSessions.spokeAt = now - 3000; speak(h, 3, undefined, now);
+  assert.equal(h.voiceSessions.lastQuietMs, 3000);
+  h.voiceSessions.checkStandby(now + 900);
+  assert.equal(lives[0].state, 'active', 'a short quiet before: the whole window');
+  // The operator came back after a long quiet (reading): the next quiet ends in Standby after the shorter window.
+  h.voiceSessions.spokeAt = Date.now() - 8000; speak(h, 3);
+  assert.ok(h.voiceSessions.lastQuietMs >= 8000);
+  h.voiceSessions.checkStandby(Date.now() + 300);
+  assert.equal(lives[0].state, 'active', 'not before the shorter window');
+  h.voiceSessions.checkStandby(Date.now() + 900);
+  await until(() => lives[0].state === 'closed');
+  assert.ok(logged.some(e => e.type === 'voice.standby' && e.quick && e.afterMs === 500));
+});
+
 test('speech wakes it, priced like everything else, and the paused session resumes: a fork, not greeted, with nothing added first', async t => {
   const { h, lives, sent, goQuiet } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30 } });
   await goQuiet();

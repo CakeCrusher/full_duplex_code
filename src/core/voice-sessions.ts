@@ -142,6 +142,8 @@ export class VoiceSessions {
   listensTo(page: Page) { return page === this.page || page === this.standby?.page; }
   /** When the microphone last heard the operator's voice, and when GPT Live's audio last played. */
   voiceAt = -Infinity; liveSpeechAt = 0;
+  /** When either side last spoke, and how long the quiet before that lasted (Standby comes sooner after a long one). */
+  spokeAt = -Infinity; lastQuietMs = 0;
   /**
    * The listening page's microphone and speaker levels (about 0.1 s each), priced: the operator's voice and GPT Live's.
    * A voice holds for more than a moment: a knock rings through one window, a word through several. On the operator's
@@ -153,14 +155,16 @@ export class VoiceSessions {
     if (held) this.activity.add('operator');
     // On Standby GPT Live is disconnected: its audio still playing is the closed session's last words, which once woke it
     // again within a second (Oct 21, twice), for a new session billed at least 15 s.
-    if ((level.outputRms ?? 0) >= LIVE_SPEECH_RMS && !this.standby) { this.activity.add('live'); this.liveSpeechAt = level.at; }
+    const live = (level.outputRms ?? 0) >= LIVE_SPEECH_RMS && !this.standby;
+    if (live) { this.activity.add('live'); this.liveSpeechAt = level.at; }
+    if (held || live) { const now = Date.now(); if (now - this.spokeAt > 1500 && Number.isFinite(this.spokeAt)) this.lastQuietMs = now - this.spokeAt; this.spokeAt = now; }
   }
   /**
    * Every second: voice that has been quiet for the Standby window goes on Standby, and voice on
    * Standby wakes once what happened in the window is worth the threshold (tuning.ts, activity.ts).
    */
   checkStandby(now = Date.now()) {
-    const bridge = this.bridge, { standbyAfterMs, wakeThreshold } = bridge.tuning, standby = this.standby, price = priceFor(bridge.tuning);
+    const bridge = this.bridge, { standbyAfterMs, wakeThreshold, standbyQuickMs, standbyQuickAfterMs } = bridge.tuning, standby = this.standby, price = priceFor(bridge.tuning);
     if (standby) {
       const waking = standby.waking;
       if (waking) {
@@ -186,11 +190,13 @@ export class VoiceSessions {
     // Jev found the operator done for now: Standby once GPT Live has answered (quiet for a moment after speaking, or after
     // 6 s if it doesn't); otherwise a voice session gets the whole window before it can go quiet.
     const done = this.doneAt !== undefined && (this.liveSpeechAt >= this.doneAt ? now - this.liveSpeechAt > 1500 : now - this.doneAt > 6000);
-    if (!done && (now - (live.startedAt ?? now) < standbyAfterMs || this.activity.value(standbyAfterMs, price, now) >= wakeThreshold)) return;
+    // After a long quiet the next is usually long too: Standby comes sooner (tuning.ts, standbyQuickMs).
+    const quick = standbyQuickMs > 0 && standbyQuickMs < standbyAfterMs && this.lastQuietMs >= standbyQuickAfterMs, windowMs = quick ? standbyQuickMs : standbyAfterMs;
+    if (!done && (now - (live.startedAt ?? now) < windowMs || this.activity.value(windowMs, price, now) >= wakeThreshold)) return;
     // A request on its way to the agent keeps voice Live until the agent has it.
     if ([...bridge.outbox.values()].some(entry => entry.state === 'queued' || entry.state === 'dispatching')) return;
     this.standby = { since: Date.now(), page }; this.doneAt = undefined;
-    bridge.log({ type: 'voice.standby', liveRun: live.reservation, afterMs: standbyAfterMs, threshold: wakeThreshold, value: this.activity.value(standbyAfterMs, price, now), asked: done || undefined });
+    bridge.log({ type: 'voice.standby', liveRun: live.reservation, afterMs: windowMs, threshold: wakeThreshold, value: this.activity.value(windowMs, price, now), asked: done || undefined, ...quick && { quick: true, previousQuietMs: this.lastQuietMs } });
     bridge.publish({ type: 'standby', state: 'on' });
     void live.close(STANDBY);
   }
