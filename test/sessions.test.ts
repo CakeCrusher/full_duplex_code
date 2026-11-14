@@ -191,10 +191,15 @@ test("the mediator: GPT Live asking to pass on handled words hears what was done
   await until(() => passed.recorded.length);
   assert.equal(passed.deliveries.length, 1);
   assert.deepEqual([passed.recorded[0].handOff, passed.recorded[0].judged], ['passed', .8], 'Jev is not asked a second time');
+  // GPT Live asking sends, though Jev would have kept them: either one asking sends. Jev keeping them is what the voice hears when it didn't ask.
+  const asked = mediator(t, async () => ({ reading: reading({ needsAgent: .2 }), send: false }));
+  asked.m.decide('delegation', 'd3'); await until(() => asked.deliveries.length);
+  assert.equal(asked.deliveries[0].delegationId, 'd3');
   const kept = mediator(t, async () => ({ reading: reading({ needsAgent: .2 }), send: false }));
-  kept.m.decide('delegation', 'd3'); await until(() => kept.appends.length);
+  kept.m.decide('turn'); await until(() => kept.recorded.length);
   assert.equal(kept.deliveries.length, 0);
-  assert.match(kept.appends[0][1], /^Nothing was sent to Claude Code: the voice tool found the operator's words need nothing from Claude/);
+  kept.m.decide('delegation', 'd4'); await until(() => kept.deliveries.length);
+  assert.equal(kept.deliveries[0].delegationId, 'd4', 'and asking afterwards for words Jev kept sends them');
   const failing = mediator(t, async () => { throw new Error('Jev returned HTTP 500'); });
   failing.m.decide('turn'); await until(() => failing.deliveries.length);
   assert.equal(failing.deliveries.length, 1, 'in doubt, it reaches the harness');

@@ -180,7 +180,7 @@ test('known credentials and likely API keys are scrubbed', () => {
 });
 
 
-test('a request is the conversation since the previous request, one utterance per speaker and pause', () => {
+test('a request is the conversation since the previous request, in the order said: one line per speaker until the other speaks or they pause', () => {
   const h = new VoiceHistory();
   const say = (stream: 'input' | 'output', delta: string, start_ms: number, end_ms: number) => h.add({ type: `session.${stream}_transcript.delta`, delta, start_ms, end_ms });
   say('input', 'Fix the login bug.', 0, 800);
@@ -193,8 +193,8 @@ test('a request is the conversation since the previous request, one utterance pe
   say('input', ' Then test it.', 12500, 13000);
   say('output', 'Sure.', 13200, 13600);
   const request = h.request()!;
-  assert.deepEqual(said(request), ['operator: What port?', 'intermediary: Port 4317.', 'operator: Create a file.', 'intermediary: Mm hmm', 'operator: Then test it.', 'intermediary: Sure.'],
-    'nothing from before the previous request; a backchannel does not split an utterance, a pause over 2 s does');
+  assert.deepEqual(said(request), ['operator: What port?', 'intermediary: Port 4317.', 'operator: Create', 'intermediary: Mm hmm', 'operator: a file.', 'operator: Then test it.', 'intermediary: Sure.'],
+    'nothing from before the previous request; nothing moved: a backchannel stays where it was said, and a pause over 2 s starts a line');
   assert.equal(request.fresh, 'Then test it.', 'the latest words are what the turn is read for');
   h.claim(request, 'r1');
   say('input', ' One more thing.', 17000, 17500);

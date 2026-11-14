@@ -122,7 +122,7 @@ test('channel delivery ends at sent and does not depend on Claude calling a tool
   assert.equal(item.text, content);
 });
 
-test('the delivery confirmation follows channel success once, independently of hook context', async t => {
+test('the voice is told which words went once, as they are handed to the agent, independently of hook context', async t => {
   const h = await fixture(t), appends: { kind: string; content: string; delegationId?: string | null }[] = [];
   h.live = { id: 'voice-one', state: 'active', append: async (kind: string, content: string, delegationId?: string | null) => appends.push({ kind, content, delegationId }), close: async () => { h.live!.state = 'closed'; } } as any;
   const ws = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/channel', { headers: { Authorization: `Bearer ${h.agentToken}` } });
@@ -133,14 +133,14 @@ test('the delivery confirmation follows channel success once, independently of h
   }
   h.deliver({ id: 'request-one', content: 'Build the game.', voiceSessionId: 'voice-one', delegationId: 'delegation-one', said: 'Okay, so, build the game.' });
   assert.equal(h.outbox.get('request-one')!.state, 'queued');
-  assert.equal(appends.length, 0, 'queuing is not confirmed delivery');
+  assert.equal(appends.length, 0, 'queued for an agent not ready is not sent');
   await event({ type: 'channel.ready' });
   assert.equal(h.outbox.get('request-one')!.state, 'dispatching');
-  assert.equal(appends.length, 0, 'writing to the channel socket is not channel success');
+  // As they go: Jev, which reads what the voice was sent, then knows it too before its next reading.
+  assert.deepEqual(appends, [{ kind: 'thinking', content: 'The operator\'s words went to Claude Code: "Okay, so, build the game."', delegationId: 'delegation-one' }], 'quietly, and with the words that went: GPT Live (and Jev, reading what it was told) knows what was sent');
   await event({ type: 'channel.sent', id: 'request-one' });
-  assert.deepEqual(appends, [{ kind: 'thinking', content: 'The operator\'s words were sent to Claude Code, which has them now: "Okay, so, build the game."', delegationId: 'delegation-one' }], 'quietly, and with the words that went: GPT Live (and Jev, reading what it was told) knows what was sent');
   await event({ type: 'channel.sent', id: 'request-one' });
-  assert.equal(appends.length, 1, 'a duplicate receipt cannot repeat the spoken confirmation');
+  assert.equal(appends.length, 1, 'receipts repeat nothing');
   h.deliver({ id: 'old-request', content: 'Earlier request.', voiceSessionId: 'old-voice', delegationId: 'old-delegation' });
   await event({ type: 'channel.sent', id: 'old-request' });
   assert.equal(appends.length, 1, 'a new voice connection must not receive an old delegation ID or confirmation');
@@ -148,7 +148,7 @@ test('the delivery confirmation follows channel success once, independently of h
   h.deliver({ id: 'refused-speech', content: 'Still sent.', voiceSessionId: 'voice-one' });
   await event({ type: 'channel.sent', id: 'refused-speech' });
   assert.equal(h.outbox.get('refused-speech')!.state, 'sent', 'failure to announce is not failure to deliver');
-  assert.ok(h.uiEvents.some(e => e.type === 'fault' && /request was sent.*voice confirmation failed/i.test(e.message)));
+  assert.ok(h.uiEvents.some(e => e.type === 'fault' && /request was sent.*telling the voice failed/i.test(e.message)));
 });
 
 test('a request held for the end of the agent\'s turn: the voice hears it is held, then that the agent has it', async t => {
@@ -172,7 +172,7 @@ test('a request held for the end of the agent\'s turn: the voice hears it is hel
   assert.equal(h.agentWorking(), undefined);
   assert.equal(h.outbox.get('later')!.state, 'sent');
   assert.match(got[0].content, /^A note\. The user said this a moment ago, while you were working; .*\n\nuser: Add a legend when you are done\.$/);
-  assert.equal(appends[1], 'The operator\'s words were sent to Claude Code, which has them now: "Add a legend when you are done."');
+  assert.equal(appends[1], 'The operator\'s words went to Claude Code: "Add a legend when you are done."');
   // A turn that ends with background work still running is over, though Claude's status stays "working": what was held goes, and the next request is not held.
   hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash' });
   h.deliver({ id: 'footer', content: 'A note.\n\nuser: Next, add a footer.', voiceSessionId: 'voice-one', said: 'Next, add a footer.', followUp: true });
@@ -208,7 +208,7 @@ test('every delivered request is confirmed once', async t => {
   h.deliver({ id: 'build', content: 'Build.', voiceSessionId: 'voice-one' });
   channel.send(JSON.stringify({ type: 'channel.sent', id: 'build' })); await settle();
   channel.send(JSON.stringify({ type: 'channel.sent', id: 'build' })); await settle();
-  assert.deepEqual(appends.map(a => a.content), ['The request has been delivered to Claude Code.']);
+  assert.deepEqual(appends.map(a => a.content), ['The request went to Claude Code.']);
 });
 
 test('the actual command hook relays a typed prompt into observer history and browser activity', async t => {

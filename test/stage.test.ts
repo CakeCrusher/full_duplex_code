@@ -173,7 +173,7 @@ test('the mediator tells GPT Live what the voice tool did and sends the harness 
   assert.match(deliveries[0].content, /Earlier speech went with earlier voice requests\. The voice tool already did the page part\.\n\nuser: Show me the options and fix the typo\.$/);
 });
 
-test("requests reach the agent in the order made, however long each one's reading takes", async t => {
+test("turns are decided in the order made, however long each one's reading takes, and a request carries everything said since the last one", async t => {
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
   live.append = async () => {};
@@ -192,8 +192,41 @@ test("requests reach the agent in the order made, however long each one's readin
   assert.equal(deliveries.length, 0, 'the second waits for the first');
   assert.equal(started.length, 1, "the second's reading, which may move the page, starts after the first's");
   release();
+  await until(() => deliveries.length === 1);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  // The first decision sends the conversation from the cursor to the latest words: the correction said meanwhile goes with
+  // it, after it, and the second decision finds nothing left to send.
+  assert.equal(deliveries.length, 1);
+  assert.match(deliveries[0].content, /\nuser: Go to the options and make its title bigger\.\nuser: Actually, make it smaller instead\.$/);
+});
+
+test("words a turn kept go to the agent with the next request that goes, before the words that follow them, each once", async t => {
+  const observer = new ClaudeObserver({ sessionId: 'test' });
+  const live: any = new EventEmitter(); live.state = 'active'; live.id = 'live_1'; live.close = () => {};
+  live.append = async () => {};
+  const deliveries: any[] = [];
+  let release!: () => void;
+  const slow = new Promise<void>(resolve => { release = resolve; });
+  // The first turn's reading is slow and keeps its words; the second's sends.
+  const route = decides(async ({ fresh }): Promise<Decision> => /mean/.test(fresh) ? (await slow, { send: false }) : { send: true });
+  const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, route });
+  t.after(() => { m.stop(); observer.close(); });
+  const say = (role: 'input' | 'output', delta: string, at: number) => live.emit('event', { type: `session.${role}_transcript.delta`, delta, start_ms: at, end_ms: at + 500 });
+  say('input', 'I mean the chart we made yesterday.', 0);
+  m.decide('turn');
+  say('output', 'Mm-hmm.', 600);
+  say('input', ' Add a legend to it.', 900);
+  m.decide('turn');
+  release();
+  await until(() => deliveries.length === 1);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(deliveries.length, 1);
+  // Before Nov 14 the second request took only its own words, and the kept ones went later, after them.
+  assert.match(deliveries[0].content, /\nuser: I mean the chart we made yesterday\.\nvoice assistant: Mm-hmm\.\nuser: Add a legend to it\.$/);
+  say('input', ' Thanks.', 9000);
+  m.decide('turn');
   await until(() => deliveries.length === 2);
-  assert.match(deliveries[0].content, /bigger/); assert.match(deliveries[1].content, /smaller/);
+  assert.match(deliveries[1].content, /\n\nuser: Thanks\.$/, 'the next request starts where that one ended');
 });
 
 test("words whose turn fails aren't lost: they go with the next request", async t => {

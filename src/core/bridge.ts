@@ -155,7 +155,7 @@ export class Harness {
       onLearn: instruction => { this.learnInstruction(instruction).catch(error => this.fault(error as Error)); } });
     this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,
       working: () => this.agentWorking() !== undefined, onHeld: entry => { this.voiceSessions.heldDelivery(entry); this.watchHeld(); },
-      publish: event => this.publish(event), fault: error => this.fault(error), onSent: entry => this.voiceSessions.confirmDelivery(entry), onUncertain: entry => this.voiceSessions.uncertainDelivery(entry) });
+      publish: event => this.publish(event), fault: error => this.fault(error), onDispatched: entry => this.voiceSessions.dispatchedDelivery(entry), onSent: entry => this.voiceSessions.confirmDelivery(entry), onUncertain: entry => this.voiceSessions.uncertainDelivery(entry) });
     this.agentInstructions = agentInstructions(agent);
     this.adapter = agent.create({ root, runDir, cwd, sessionId, observation, agentArgs, instructions: this.agentInstructions, clean: this.clean, log: this.log });
     const observer = this.observer = this.adapter.observations;

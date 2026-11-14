@@ -10,7 +10,7 @@ import { jobTurn, routeActions } from './turn.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { recentHistory } from './recent-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
-import { attachment, catchUp, disregardInstruction, goalState, greeting, heldWords, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, sentWords, standbyNews, standbyWake, viewerMoved, walkOn } from './prompts.ts';
+import { attachment, catchUp, disregardInstruction, goalState, greeting, heldWords, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, sentWords, standbyNews, standbyWake, uncertainWords, viewerMoved, walkOn } from './prompts.ts';
 import { focusLine, placeOf, Stage, type StageCommand, type StageHere, type StageView } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
@@ -768,22 +768,28 @@ export class VoiceSessions {
     if (!task.voiceSessionId || live?.state !== 'active' || task.voiceSessionId !== live.id) return;
     live.append('thinking', heldWords(this.bridge.agent, task.said), task.delegationId ?? null).catch(() => {});
   }
-  /** A request may not have reached the agent: its speech goes with that session's next request. */
-  uncertainDelivery(task: OutboxEntry) { this.senders.get(task.id)?.undelivered(task.id); }
-  /** A request reached the agent: its speech counts as delegated, and the voice is told which words went. */
-  confirmDelivery(task: OutboxEntry) {
-    this.senders.get(task.id)?.delivered(task.id); this.senders.delete(task.id);
+  /** A request may not have reached the agent: its speech goes with that session's next request, and the voice, told it went, hears so. */
+  uncertainDelivery(task: OutboxEntry) {
+    this.senders.get(task.id)?.undelivered(task.id);
     const live = this.live;
-    // One that was held is news to whichever voice session is on when it arrives: the one that made it was told only that it was held.
+    if (task.confirmationSent && live?.state === 'active') live.append('thinking', uncertainWords(this.bridge.agent, task.said), null).catch(() => {});
+  }
+  /** A request reached the agent: its speech counts as delegated. */
+  confirmDelivery(task: OutboxEntry) { this.senders.get(task.id)?.delivered(task.id); this.senders.delete(task.id); }
+  /**
+   * A request is handed to the agent now: the voice is told which words went, at once and before anything else is read,
+   * so Jev, which reads what the voice was sent, knows it too and doesn't send them again. Told when delivery was
+   * confirmed instead, the line could reach the voice after Jev's next reading. One that was held is news to whichever
+   * voice session is on when it goes: the one that made it was told only that it was held.
+   */
+  dispatchedDelivery(task: OutboxEntry) {
+    const live = this.live;
     if (task.confirmationSent || !task.voiceSessionId || live?.state !== 'active' || (task.voiceSessionId !== live.id && !task.heldAt)) return;
     task.confirmationSent = true;
-    // Delivery is an operator-facing fact, independent of the observation
-    // backlog. The adapter confirms its own write; this does not claim that the
-    // agent has started or completed the work. Never replay it in a new voice session.
-    // GPT Live hears it quietly and confirms as its instructions say: sent as speech (commentary), it was said aloud
-    // even with the operator's own instruction not to (Oct 18, again every request on Oct 19).
+    // Never replayed in a new voice session. GPT Live hears it quietly: sent as speech (commentary), it was said aloud even
+    // with the operator's own instruction not to (Oct 18, again every request on Oct 19).
     live.append('thinking', sentWords(this.bridge.agent, task.said), task.delegationId ?? null).catch(error => {
-      if (this.live === live && live.state === 'active') this.bridge.fault(new Error(`The request was sent, but its voice confirmation failed: ${error.message}`));
+      if (this.live === live && live.state === 'active') this.bridge.fault(new Error(`The request was sent, but telling the voice failed: ${error.message}`));
     });
   }
 }

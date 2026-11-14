@@ -21,6 +21,8 @@ interface OutboxOptions {
   onUncertain?: (entry: OutboxEntry) => void;
   /** A request is held until the agent's turn ends. */
   onHeld?: (entry: OutboxEntry) => void;
+  /** A request is handed to the adapter now: the voice is told which words went before anything else is read. */
+  onDispatched?: (entry: OutboxEntry) => void;
 }
 
 // Voice requests on their way to the agent, keyed by request ID. Each state
@@ -64,6 +66,7 @@ export class Outbox extends Map<string, OutboxEntry> {
   dispatch(entry: OutboxEntry) {
     entry.state = 'dispatching';
     this.publishRequest(entry);
+    this.options.onDispatched?.(entry);
     let delivery: Promise<DeliveryResult>;
     try { delivery = this.options.adapter().deliver(entry); }
     catch (error) { delivery = Promise.resolve({ state: 'uncertain', error: error as Error }); }

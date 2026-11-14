@@ -24,7 +24,7 @@ import { focusLine, type StageCommand, type StageView } from './stage.ts';
 import type { Tuning } from './tuning.ts';
 import { DEFAULT_FEATURES, type Feature, type Features } from './features.ts';
 import { tunerQuestions, TUNER_SETTING } from './jev-tuner.ts';
-import { spokenLine, wordsEnd } from './prompts.ts';
+import { spokenLine } from './prompts.ts';
 import { roles } from './roles.ts';
 
 type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number; json(): Promise<any> }>;
@@ -182,11 +182,11 @@ const JOB = {
     "They have said a whole request or question, enough to act on, and stopped: even if it trails off into filler ('um', 'yeah', 'so', 'and yeah') or they might add more later. A short cue or command is whole as soon as it is said ('show them', 'take it from here', 'carry on', 'send it').",
     "They broke off in the middle of a sentence or a list ('and the…', 'I want you to…', 'can you also'), or are still building up to what they want (setting context before the actual ask), so acting now would miss its point."),
   // Asked only while the agent is in the middle of a turn: steered into it now, or held until it ends (issue 24).
-  now: noul('The coding agent is in the middle of a turn (`agent_turn`: how long it has been working; `history` shows its latest work). Must the latest words reach it now, in the middle of that turn, rather than when the turn ends?',
+  now: noul('The coding agent is in the middle of a turn: its latest work is at the end of `history`. Must the latest words reach it now, in the middle of that turn, rather than when the turn ends?',
     'They correct, stop, redirect or change the work under way; answer something the agent asked or is waiting on; give information without which the current work would come out wrong or be wasted; or the operator says it is urgent or wants it right away.',
     "They can wait for the turn to end: a new, separate task; an addition that doesn't change what the agent is doing now; a question or remark about results the agent will produce anyway; anything where interrupting would only disturb work that should finish first."),
   // Asked only when a request reached the agent moments before these words.
-  adds: noul('A request went to the coding agent moments ago, or is held for it until its turn ends (`just_sent`: which, how long ago, and the operator\'s words it carried). Do the latest words give the agent anything it needs beyond that request?',
+  adds: noul('The operator\'s words went to the coding agent moments ago, or are held for it until its turn ends: the latest such line in `history` says which. Do the latest words give the agent anything it needs beyond that request?',
     "They hold something that request didn't: an instruction, detail, constraint, correction, decision or question the agent needs; an addition to it, a change to it, or another request.",
     'Nothing the agent needs beyond it: the tail end of the same sentence, filler, an acknowledgment or thanks, a repeat or rewording of what was sent, words meant only for the voice companion (to go on, repeat, wait or stop talking), or stray fragments and noise.'),
 };
@@ -347,8 +347,6 @@ export class Jev {
     const state: Record<string, string> = { setting: this.setting + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : '') + (tune ? ` ${TUNER_SETTING}` : ''), why: WHY[trigger], history: history.trim() || '(none)', latest: latest ? spokenLine(latest) : '(none)' };
     if (instructions) state.operator_instructions = instructions.join('\n') || '(none)';
     if (trigger === 'job') state.voice_reply = reply?.trim() || '(the companion has not replied)';
-    if (trigger === 'job' && moment.working !== undefined) state.agent_turn = `working for ${moment.working < 90000 ? `${Math.max(1, Math.round(moment.working / 1000))} s` : `${Math.round(moment.working / 60000)} min`}`;
-    if (trigger === 'job' && moment.sent) state.just_sent = `${moment.sent.held ? 'held until the agent\'s turn ends' : 'delivered'}, ${Math.max(1, Math.round(moment.sent.ago / 1000))} s ago: "${wordsEnd(moment.sent.said)}"`;
     if (sessions) state.sessions = sessionLines(sessions);
     if (page) state.page = pageLine(page);
     if (trigger === 'step') state.page_done = (moment.done ?? []).map((c, i) => `${i + 1}. ${c.say}${c.shown ? ` → ${c.shown.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`).join('\n') || '(none)';

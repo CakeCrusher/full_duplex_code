@@ -44,21 +44,25 @@ export const phantom = (text: string) => /<\||^[\s<>|\uFFFD]*[<>|\uFFFD][\s<>|\u
 /** The script the operator speaks in is unknown again (a new operator, as far as fdc can have one: its tests). */
 export const forgetScript = () => { spoken = false; };
 
-// Each speaker's speech joins until they pause, so the other speaker's
-// backchannels never split it.
+// The conversation in the order it was said: a speaker's words join until the other speaks or they pause. Until Nov 14 a
+// speaker's words also joined across the other's ("mm-hmm"), which moved lines: 55 of 548 requests of Nov 1 to 13 reached
+// the agent out of the order said (the voice's "Here's the next one" before the operator's "ask me another"), and words
+// on either side of an interjection fused ("to mm-hmm result" became "toresult").
 function utterances(fragments: readonly TranscriptFragment[]): Utterance[] {
-  const joined: Utterance[] = [], open = new Map<Utterance['role'], Utterance>();
+  const joined: Utterance[] = [];
   for (const { role, text, startMs, endMs, receivedAt } of fragments) {
-    const last = open.get(role);
-    if (last && startMs - last.endMs <= 2000) { last.text += text; last.endMs = endMs; }
-    else { const next = { role, text, endMs, at: receivedAt }; joined.push(next); open.set(role, next); }
+    const last = joined.at(-1);
+    if (last?.role === role && startMs - last.endMs <= 2000) { last.text += text; last.endMs = endMs; }
+    else joined.push({ role, text, endMs, at: receivedAt });
   }
   return joined.filter(u => u.text.trim());
 }
 
-// Transcripts of one voice connection, and how far they have been delegated: delegatedThrough
-// moves only over speech the agent received, so speech fdc handled itself, or whose delivery
-// failed or was uncertain, goes with the next request (at least once, never lost).
+// Transcripts of one voice connection, and how far they have been delegated. A request carries the conversation from the
+// cursor (the end of what the agent has, or has on its way) through its own latest words, whole and in order, built when
+// it is sent: words an earlier turn kept go with the next request that goes, before the words that follow them.
+// delegatedThrough moves only over speech the agent received, so speech fdc handled itself, or whose delivery failed or was
+// uncertain, goes with the next request (at least once, never lost).
 export class VoiceHistory {
   fragments: TranscriptFragment[] = [];
   delegatedThrough = -1;
@@ -113,10 +117,11 @@ export class VoiceHistory {
   }
   /** Operator words GPT Live transcribed from silence (see audible), or pieces that are no speech of theirs (phantom). */
   unheard(fragment: TranscriptFragment) { return fragment.role === 'operator' && (phantom(fragment.text) || (!fragment.carried && this.audible(fragment.startMs, fragment.endMs) === false)); }
-  // The conversation since the previous request: anything said before it went with the previous request, unless the agent
-  // never got it. Transcript arrival can trail the end of the operator's turn, so the caller waits briefly for it first.
-  request(): SpokenRequest | null {
-    const all = this.fragments.filter(f => f.seq > this.delegatedThrough && !f.sent && !f.claim);
+  // The conversation since the previous request, through fragment `through`: anything said before it went with the previous
+  // request, unless the agent never got it. Transcript arrival can trail the end of the operator's turn, so the caller waits
+  // briefly for it first.
+  request(through = Infinity): SpokenRequest | null {
+    const all = this.fragments.filter(f => f.seq > this.delegatedThrough && f.seq <= through && !f.sent && !f.claim);
     const unheard = all.filter(f => this.unheard(f));
     const spoken = utterances(all.filter(f => !unheard.includes(f)));
     if (!spoken.some(u => u.role === 'operator')) return null;
@@ -138,6 +143,8 @@ export class VoiceHistory {
     for (let i = pending.length - 1; i >= 0 && (i === pending.length - 1 || pending[i + 1].startMs - pending[i].endMs <= 2000); i--) { pending[i].cued = note; noted++; }
     return noted;
   }
+  /** Words the voice tool read and kept, through fragment `through`: why they are still here goes with them to the next request. */
+  note(through: number, note: string) { for (const f of this.fragments) if (f.seq <= through && !f.sent && !f.claim && !f.note) f.note = note; }
   /** The request is on its way: no other request takes its speech meanwhile. */
   claim(request: SpokenRequest, id: string) { request.id = id; for (const seq of request.seqs) this.fragments[seq].claim = id; }
   /** The request didn't reach the agent: its speech goes with the next one, with why. */

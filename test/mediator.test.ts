@@ -84,6 +84,7 @@ test('when voice ends, speech not yet passed on goes to the agent, tagged with w
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
   f.mediator.decide('delegation', 'work');
+  await flush();
   f.live.emit('event', { type: 'session.output_transcript.delta', delta: 'Sure, passing that on.', start_ms: 1200, end_ms: 2000 });
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'And then make the header', start_ms: 5000, end_ms: 6000 });
   f.mediator.handOff('Microphone audio stream stopped');

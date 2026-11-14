@@ -128,7 +128,7 @@ export const nothingToSend = ({ profile: { name } }: Agent) =>
 // Words that wait because the operator hasn't finished are not "nothing for the agent": told so, the voice contradicted
 // itself when they went a moment later (Nov 4).
 export const turnOutcome = ({ profile: { name, product } }: Agent, { send, wait }: { send: boolean; wait?: boolean }) => send
-  ? `The operator's words went to ${product} already; you'll be told when it has them.`
+  ? `The operator's words went to ${product} already.`
   : wait ? `Nothing was sent to ${product} yet: the operator hasn't finished saying it. Their words go once they have, if they need ${name}; you'll be told.`
   : `Nothing was sent to ${product}: the voice tool found the operator's words need nothing from ${name}. Answer them yourself; whatever they ask ${name} to do goes to it when they say so.`;
 export const queueFailed = ({ profile: { name } }: Agent) =>
@@ -145,7 +145,10 @@ export const wordsEnd = (said: string, max = 140) => {
 // request" had been delivered, Jev sent the tail of a request as a second one seconds later: of 110 requests that followed
 // another within 30 s (Oct 31 to Nov 12), 31 added nothing for the agent, 13 of the 25 within 10 s (two blind judges).
 export const sentWords = ({ profile: { product } }: Agent, said?: string) =>
-  said?.trim() ? `The operator's words were sent to ${product}, which has them now: "${wordsEnd(said)}"` : `The request has been delivered to ${product}.`;
+  said?.trim() ? `The operator's words went to ${product}: "${wordsEnd(said)}"` : `The request went to ${product}.`;
+// Told the words went, the voice then hears when their delivery failed: they go again with the next request.
+export const uncertainWords = ({ profile: { product } }: Agent, said?: string) =>
+  `The operator's words may not have reached ${product}${said?.trim() ? ` ("${wordsEnd(said)}")` : ''}: their delivery failed, and they go again with the next request.`;
 // A request that can wait is held until the agent's turn ends (outbox.ts): the voice is told, so that it never says the
 // agent has it, and the operator can ask for it to go at once.
 export const heldWords = ({ profile: { name, product } }: Agent, said?: string) =>
