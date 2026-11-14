@@ -19,6 +19,8 @@ export class Timeline {
   origin: number; agent: Agent;
   sequence = 0; items = new Map<string, TimelineItem>();
   audio = new Map<string, TimelineItem>(); transcripts = new Map<string, TimelineItem>(); requests = new Map<string, TimelineItem>(); context = new Map<string, TimelineItem>();
+  /** The operator's voice notes (notes.ts), by note ID. */
+  notes = new Map<string, TimelineItem>();
   /** The Standby stretch in progress, drawn across every track. */
   standby?: TimelineItem;
   /** Jev's checks of a request whose item has not appeared yet, by request ID. */
@@ -80,6 +82,16 @@ export class Timeline {
       }
       item.text += event.text; item.end = Math.max(item.end, end); item.fragments++;
       item.receivedAt = at; changed.push(item);
+    }
+    if (event.type === 'note') {
+      // The operator's voice note: the stretch it covers, growing while it records.
+      let item = this.notes.get(event.id);
+      if (!item) this.notes.set(event.id, item = this.item({ track: 'notes', noteId: event.id, start: event.start, end: event.end, label: 'Voice note',
+        source: 'Your voice note, recorded while the session microphone was paused: the voice, Jev and the agent never get it' }));
+      const seconds = ((event.end - event.start) / 1000).toFixed(1);
+      Object.assign(item, { end: event.end, active: event.recording, file: event.file, bytes: event.bytes,
+        text: event.recording ? `Recording your note: ${seconds} s so far.` : `${seconds} s of your voice, saved as ${event.file} in this run's folder.` });
+      changed.push(item);
     }
     if (event.type === 'agent_observation') {
       changed.push(this.item({ track: 'agent', start: at, end: at, label: event.name ?? 'Transcript observation', text: event.text,

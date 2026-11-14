@@ -1,7 +1,7 @@
 import { capitalized, profile } from './profile.js';
 
 const { name, eventWord, promptEvent, transport, wire } = profile;
-const tracks: Record<string, string> = { operator: 'Operator audio', speech: 'Live speech', transcript: 'API transcript', agent: 'Harness hooks', context: 'Context sent to Live', requests: 'Requests to harness' };
+const tracks: Record<string, string> = { operator: 'Operator audio', speech: 'Live speech', transcript: 'API transcript', agent: 'Harness hooks', context: 'Context sent to Live', requests: 'Requests to harness', notes: 'Your notes' };
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 type Item = { id: string; track: string; start: number; end: number; [field: string]: any };
@@ -101,6 +101,7 @@ export class TimelineView {
   itemLabel(item: Item) {
     if (item.track === 'transcript') return `${item.label}: ${item.text.trim()}`;
     if (item.track === 'agent') return item.label;
+    if (item.track === 'notes') return `Voice note · ${Math.round((item.end - item.start) / 1000)} s`;
     return item.label;
   }
   showTooltip(item: Item, target: HTMLElement) {

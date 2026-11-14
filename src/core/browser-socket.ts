@@ -42,6 +42,10 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
       if (event.type === 'voice_on_failed') { bridge.log({ type: 'sessions.voice_on_failed', page: page.id, message: event.message }); bridge.sessionSwitch.failed(event.message); }
       if (event.type === 'instruction_remove') bridge.removeInstruction(event.id).catch(error => bridge.fault(error));
       if (event.type === 'tuning_revert') bridge.revertTuning(event.id);
+      // The operator's voice notes, from any page (notes.ts).
+      if (event.type === 'note_start' && typeof event.id === 'string') bridge.notes.start(page, event.id, event.at, String(event.mimeType ?? ''));
+      if (event.type === 'note_audio' && typeof event.id === 'string') bridge.notes.audio(page, event.id, event.data);
+      if (event.type === 'note_end' && typeof event.id === 'string') bridge.notes.end(page, event.id, event.at);
       // Only pages that held a microphone send this, after their voice ended.
       if (event.type === 'audio_stopped') { bridge.log({ type: 'audio_stopped', liveRun: bridge.live?.reservation, page: page.id }); bridge.publish({ type: 'audio_stopped' }); bridge.saveTimeline(); }
       // Recorded from the page that is about to start voice too.
@@ -93,6 +97,7 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
   ws.on('close', (code, reason) => {
     const hadVoice = runsVoice();
     pages.remove(ws, code, reason.toString());
+    bridge.notes.closePage(page);
     if (!hadVoice || bridge.stopping) return;
     bridge.publish({ type: 'audio_stopped' }); bridge.saveTimeline();
     if (bridge.voiceSessions.standby?.page === page) bridge.voiceSessions.endStandby('voice client disconnected'); else bridge.live?.close('voice client disconnected');

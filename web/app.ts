@@ -36,10 +36,21 @@ const timeline = new TimelineView(), meters = new Meters(timeline.items);
 // Loaded on its own: an fdc started before this module existed serves the page without it (it serves only
 // the files it knew when it started), and the rest of the page must still work.
 let settingsPanel: { update(event: BridgeEvent): void } | undefined;
+// Recording a voice note pauses the session microphone (voice-notes.ts), apart from the operator's own mute. Loaded on
+// its own too, so a page served by an fdc started before it still works.
+let notePaused = false;
+const applyMute = () => audio.mute(muted || notePaused);
+let voiceNotes: { handle(event: BridgeEvent): void } | undefined;
+import('./voice-notes.js').then(module => {
+  voiceNotes = module.mountVoiceNotes({ button: $<HTMLButtonElement>('note'), hint: $('note-hint'), send: event => bridge.send(event), stream: () => audio.stream,
+    deviceId: () => $<HTMLSelectElement>('microphone-device').value, pause: paused => { notePaused = paused; applyMute(); }, notice });
+  document.querySelector('.timeline')!.classList.add('notes-on');
+  if (currentStatus) voiceNotes.handle(currentStatus);
+}).catch(() => {});
 import('./settings-panel.js').then(module => { settingsPanel = module.mountSettings($('settings'), token); if (currentStatus) settingsPanel.update(currentStatus); }).catch(() => { $('settings').hidden = true; });
 
 function handle(event: BridgeEvent) {
-  timeline.handle(event); meters.handle(event);
+  timeline.handle(event); meters.handle(event); voiceNotes?.handle(event);
   const cue = cues.cue(event, { replaying });
   // Woken, the start cue waits for the operator's held words to go in (loaded()).
   if (cue && !(cue === 'start' && waking)) cuePlayer.play(cue);
@@ -211,7 +222,7 @@ function measured(data: WorkletMessage) {
   if (data.type === 'replayed' || data.type === 'level' && loading && data.outputRms > .003) loaded(data.type === 'replayed');
   if (data.type === 'level') {
     $<HTMLMeterElement>('level').value = Math.min(1, (data.rawRms ?? data.rms) * 5);
-    $('gate-state').textContent = standby ? muted ? 'Muted' : data.rms > 0 ? 'Standby · speech wakes voice' : 'Standby · listening here' : !active ? 'Waiting for Live' : muted ? 'Muted' : data.rms > 0 ? 'Passing audio to Live' : 'Gate closed · sending silence';
+    $('gate-state').textContent = notePaused ? 'Paused for your note' : standby ? muted ? 'Muted' : data.rms > 0 ? 'Standby · speech wakes voice' : 'Standby · listening here' : !active ? 'Waiting for Live' : muted ? 'Muted' : data.rms > 0 ? 'Passing audio to Live' : 'Gate closed · sending silence';
     // On Standby too: the bridge hears the operator start speaking from these.
     if (bridge.open && (active || standby)) bridge.send({ type: 'audio_level', at: audio.audioEpoch + data.endTime * 1000, durationMs: data.durationMs, inputRms: data.rms, rawInputRms: data.rawRms, gateThreshold: data.gateThreshold, voiced: data.voiced, outputRms: data.outputRms, backlogMs: data.backlogMs });
   }
@@ -240,6 +251,7 @@ async function start(mode: 'resume' | 'fresh' = 'fresh', automatic = false, aske
     });
     if (!current()) return;
     if (!fromStandby) { muted = false; $('mute').textContent = 'Mute microphone'; $('mute').setAttribute('aria-pressed', 'false'); }
+    applyMute();
     bridge.send({ type: 'start', sdp, mode, automatic });
     $<HTMLButtonElement>('stop').disabled = false; $('audioState').textContent = 'Connecting voice…';
   } catch (error) {
@@ -299,7 +311,7 @@ $<HTMLInputElement>('microphone-gate').oninput = e => {
 };
 $<HTMLInputElement>('microphone-gate').onchange = e => { if (bridge.open) bridge.send({ type: 'microphone_gate', threshold: Number((e.target as HTMLInputElement).value) }); };
 $('mute').onclick = () => {
-  muted = !muted; audio.mute(muted); bridge.send({ type: 'mute', muted });
+  muted = !muted; applyMute(); bridge.send({ type: 'mute', muted });
   $('mute').textContent = muted ? 'Unmute microphone' : 'Mute microphone'; $('mute').setAttribute('aria-pressed', String(muted)); $('audioState').textContent = muted ? 'Microphone muted' : 'Microphone on';
 };
 // A connection that has gone quiet is dead even if it looks open, as after a phone sleeps.

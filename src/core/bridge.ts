@@ -29,6 +29,8 @@ import { DEFAULT_TUNING, tuning, type Tuning } from './tuning.ts';
 import { CompanionRegistry, type CompanionEntry } from './companions.ts';
 import { SessionSwitch } from './sessions.ts';
 import { Forks } from './forks.ts';
+import { VoiceNotes } from './notes.ts';
+import type { NoteHotkey } from './hotkey.ts';
 import type { AgentSession } from './adapter.ts';
 
 export interface HarnessOptions {
@@ -126,6 +128,8 @@ export class Harness {
   pageAudit: PageAudit;
   /** Moves the stage by what GPT Live says: speech cues, the words Jev matches to a command, the following ring. */
   presenter: Presenter;
+  /** The operator's voice notes on the timeline (notes.ts), and the chord that records one from anywhere (hotkey.ts, started by the launcher). */
+  notes: VoiceNotes; noteHotkey?: NoteHotkey;
   statusTimer?: NodeJS.Timeout; agentLostTimer?: NodeJS.Timeout;
   constructor({ agent, root, runDir, cwd, sessionId, apiKey, voice = 'marin', observation = agent.observationModes[0] ?? '', port = 0, portFallback = false, publicUrl, agentArgs = [], jevKey, tuning: overrides, features = DEFAULT_FEATURES, store = true, stageFile }: HarnessOptions) {
     this.agent = agent; this.root = root; this.runDir = runDir; this.cwd = cwd; this.sessionId = sessionId; this.apiKey = apiKey;
@@ -158,6 +162,7 @@ export class Harness {
       onJudged: judged => { if (!judged.learned) this.jevCheck(judged.requestId, 'instruction', `Not a standing instruction (${judged.behave.toFixed(2)})`, judged); },
       onLearn: instruction => { this.learnInstruction(instruction).catch(error => this.fault(error as Error)); } });
     this.forks = new Forks(this);
+    this.notes = new VoiceNotes(this);
     // A request goes to the session in focus when it was sent: the main one, or a fork open for a tangent (forks.ts).
     this.outbox = new Outbox({ agent, adapter: entry => this.forks.adapterFor(entry.target), ready: entry => entry.target === 'fork' ? this.forks.ready : this.agentReady, clean: this.clean, log: this.log,
       working: entry => entry.target !== 'fork' && this.agentWorking() !== undefined, onHeld: entry => { this.voiceSessions.heldDelivery(entry); this.watchHeld(); },
@@ -375,6 +380,7 @@ export class Harness {
     if (this.live) await this.live.close('harness stopped');
     this.voiceSessions.handOffCarried();
     this.mediator?.stop();
+    this.noteHotkey?.close(); this.notes.close();
     this.audit?.close(); this.jevAudit?.close(); this.stage.close(); this.saveTimeline();
     this.pages.close();
     await this.endpoints.close();

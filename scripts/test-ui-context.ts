@@ -79,6 +79,8 @@ try {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(harness.browserUrl);
+  // The page's microphone prompt, answered as the operator would.
+  await page.locator('dialog.microphone-gate button').click();
   // The default view keeps three tracks and the instructions; Developer mode adds the rest.
   await page.locator('.timeline-item[data-track="requests"]').first().waitFor();
   assert.equal(await page.locator('[data-lane="operator"]').isVisible(), false, 'operator audio is a developer detail');

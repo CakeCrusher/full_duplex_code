@@ -10,6 +10,7 @@ import { once } from 'node:events';
 import { spawn, type ChildProcess } from 'node:child_process';
 import qrcode from 'qrcode-terminal';
 import { Harness } from './core/bridge.ts';
+import { NoteHotkey } from './core/hotkey.ts';
 import { resolveCommand, type Command } from './core/command.ts';
 import { UsageLedger } from './core/usage-ledger.ts';
 import { DEFAULT_FEATURES, FEATURES, featuresFrom, type Feature } from './core/features.ts';
@@ -132,6 +133,8 @@ async function run(agent: AgentDefinition, session: AgentArguments) {
     // the agent until it showed the page again).
     stageFile: path.join(root, '.runs', 'stage', `${createHash('sha1').update(cwd).digest('hex').slice(0, 12)}.json`) }).start(); }
   catch (error) { console.error(loud(`fdc: ${(error as Error).message}`)); process.exit(1); }
+  // Right Command and Right Option held anywhere record a voice note (hotkey.ts).
+  harness.noteHotkey = new NoteHotkey(harness); void harness.noteHotkey.start();
   if (harness.portFellBack) console.log(`\nPort ${DEFAULT_PORT} is in use, probably by another companion. This one uses ${new URL(harness.baseUrl).port}; Chrome may ask for microphone access again.`);
   let tunnel: Tunnel | undefined, child: ChildProcess | undefined, stopping = false;
   // One ordered teardown for every way the launcher can end: the agent exiting or
