@@ -147,6 +147,8 @@ export class Mediator {
     this.onLive = event => this.liveEvent(event);
     live.on('event', this.onLive); observer.on('observation', this.onObservation);
   }
+  /** The agent session the voice hears from now: a fork's work while it is in focus, the main session's otherwise (forks.ts). */
+  observe(observer: AgentObserver) { if (observer === this.observer) return; this.observer.off('observation', this.onObservation); this.observer = observer; observer.on('observation', this.onObservation); }
   /** New settings take effect at once: the floor, the hold and the compaction threshold. */
   applyTuning(tuning: Tuning) {
     Object.assign(this.floor, { thinkMs: tuning.thinkMs, pauseMs: tuning.pauseMs });

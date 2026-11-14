@@ -19,10 +19,10 @@ export interface ClaudeConfig { mcpFile: string; settingsFile: string }
 // the relay), both private to this run. The channel's instructions are fdc's
 // (prompts.ts): Claude puts an MCP server's instructions in its system prompt,
 // in a new conversation and a resumed one alike.
-export function makeClaudeConfig({ root, runDir, baseUrl, channelToken, instructions }: { root: string; runDir: string; baseUrl: string; channelToken: string; instructions: string }): ClaudeConfig {
-  const mcp = { mcpServers: { voice: { command: process.execPath, args: [path.join(root, 'src/adapters/claude/channel-server.ts')], env: { FD_BRIDGE_URL: baseUrl.replace('http:', 'ws:') + '/channel', FD_BRIDGE_TOKEN: channelToken, FD_INSTRUCTIONS: instructions } } } };
+export function makeClaudeConfig({ root, runDir, baseUrl, channelToken, instructions, prefix = '' }: { root: string; runDir: string; baseUrl: string; channelToken: string; instructions: string; prefix?: string }): ClaudeConfig {
+  const mcp = { mcpServers: { voice: { command: process.execPath, args: [path.join(root, 'src/adapters/claude/channel-server.ts')], env: { FD_BRIDGE_URL: baseUrl.replace('http:', 'ws:') + prefix + '/channel', FD_BRIDGE_TOKEN: channelToken, FD_INSTRUCTIONS: instructions } } } };
   const hooks: Record<string, unknown> = {};
-  const [command, ...args] = hookCommand(root, baseUrl);
+  const [command, ...args] = hookCommand(root, baseUrl + prefix);
   for (const name of OBSERVED_HOOKS) hooks[name] = [{ hooks: [{ type: 'command', command, args, timeout: 2 }] }];
   const mcpFile = path.join(runDir, 'mcp.json'); const settingsFile = path.join(runDir, 'settings.json');
   fs.writeFileSync(mcpFile, JSON.stringify(mcp, null, 2), { mode: 0o600 });

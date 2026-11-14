@@ -28,6 +28,8 @@ import { Pages, type Page } from './pages.ts';
 import { DEFAULT_TUNING, tuning, type Tuning } from './tuning.ts';
 import { CompanionRegistry, type CompanionEntry } from './companions.ts';
 import { SessionSwitch } from './sessions.ts';
+import { Forks } from './forks.ts';
+import type { AgentSession } from './adapter.ts';
 
 export interface HarnessOptions {
   /** The coding agent, from src/adapters. */
@@ -63,6 +65,8 @@ export const QUIET_TURN_MS = 180000;
 // It owns the shared state; each concern lives in its own module.
 export class Harness {
   agent: AgentDefinition; adapter: AgentAdapter; observer: AgentObserver;
+  /** The main session as the adapter was created for it, and the fork open for a tangent, if any (forks.ts). */
+  agentSession!: AgentSession; forks!: Forks;
   /** Jev, when a TypeSafe key is set: its readings (jev.ts) decide what reaches the agent, and act for the features on; each call is recorded with what came of it (jev-audit.ts). */
   jev?: Jev; jevAudit?: JevAudit; learner?: InstructionLearner; handOffAudit?: DelegationAudit; jevTuning: boolean; learned: LearnedLog;
   /** Jev's optional features on (features.ts). */
@@ -153,11 +157,14 @@ export class Harness {
     if (jevKey && this.features.has('instructions')) this.learner = new InstructionLearner({ log: this.log,
       onJudged: judged => { if (!judged.learned) this.jevCheck(judged.requestId, 'instruction', `Not a standing instruction (${judged.behave.toFixed(2)})`, judged); },
       onLearn: instruction => { this.learnInstruction(instruction).catch(error => this.fault(error as Error)); } });
-    this.outbox = new Outbox({ agent, adapter: () => this.adapter, ready: () => this.agentReady, clean: this.clean, log: this.log,
-      working: () => this.agentWorking() !== undefined, onHeld: entry => { this.voiceSessions.heldDelivery(entry); this.watchHeld(); },
+    this.forks = new Forks(this);
+    // A request goes to the session in focus when it was sent: the main one, or a fork open for a tangent (forks.ts).
+    this.outbox = new Outbox({ agent, adapter: entry => this.forks.adapterFor(entry.target), ready: entry => entry.target === 'fork' ? this.forks.ready : this.agentReady, clean: this.clean, log: this.log,
+      working: entry => entry.target !== 'fork' && this.agentWorking() !== undefined, onHeld: entry => { this.voiceSessions.heldDelivery(entry); this.watchHeld(); },
       publish: event => this.publish(event), fault: error => this.fault(error), onDispatched: entry => this.voiceSessions.dispatchedDelivery(entry), onSent: entry => this.voiceSessions.confirmDelivery(entry), onUncertain: entry => this.voiceSessions.uncertainDelivery(entry) });
     this.agentInstructions = agentInstructions(agent);
-    this.adapter = agent.create({ root, runDir, cwd, sessionId, observation, agentArgs, instructions: this.agentInstructions, clean: this.clean, log: this.log });
+    this.agentSession = { root, runDir, cwd, sessionId, observation, agentArgs, instructions: this.agentInstructions, clean: this.clean, log: this.log };
+    this.adapter = agent.create(this.agentSession);
     const observer = this.observer = this.adapter.observations;
     observer.on('input', event => { this.log({ type: 'agent.input', ...event }); this.publish({ type: 'agent_input', ...event }); });
     observer.on('text', event => { this.log({ type: 'agent.text', ...event }); this.publish({ type: 'agent_text', ...event }); });
@@ -165,7 +172,8 @@ export class Harness {
     // read can be over a megabyte, and a page connection backed up with it looks like slow playback.
     observer.on('observation', ({ raw, ...event }) => this.publish({ type: 'agent_observation', ...event, text: withoutBinary(event.text) }));
     // The agent's work, priced for Standby (activity.ts): a subagent's events are its parent's business.
-    observer.on('observation', (observation: Observation) => { if (!observation.child && observation.kind !== 'event') this.voiceSessions.activity.add(observation.kind); });
+    // While a fork is in focus, the main session's work weighs nothing for Standby, as for the voice (forks.ts).
+    observer.on('observation', (observation: Observation) => { if (!observation.child && observation.kind !== 'event' && this.forks.focus === 'main') this.voiceSessions.activity.add(observation.kind); });
     observer.on('observation', (observation: Observation) => { if (!observation.child) this.stage.observe(observer.toolUse(observation), observation.name === this.agent.profile.turnEnd); });
     observer.on('status', event => { this.log({ type: 'agent.status', ...event }); this.publish({ type: 'agent_status', ...event }); });
     // The agent's turn, by its own events: it begins with a prompt or a tool call and ends where the agent reports its end.
@@ -211,7 +219,11 @@ export class Harness {
   instructions() { return this.voiceSessions.instructions(); }
   appendInstruction(text: unknown) { return this.voiceSessions.appendInstruction(text); }
   startLive(sdp?: unknown, page?: Page, mode: 'resume' | 'fresh' = 'fresh', automatic = false) { return this.voiceSessions.start(sdp, page, mode, automatic); }
-  deliver(request: VoiceRequest) { this.outbox.add(request); }
+  deliver(request: VoiceRequest) { this.outbox.add({ ...request, target: this.forks.focus }); }
+  /** The session in focus changed (forks.ts): the voice hears that session's work from now. */
+  focusChanged() { this.mediator?.observe(this.forks.observer()); this.publish(this.status()); }
+  /** A line for the voice about what fdc did by itself, quietly. */
+  tell(text: string) { if (this.live?.state === 'active') this.mediator?.context.add('thinking', text); }
   /** A one-off run of the harness for a short piece of writing (tests replace it). */
   ask = (prompt: string) => askAgent(this.agent, prompt, { cwd: this.cwd });
   /** One of Jev's checks of a request to the harness, for the page's request inspector. */
@@ -358,6 +370,7 @@ export class Harness {
     // fdc stopping: nothing stays held.
     this.outbox.releaseHeld();
     const agentClosed = this.adapter.close();
+    this.forks.close();
     clearInterval(this.statusTimer); clearInterval(this.voiceSessions.audioWatchdog); clearInterval(this.voiceSessions.standbyTimer); clearTimeout(this.agentLostTimer); clearTimeout(this.tuneTimer);
     if (this.live) await this.live.close('harness stopped');
     this.voiceSessions.handOffCarried();

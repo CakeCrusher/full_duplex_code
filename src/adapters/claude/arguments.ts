@@ -69,3 +69,23 @@ export function readClaudeArgs(args: readonly string[]): AgentArguments {
   // A fork gets a new ID from Claude; learn it from the first hook.
   return { direct: false, resume, sessionId: fork ? undefined : sessionId ?? resumeId, assignSession: !choosesSession };
 }
+
+/**
+ * The operator's options for a fork of their session (forks.ts): everything that shapes how Claude works (permissions,
+ * model, tools, directories), without what chooses the session (--resume, --continue, --session-id, --fork-session,
+ * --from-pr, --teleport, a name) or a first prompt: the fork continues the session it forks.
+ */
+export function forkArgs(args: readonly string[]): string[] {
+  const out: string[] = [], DROP = new Set(['-r', '--resume', '-c', '--continue', '--session-id', '--fork-session', '--from-pr', '--teleport', '-n', '--name']);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') break;
+    if (!arg.startsWith('-')) continue;
+    const [name, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
+    const next = args[i + 1], takes = inline === undefined && (ONE_VALUE.has(name) || (OPTIONAL_VALUE.has(name) && next !== undefined && !next.startsWith('-')));
+    const values: string[] = takes ? [args[++i]] : [];
+    if (VARIADIC.has(name)) while (inline === undefined && i + 1 < args.length && !args[i + 1].startsWith('-')) values.push(args[++i]);
+    if (!DROP.has(name)) out.push(arg, ...values);
+  }
+  return out;
+}

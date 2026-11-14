@@ -13,7 +13,7 @@ import type { Harness } from './bridge.ts';
 import type { Decision } from './mediator.ts';
 import type { StageView } from './stage.ts';
 import type { Spoken, SpokenRequest } from './voice-history.ts';
-import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, NOW, PRESS, READY, RECENT_MS, STANDBY, type Reading, type Trigger } from './jev.ts';
+import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, NOW, PRESS, READY, RECENT_MS, SETTLED, STANDBY, TANGENT, type Reading, type Trigger } from './jev.ts';
 import { companionNoted, handledNote, lookingNote, sessionsChanging } from './prompts.ts';
 
 /** What the voice tool did itself for the operator's turn: for GPT Live at once (told), and for the agent with their words (note). */
@@ -29,7 +29,8 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
   // delegation (what its controls can do) and for the agent (what the user was looking at).
   const orchestration = bridge.features.has('orchestration');
   const [sessions, view] = await Promise.all([orchestration ? bridge.sessionSwitch.sessions(300) : undefined, bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
-  const reading = await bridge.read({ trigger: why, spoken, sessions, requestId: request.id });
+  const fork = bridge.forks.possible ? bridge.forks.focus : undefined;
+  const reading = await bridge.read({ trigger: why, spoken, sessions, requestId: request.id, ...fork && { fork } });
   bridge.log({ type: 'turn.read', why, said: request.fresh.slice(-200), companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions });
   const standby = (reading.standby ?? 0) >= STANDBY;
   if (standby) bridge.voiceSessions.standbyAsked();
@@ -40,7 +41,11 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
   if (goal) bridge.voiceSessions.setGoal(goal === 'done' ? undefined : request.fresh, { walk: goal === 'walk' });
   // The learner and the tuner add theirs, and complete the record (bridge.ts, consider).
   bridge.jevAudit?.decided(reading.id, { standby, ...sessions && { sessions: asked?.told ?? false }, ...reading.companionOnly !== undefined && { companionOnly: companion }, ...goal && { goal } });
-  const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent, bridge.features)].filter(Boolean).join(' ') || undefined;
+  // A tangent goes to a fork of the agent's session, before its words are sent; settled, back to the main session (forks.ts).
+  const forked = fork === 'main' && (reading.tangent ?? 0) >= TANGENT ? await bridge.forks.start(request.fresh) : undefined;
+  const returned = fork === 'fork' && (reading.settled ?? 0) >= SETTLED ? bridge.forks.back('the tangent is settled') : undefined;
+  if (forked || returned) bridge.jevAudit?.decided(reading.id, { ...forked && { fork: 'opened' }, ...returned && { fork: 'back' } });
+  const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent, bridge.features), forked, returned].filter(Boolean).join(' ') || undefined;
   const handled = asked ? 'sessions' : companion ? 'companion' : undefined;
   return { reading, view, told, note: view ? lookingNote(view) : undefined, keptNote: handled && handledNote(handled) };
 }

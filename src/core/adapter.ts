@@ -92,6 +92,8 @@ export interface VoiceRequest {
   said?: string;
   /** It can wait for the end of the turn the agent is running: fdc holds it until then (outbox.ts). Otherwise it is steered into the turn. */
   followUp?: boolean;
+  /** The session it goes to: the one in focus when it was sent (forks.ts). */
+  target?: Target;
 }
 
 /** How far a delivery got. */
@@ -118,6 +120,8 @@ export interface AgentArguments {
 
 /** Everything the core knows about one kind of agent before a session exists. */
 export interface AgentDefinition {
+  /** It can fork a session into a new one that continues it (forks.ts): a tangent then goes to the fork. */
+  canFork?: boolean;
   profile: AgentProfile;
   /** What of its events reaches Live: see ContextRule. */
   context: readonly ContextRule[];
@@ -159,6 +163,8 @@ export interface AgentDefinition {
 }
 
 /** What the bridge gives an adapter for one agent session. */
+/** Where a request goes: the main session, or the fork open for a tangent (forks.ts). */
+export type Target = 'main' | 'fork';
 export interface AgentSession {
   root: string;
   runDir: string;
@@ -177,6 +183,10 @@ export interface AgentSession {
   instructions: string;
   clean: (text: string) => string;
   log: (event: Record<string, unknown>) => void;
+  /** This session is a fork of that one (its ID), opened in its own window for a tangent (forks.ts). */
+  forkOf?: string;
+  /** Where this session's hooks and sockets are served on the bridge, before their paths: '' for the main session, '/fork' for a fork. */
+  prefix?: string;
 }
 
 /** The agent's own command, ready to run, and the files written for it. */

@@ -6,11 +6,12 @@ export interface OutboxEntry extends VoiceRequest { state: DeliveryState; confir
 
 interface OutboxOptions {
   agent: Pick<AgentDefinition, 'wire'>;
-  adapter: () => AgentAdapter;
+  /** The adapter a request goes to: the main session's, or a fork's (forks.ts). */
+  adapter: (entry: OutboxEntry) => AgentAdapter;
   /** Whether the adapter can deliver right now. */
-  ready: () => boolean;
+  ready: (entry: OutboxEntry) => boolean;
   /** Whether the agent is in the middle of a turn: a request that can wait is held until it ends. */
-  working?: () => boolean;
+  working?: (entry: OutboxEntry) => boolean;
   clean: (text: string) => string;
   log: (event: Record<string, unknown>) => void;
   publish: (event: Record<string, unknown>) => void;
@@ -39,7 +40,7 @@ export class Outbox extends Map<string, OutboxEntry> {
     if (this.size >= 1000) throw new Error('Too many voice tasks in one session');
     if (this.has(request.id)) return;
     const entry: OutboxEntry = { ...request, content: this.options.clean(request.content), state: 'queued' }; this.set(request.id, entry);
-    if (request.followUp && this.options.working?.()) {
+    if (request.followUp && this.options.working?.(entry)) {
       entry.state = 'held'; entry.heldAt = Date.now();
       this.publishRequest(entry); this.options.onHeld?.(entry);
       return;
@@ -47,7 +48,7 @@ export class Outbox extends Map<string, OutboxEntry> {
     // One that can't wait brings those held with it, first.
     this.releaseHeld(true);
     this.publishRequest(entry);
-    if (this.options.ready()) this.dispatch(entry);
+    if (this.options.ready(entry)) this.dispatch(entry);
   }
   /** The agent's turn ended, or a request came that can't wait (`pressed`): what was held goes now, oldest first, saying why it comes when it does. */
   releaseHeld(pressed = false) {
@@ -58,17 +59,17 @@ export class Outbox extends Map<string, OutboxEntry> {
       entry.state = 'queued';
       this.options.log({ type: 'task.released', id: entry.id, heldSeconds: seconds, pressed });
       this.publishRequest(entry);
-      if (this.options.ready()) this.dispatch(entry);
+      if (this.options.ready(entry)) this.dispatch(entry);
     }
   }
   /** Sends everything that waited for the agent to become ready. */
-  dispatchQueued() { for (const entry of this.values()) if (entry.state === 'queued') this.dispatch(entry); }
+  dispatchQueued() { for (const entry of this.values()) if (entry.state === 'queued' && this.options.ready(entry)) this.dispatch(entry); }
   dispatch(entry: OutboxEntry) {
     entry.state = 'dispatching';
     this.publishRequest(entry);
     this.options.onDispatched?.(entry);
     let delivery: Promise<DeliveryResult>;
-    try { delivery = this.options.adapter().deliver(entry); }
+    try { delivery = this.options.adapter(entry).deliver(entry); }
     catch (error) { delivery = Promise.resolve({ state: 'uncertain', error: error as Error }); }
     delivery.then(result => this.settle(entry, result));
   }

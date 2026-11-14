@@ -455,7 +455,7 @@ export class VoiceSessions {
     this.live = live; this.page = page;
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
-    const mediator: Mediator = this.mediator = new Mediator({ live, observer, agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
+    const mediator: Mediator = this.mediator = new Mediator({ live, observer: bridge.forks.observer(), agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
       audit: bridge.handOffAudit, route: bridge.jev ? { actions: (request, spoken, why) => routeActions(bridge, request, spoken, why), job: (request, spoken, reply, actions, waiting) => jobTurn(bridge, request, spoken, reply, actions, waiting) } : undefined,
       read: bridge.jev ? (trigger, spoken, record) => bridge.read({ trigger, spoken, ...record }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0, replays: Boolean(wake?.operator) });
@@ -794,7 +794,7 @@ export class VoiceSessions {
     task.confirmationSent = true;
     // Never replayed in a new voice session. GPT Live hears it quietly: sent as speech (commentary), it was said aloud even
     // with the operator's own instruction not to (Oct 18, again every request on Oct 19).
-    live.append('thinking', sentWords(this.bridge.agent, task.said), task.delegationId ?? null).catch(error => {
+    live.append('thinking', sentWords(this.bridge.agent, task.said, task.target === 'fork'), task.delegationId ?? null).catch(error => {
       if (this.live === live && live.state === 'active') this.bridge.fault(new Error(`The request was sent, but telling the voice failed: ${error.message}`));
     });
   }
