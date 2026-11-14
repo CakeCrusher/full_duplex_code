@@ -9,11 +9,13 @@ export interface TranscriptFragment {
   note?: string;
   /** The voice moved the page as it answered these words: this goes with them, and the gate still judges them. */
   cued?: string;
+  /** A tag in the record placed before these words, such as where a fork began (forks.ts). */
+  tag?: string;
 }
 /** One speaker's speech until they pause for over 2 seconds, and when its first words were heard (wall clock). */
-export type Utterance = Pick<TranscriptFragment, 'role' | 'text' | 'endMs'> & { at?: number };
+export type Utterance = Pick<TranscriptFragment, 'text' | 'endMs'> & { role: TranscriptFragment['role'] | 'event'; at?: number };
 /** A spoken turn as kept for resuming the conversation, with when it was heard (kept since Oct 30). */
-export type Turn = Pick<Utterance, 'role' | 'text' | 'at'>;
+export type Turn = Pick<Utterance, 'text' | 'at'> & { role: TranscriptFragment['role'] };
 /** An utterance with when it was heard (wall clock). */
 export type Spoken = Turn & { at: number };
 export interface SpokenRequest {
@@ -50,7 +52,8 @@ export const forgetScript = () => { spoken = false; };
 // on either side of an interjection fused ("to mm-hmm result" became "toresult").
 function utterances(fragments: readonly TranscriptFragment[]): Utterance[] {
   const joined: Utterance[] = [];
-  for (const { role, text, startMs, endMs, receivedAt } of fragments) {
+  for (const { role, text, startMs, endMs, receivedAt, tag } of fragments) {
+    if (tag) joined.push({ role: 'event', text: tag, endMs: startMs, at: receivedAt });
     const last = joined.at(-1);
     if (last?.role === role && startMs - last.endMs <= 2000) { last.text += text; last.endMs = endMs; }
     else joined.push({ role, text, endMs, at: receivedAt });
@@ -67,6 +70,8 @@ export class VoiceHistory {
   fragments: TranscriptFragment[] = [];
   delegatedThrough = -1;
   lastInputAt = 0;
+  /** A tag waiting for the next words, when none are waiting to be sent. */
+  pendingTag?: string;
   /** GPT Live's echo of the audio it heard from the operator (WebRTC only): each stretch and its loudest sample. */
   heard: { startMs: number; endMs: number; peak: number }[] = [];
   add(event: TranscriptDelta): TranscriptFragment {
@@ -75,6 +80,7 @@ export class VoiceHistory {
     // Two pieces in a row in another script: that is how they speak.
     const before = role === 'operator' && otherScript(fragment.text) ? this.fragments.findLast(f => f.role === 'operator') : undefined;
     if (before && otherScript(before.text) && fragment.receivedAt - before.receivedAt <= 3000) spoken = true;
+    if (this.pendingTag) { fragment.tag = this.pendingTag; this.pendingTag = undefined; }
     this.fragments.push(fragment);
     if (role === 'operator' && !phantom(fragment.text)) this.lastInputAt = fragment.receivedAt;
     return fragment;
@@ -145,6 +151,19 @@ export class VoiceHistory {
   }
   /** Words the voice tool read and kept, through fragment `through`: why they are still here goes with them to the next request. */
   note(through: number, note: string) { for (const f of this.fragments) if (f.seq <= through && !f.sent && !f.claim && !f.note) f.note = note; }
+  /** Places a tag before the operator's latest words no request took yet (the turn that brought it on), else before the next words. */
+  tag(text: string) {
+    const pending = this.fragments.filter(f => f.role === 'operator' && f.seq > this.delegatedThrough && !f.sent && !f.claim);
+    let first: TranscriptFragment | undefined;
+    for (let i = pending.length - 1; i >= 0 && (i === pending.length - 1 || pending[i + 1].startMs - pending[i].endMs <= 2000); i--) first = pending[i];
+    if (first) first.tag = first.tag ? `${first.tag}\n${text}` : text;
+    else this.pendingTag = this.pendingTag ? `${this.pendingTag}\n${text}` : text;
+  }
+  /** Everything after fragment `through` goes again with the next request: a session catching up on what went elsewhere (a fork). */
+  reopen(through: number) {
+    for (const f of this.fragments) if (f.seq > through) { f.sent = false; f.claim = undefined; }
+    this.delegatedThrough = Math.min(this.delegatedThrough, through);
+  }
   /** The request is on its way: no other request takes its speech meanwhile. */
   claim(request: SpokenRequest, id: string) { request.id = id; for (const seq of request.seqs) this.fragments[seq].claim = id; }
   /** The request didn't reach the agent: its speech goes with the next one, with why. */
@@ -162,7 +181,7 @@ export class VoiceHistory {
     while (this.fragments[this.delegatedThrough + 1]?.sent) this.delegatedThrough++;
   }
   /** This connection's own conversation, for resuming it in a later one. */
-  turns(): Turn[] { return utterances(this.fragments.filter(f => !f.carried && !this.unheard(f))).map(({ role, text, at }) => ({ role, text: text.replace(/\s+/g, ' ').trim(), at })); }
+  turns(): Turn[] { return utterances(this.fragments.filter(f => !f.carried && !this.unheard(f))).flatMap(({ role, text, at }) => role === 'event' ? [] : [{ role, text: text.replace(/\s+/g, ' ').trim(), at }]); }
   /**
    * The conversation as it was heard, up to the operator's latest words (to fragment `through`): each speaker's words until
    * the other speaks or they pause, with when it was heard, for placing it among what GPT Live was sent (perceived.ts).

@@ -10,8 +10,6 @@ export const FEATURES = {
   instructions: 'Jev adds the operator\'s standing instructions to the voice companion and saves them',
   /** Off unless turned on (FDC_JEV_TUNING=1 turns it on too, as before). */
   configuration: 'Jev changes the voice companion\'s settings to fit the operator\'s instructions',
-  /** Off unless turned on, until its live checks (forks.ts). */
-  forks: 'Jev moves a tangent the operator starts to a fork of the agent\'s session, in a terminal window of its own, and back to the main session once it is settled',
 } as const;
 export type Feature = keyof typeof FEATURES;
 export type Features = ReadonlySet<Feature>;

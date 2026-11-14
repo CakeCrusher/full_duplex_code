@@ -13,6 +13,10 @@ import { pi } from '../src/adapters/pi/index.ts';
 import { openWindow, writeScript } from '../src/core/window.ts';
 import { Jev } from '../src/core/jev.ts';
 import { claude } from '../src/adapters/claude/index.ts';
+import { codex } from '../src/adapters/codex/index.ts';
+import { VoiceHistory } from '../src/core/voice-history.ts';
+import { FORK_ENDED, FORK_STARTED } from '../src/core/forks.ts';
+import { spokenLine, voiceRequest } from '../src/core/prompts.ts';
 import { routeActions } from '../src/core/turn.ts';
 import { fakeJev, harness, page, until } from './live-fake.ts';
 
@@ -71,7 +75,7 @@ test('with forks on, the voice tool asks whether a tangent starts while the main
 });
 
 test("a tangent opens a fork in a window of its own: Claude's fork of the session, with its hooks and channel on the fork's routes; requests and the voice follow the focus, and back again once settled", async t => {
-  const { h, lives, sessionId } = await harness(t, { features: ['instructions', 'forks'] });
+  const { h, lives, sessionId } = await harness(t, { features: ['instructions'] });
   const scripts: string[] = []; h.forks.open = script => { scripts.push(script); return 'Terminal'; };
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const mediator = h.voiceSessions.mediator!;
@@ -123,8 +127,8 @@ test("a tangent opens a fork in a window of its own: Claude's fork of the sessio
   assert.deepEqual(delivered[1], { at: 'main', id: 'main-again' });
 });
 
-test("the voice tool's reading opens the fork before the turn's words are sent, so they go to it; without forks on, nothing opens", async t => {
-  const { h } = await harness(t, { features: ['instructions', 'forks'] });
+test("the voice tool's reading opens the fork before the turn's words are sent, so they go to it; an agent that can't fork never forks", async t => {
+  const { h } = await harness(t, { features: ['instructions'] });
   const opened: string[] = []; h.forks.open = script => { opened.push(script); return 'Terminal'; };
   fakeJev(h, moment => moment.fork === 'main' ? { tangent: .9 } : {});
   const request = { utterances: [], through: 0, seqs: [0], fresh: 'Unrelated, but look into the flaky test.' };
@@ -132,9 +136,26 @@ test("the voice tool's reading opens the fork before the turn's words are sent, 
   assert.equal(opened.length, 1);
   assert.match(actions.told!, /goes to a fork of Claude Code's session/);
   assert.equal(h.forks.focus, 'fork');
-  const { h: other } = await harness(t);
+  const { h: other } = await harness(t, { agent: codex });
   const none: string[] = []; other.forks.open = script => { none.push(script); return 'Terminal'; };
   fakeJev(other, () => ({ tangent: .9 }));
   await routeActions(other, request, [{ role: 'operator', text: request.fresh, at: Date.now() }], 'turn');
-  assert.equal(none.length, 0, 'forks are off by default');
+  assert.equal(none.length, 0, 'Codex has no fork yet');
+});
+
+test('the record tags where a fork began and ended; the fork reads the start, and the main session then catches up on all of it', () => {
+  const history = new VoiceHistory(); let ms = 0;
+  const say = (role: 'operator' | 'intermediary', text: string) => { history.add({ type: role === 'operator' ? 'session.input_transcript.delta' : 'session.output_transcript.delta', delta: text, start_ms: ms, end_ms: ms += 1000 }); ms += 3000; };
+  say('operator', 'Build the chart.'); history.markDelivered(history.request()!);
+  say('intermediary', 'On it.'); say('operator', 'By the way, why is the build slow?');
+  const main = history.delegatedThrough; history.tag(FORK_STARTED);
+  const toFork = history.request()!;
+  assert.deepEqual(toFork.utterances.map(spokenLine), ['voice assistant: On it.', '<fork started>', 'user: By the way, why is the build slow?']);
+  history.markDelivered(toFork);
+  say('intermediary', 'Checking.'); say('operator', 'Okay, that answers it. Back to the chart: add a legend.');
+  history.tag(FORK_ENDED); history.reopen(main);
+  const toMain = history.request()!;
+  assert.deepEqual(toMain.utterances.map(spokenLine), ['voice assistant: On it.', '<fork started>', 'user: By the way, why is the build slow?', 'voice assistant: Checking.', '<fork ended>', 'user: Okay, that answers it. Back to the chart: add a legend.']);
+  assert.match(voiceRequest(toMain.utterances), /"<fork started>" line marks where the operator moved a tangent to a fork/);
+  assert.deepEqual(history.turns().map(t => t.role), ['operator', 'intermediary', 'operator', 'intermediary', 'operator'], 'the voice is never given the tags');
 });

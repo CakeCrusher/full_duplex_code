@@ -4,6 +4,10 @@ import type { AgentAdapter, Observation } from './adapter.ts';
 import type { Harness } from './bridge.ts';
 import { forkBack, forkFailed, forkNote, forkOpened } from './prompts.ts';
 import { openWindow, writeScript } from './window.ts';
+import type { VoiceHistory } from './voice-history.ts';
+
+/** The tags the conversation record carries where a fork began and ended: both sessions read them as they are. */
+export const FORK_STARTED = '<fork started>', FORK_ENDED = '<fork ended>';
 
 // A tangent the operator starts while the main session works goes to a fork of the agent's session, opened in a terminal
 // window of its own (Jev decides when, and when the tangent is settled: jev.ts, turn.ts). Delegation doesn't change: the
@@ -21,8 +25,10 @@ export class Forks {
   adapter?: AgentAdapter; ready = false; count = 0;
   open: typeof openWindow;
   constructor(bridge: Harness, { open = openWindow }: { open?: typeof openWindow } = {}) { this.bridge = bridge; this.open = open; }
-  /** A tangent can go to a fork: the feature is on, the agent can fork, the main session has an ID, and no fork is in focus. */
-  get possible() { const b = this.bridge; return b.features.has('forks') && Boolean(b.agent.canFork) && Boolean(b.sessionId); }
+  /** A tangent can go to a fork: always, when the agent can fork (not Codex yet) and the main session has an ID; Jev decides when. */
+  get possible() { const b = this.bridge; return Boolean(b.agent.canFork) && Boolean(b.sessionId); }
+  /** The conversation record and the main session's place in it when the fork opened (voice-history.ts). */
+  record?: { history: VoiceHistory; main: number };
   /** The session the voice hears and requests go to. */
   observer() { return this.focus === 'fork' && this.adapter ? this.adapter.observations : this.bridge.observer; }
   adapterFor(target?: Focus) { return target === 'fork' && this.adapter ? this.adapter : this.bridge.adapter; }
@@ -32,6 +38,9 @@ export class Forks {
     if (!this.possible || this.focus === 'fork') return;
     // An earlier fork's window stays open; fdc stops following it.
     this.retire();
+    // The record says where the fork began; the main session's place in it is kept, to catch up from once the fork ends.
+    const history = b.voiceSessions.mediator?.history;
+    if (history) { this.record = { history, main: history.delegatedThrough }; history.tag(FORK_STARTED); }
     const n = ++this.count, runDir = path.join(b.runDir, `fork-${n}`);
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
     const adapter = b.agent.create({ ...b.agentSession, runDir, sessionId: undefined, forkOf: b.sessionId, prefix: '/fork', instructions: `${b.agentInstructions}\n\n${forkNote(b.agent)}`, log: event => b.log({ ...event, fork: n }) });
@@ -54,6 +63,10 @@ export class Forks {
     const b = this.bridge;
     if (this.focus !== 'fork') return;
     this.focus = 'main';
+    // The record says where it ended, and the main session's next request carries everything since its own last one: what
+    // went to the fork, between the tags, then what follows.
+    const record = this.record; this.record = undefined;
+    if (record) { record.history.tag(FORK_ENDED); record.history.reopen(record.main); }
     b.log({ type: 'fork.back', n: this.count, why });
     b.focusChanged();
     return forkBack(b.agent, b.observer.state, why);

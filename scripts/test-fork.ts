@@ -9,7 +9,7 @@ import { startTestHarness, until, delay } from './test-support.ts';
 // Forks with real Claude Code, without voice (uses the operator's Claude usage, no OpenAI spending): a request to the
 // main session; a fork opened for a tangent, run here in a terminal of its own instead of a window; a request that goes
 // to the fork, which knows the main session's history; then back to the main session, and a request that goes there.
-const test = await startTestHarness('fork', { features: ['forks'] });
+const test = await startTestHarness('fork');
 const { harness, cwd } = test;
 const evidence: Record<string, unknown> = { passed: false };
 let fork: pty.IPty | undefined;
