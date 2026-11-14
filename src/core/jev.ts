@@ -197,8 +197,11 @@ const JOB = {
 // Forks (forks.ts): a tangent the operator starts while the main work goes on is worked on in a fork of the agent's
 // session, and they come back to the main session once it is settled. Asked in the voice tool's own reading, with the
 // feature on and an agent that can fork: whether a tangent starts while the main session is in focus, whether it is
-// settled while a fork is.
-export const TANGENT = .7, SETTLED = .6;
+// settled while a fork is. A wrong fork costs more than a missed one (the main work's words go to the fork; a missed
+// tangent goes to the main session, as without forks): on 208 recorded mid-turn requests two blind judges agreed on,
+// .6 forked none of the 194 main-work ones and 3 of the 14 tangents (the highest main one reads .52). SETTLED is not
+// measured yet: no recorded session has a fork.
+export const TANGENT = .6, SETTLED = .6;
 const FORK = {
   tangent: noul('Do the latest words start a tangent: a side matter apart from the work under way (another task, question or investigation that doesn\'t change, correct or depend on what the coding agent is doing), to be worked on while the main work goes on?',
     'They start a separate matter, one that could be worked on in a copy of the session while the main work goes on undisturbed ("by the way, can you check…", "unrelated, but…", "while that runs, look into…").',
