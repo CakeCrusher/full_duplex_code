@@ -55,7 +55,9 @@ export interface HarnessOptions {
 }
 
 /** What the agent does inside a turn, and what ends one (adapter.ts, ObservationKind). */
-const IN_TURN = new Set<ObservationKind>(['prompt', 'tool', 'tool_failure', 'attention']), TURN_ENDS = new Set<ObservationKind>(['turn_end', 'turn_failed', 'session_end']);
+const IN_TURN = new Set<ObservationKind>(['prompt', 'tool', 'tool_failure', 'attention']);
+/** The observations that end an agent's turn (a fork's too: forks.ts). */
+export const TURN_ENDS = new Set<ObservationKind>(['turn_end', 'turn_failed', 'session_end']);
 /**
  * How long an agent in a turn may do nothing before the turn counts as over. Inside Claude's recorded turns (1,102, Nov 1
  * to 13) the longest stretch without any event passed 2 minutes in 16% and 3 minutes in 3%; a request released during

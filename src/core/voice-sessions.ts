@@ -6,7 +6,7 @@ import type { OutboxEntry } from './outbox.ts';
 import type { Page } from './pages.ts';
 import { LiveSession, type CloseResult } from './live-session.ts';
 import { Mediator } from './mediator.ts';
-import { jobTurn, routeActions } from './turn.ts';
+import { jobTurn, passingOn, routeActions } from './turn.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { recentHistory } from './recent-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
@@ -167,6 +167,8 @@ export class VoiceSessions {
   checkStandby(now = Date.now()) {
     const bridge = this.bridge, { standbyAfterMs, wakeThreshold, standbyQuickMs, standbyQuickAfterMs } = bridge.tuning, standby = this.standby, price = priceFor(bridge.tuning);
     if (standby) {
+      // A fork that kept the focus into Standby (its answer was on the way) gives it back once it has answered or gone silent (forks.ts).
+      bridge.forks.quiet();
       const waking = standby.waking;
       if (waking) {
         if (now - waking.at > WAKE_GIVE_UP_MS) this.endStandby('the page did not reconnect voice');
@@ -459,7 +461,7 @@ export class VoiceSessions {
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator: Mediator = this.mediator = new Mediator({ live, observer: bridge.forks.observer(), agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
-      audit: bridge.handOffAudit, route: bridge.jev ? { actions: (request, spoken, why) => routeActions(bridge, request, spoken, why), job: (request, spoken, reply, actions, waiting) => jobTurn(bridge, request, spoken, reply, actions, waiting) } : undefined,
+      audit: bridge.handOffAudit, route: bridge.jev ? { actions: (request, spoken, why) => routeActions(bridge, request, spoken, why), passing: reading => passingOn(bridge, reading), job: (request, spoken, reply, actions, waiting) => jobTurn(bridge, request, spoken, reply, actions, waiting) } : undefined,
       read: bridge.jev ? (trigger, spoken, record) => bridge.read({ trigger, spoken, ...record }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0, replays: Boolean(wake?.operator),
       // Requests are cut from the record Jev reads and the voice was given, from the session's own place in it.
@@ -473,7 +475,7 @@ export class VoiceSessions {
     // The copies are now the ones to carry or hand off: if this connection fails to start, they go on from here.
     if (this.carried) { clearTimeout(this.carried.timer); mediator.history.carry(this.carried.mediator.history); this.carried.mediator = mediator; }
     // The way back from a fork made as voice went on Standby (forks.ts): told now, and so in the record.
-    if (bridge.forks.untold) { mediator.context.add('thinking', bridge.forks.untold); bridge.forks.untold = undefined; }
+    if (bridge.forks.untold) mediator.context.add('thinking', bridge.forks.untold);
     // Instead of a greeting, a waking session gets the agent's work it missed as it would have live: a fork, all since its
     // source last had it; a new session (told at its start that the conversation continues), what came during Standby.
     if (wake) {
@@ -699,6 +701,7 @@ export class VoiceSessions {
     this.audit = new AudioAudit({ dir: path.join(bridge.runDir, 'audio', live.reservation!), log: event => log({ liveRun: live.reservation, ...event }), onError: error => fault(error) });
     this.usage = { voiceSessionId: live.id!, startedAt: live.startedAt ?? Date.now(), seconds: 0, ratio: null, points: [] };
     publish({ type: 'live_usage', ...this.usage });
+    bridge.forks.untold = undefined;
     // Startup times: from the click (or reconnect, or wake) to GPT Live's session starting, fallbacks included.
     log({ type: 'voice.started', plan, requestedPlan: run.requested.plan, automatic, startMs: Date.now() - run.requested.at, wake: run.wake?.reason });
     if (run.wake && this.standby) { log({ type: 'voice.woke', reason: run.wake.reason, standbyMs: Date.now() - this.standby.since }); this.standby = undefined; publish({ type: 'standby', state: 'off', reason: run.wake.reason }); }

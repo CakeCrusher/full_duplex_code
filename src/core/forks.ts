@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { AgentAdapter, Observation } from './adapter.ts';
-import type { Harness } from './bridge.ts';
+import { QUIET_TURN_MS, TURN_ENDS, type Harness } from './bridge.ts';
 import { forkBack, forkFailed, forkNote, forkOpened } from './prompts.ts';
 import { openWindow, writeScript } from './window.ts';
 import { perceive } from './perceived.ts';
@@ -28,9 +29,10 @@ export class Forks {
   route = '';
   /** How long a fork has to connect once its window opened (Claude Code asks the operator to confirm its channel there first). */
   static START_MS = 60000; starting?: NodeJS.Timeout;
-  /** When a request last went to the fork, and when the fork last ended a turn: between the two its answer is on the way. */
-  asked = 0; answered = 0;
-  get busy() { return this.asked > this.answered; }
+  /** When a request last went to the fork, and when the fork last ended a turn (as the agent reports it): between the two its answer is on the way. */
+  asked = 0; answered = 0; active = 0;
+  /** Its answer is on the way: not for ever, when it reports no end and does nothing (as for the main session's turn, bridge.ts). */
+  get busy() { return this.asked > this.answered && Date.now() - Math.max(this.asked, this.active) < QUIET_TURN_MS; }
   open: typeof openWindow;
   constructor(bridge: Harness, { open = openWindow }: { open?: typeof openWindow } = {}) { this.bridge = bridge; this.open = open; }
   /** A tangent can go to a fork: always, when the agent can fork (not Codex yet) and the main session has an ID; Jev decides when. */
@@ -54,7 +56,7 @@ export class Forks {
     try {
       const launch = await adapter.launch({ baseUrl: b.baseUrl, token: b.agentToken });
       const how = this.open(writeScript(path.join(runDir, 'fork.command'), launch, b.cwd));
-      this.adapter = adapter; this.ready = false; this.focus = 'fork'; this.cursors.fork = this.cursors.main; this.asked = this.answered = 0;
+      this.adapter = adapter; this.ready = false; this.focus = 'fork'; this.cursors.fork = this.cursors.main; this.asked = this.answered = this.active = 0;
       this.wire(adapter, n);
       // A fork that doesn't start (its window waits for the operator, or the agent failed there) gives the focus, and what was sent to it, back to the main session.
       this.starting = setTimeout(() => { if (this.adapter === adapter && !this.ready) { const told = this.back('the fork did not start'); if (told) b.tell(told); } }, Forks.START_MS);
@@ -74,15 +76,18 @@ export class Forks {
     if (this.focus !== 'fork') return;
     this.focus = 'main';
     b.log({ type: 'fork.back', n: this.count, why });
-    this.retire();
+    const untaken = this.retire();
     b.focusChanged();
-    const text = `${FORK_ENDED} ${forkBack(b.agent, b.observer.state, why)}`;
-    return record ? this.record(text) : text;
+    const text = `${FORK_ENDED} ${forkBack(b.agent, b.observer.state, why)}`, told = record ? this.record(text) : text;
+    // What the fork hadn't taken goes to the main session now, after the decisions under way (which may send it themselves).
+    const mediator = b.mediator;
+    if (untaken && mediator) mediator.inTurn(() => mediator.send(randomUUID(), [], null));
+    return told;
   }
   /**
-   * The conversation went quiet (Standby begins) with a fork in focus that has answered: back to the main session, whose
-   * news then wakes the voice. A fork whose answer is still on the way keeps the focus. The voice hears of it when it
-   * wakes (voice-sessions.ts): it is leaving now.
+   * The conversation is quiet (voice goes on Standby, or is on it) with a fork in focus that has answered: back to the
+   * main session, whose news then wakes the voice. A fork whose answer is still on the way keeps the focus until it has
+   * answered. The voice hears of it when it wakes (voice-sessions.ts): it is leaving, or gone, now.
    */
   quiet() { if (this.focus === 'fork' && !this.busy) this.untold = this.back('the conversation went quiet', false); }
   /** What a waking voice session is still to be told: the way back made while it was going on Standby. */
@@ -95,20 +100,19 @@ export class Forks {
     observer.on('observation', ({ raw, ...event }: Observation) => { if (mine()) b.publish({ type: 'agent_observation', fork: n, ...event, text: event.text.slice(0, 20000) }); });
     observer.on('observation', (observation: Observation) => {
       if (!mine() || observation.child) return;
+      // Its turn ended: what it was asked is answered (waiting for a permission is not an answer).
+      this.active = Date.now();
+      if (TURN_ENDS.has(observation.kind)) this.answered = Date.now();
       if (observation.kind !== 'event') b.voiceSessions.activity.add(observation.kind);
       b.stage.observe(observer.toolUse(observation), observation.name === b.agent.profile.turnEnd);
     });
-    let state = '';
     observer.on('status', event => {
       b.log({ type: 'agent.status', fork: n, ...event });
-      // Its turn ended: what it was asked is answered.
-      if (state === 'working' && event.state !== 'working' && mine()) this.answered = Date.now();
-      state = event.state;
       // The operator closed the fork's window: back to the main session.
       if (event.state === 'exited' && mine()) { const told = this.back('the fork ended'); if (told) b.tell(told); }
     });
     observer.on('fault', error => b.fault(error));
-    adapter.on('connection', (ready: boolean) => { if (!mine()) return; this.ready = ready; if (ready) b.outbox.dispatchQueued(); b.publish(b.status()); });
+    adapter.on('connection', (ready: boolean) => { if (!mine()) return; this.ready = ready; if (ready) { clearTimeout(this.starting); b.outbox.dispatchQueued(); } b.publish(b.status()); });
     adapter.on('delivery', ({ id }: { id: string }) => b.outbox.confirm(id));
     adapter.on('session', (id: string) => b.log({ type: 'fork.session', n, sessionId: id }));
     adapter.on('fault', (error: Error) => b.fault(error));
@@ -116,15 +120,18 @@ export class Forks {
   /** Into the record at once, before the turn's words are sent; the voice is told the same text (perceive keeps it once). */
   record(text: string) { const run = this.bridge.voiceSessions.run; if (run) perceive(run.record, { at: Date.now(), kind: 'thinking', text }); return text; }
   /**
-   * Stops following the fork (its window, if open, stays the operator's). A request the fork hadn't taken goes to the
-   * main session instead, which has then read the record as far as the fork had: never nowhere.
+   * Stops following the fork (its window, if open, stays the operator's). A request the fork hadn't confirmed is taken
+   * back as one whose delivery is uncertain (its words are free again, and the voice, told they went, hears so): the way
+   * back then sends them to the main session, cut from its own place in the record. Never nowhere.
    */
   retire() {
     const adapter = this.adapter, b = this.bridge; this.adapter = undefined; this.ready = false; clearTimeout(this.starting);
-    if (!adapter) return;
-    for (const entry of b.outbox.values()) if (entry.target === 'fork' && entry.state === 'queued') { entry.target = 'main'; this.cursors.main = Math.max(this.cursors.main, this.cursors.fork); }
+    if (!adapter) return false;
+    const left = new Error('The fork was left before it took a request: its words go to the main session.');
+    const untaken = [...b.outbox.values()].filter(entry => entry.target === 'fork' && (entry.state === 'queued' || entry.state === 'dispatching'));
+    for (const entry of untaken) b.outbox.settle(entry, { state: 'uncertain', error: left });
     void adapter.close();
-    b.outbox.dispatchQueued();
+    return untaken.length > 0;
   }
   close() { this.retire(); }
 }

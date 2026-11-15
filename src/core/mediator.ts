@@ -35,6 +35,8 @@ export interface Decision {
 export interface Route {
   actions: (request: SpokenRequest, spoken: Spoken[], why: Trigger) => Promise<Actions>;
   job: (request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions, waiting?: Waiting) => Promise<Decision>;
+  /** Before words Jev kept go because GPT Live asked (passOn): where they go, from Jev's reading of them; what GPT Live is told, if the focus moved. */
+  passing?: (reading?: Reading) => Promise<string | undefined>;
 }
 
 // What GPT Live says while the operator only pauses ("Mm-hmm", "Go on"): no answer, so not the end of their turn.
@@ -222,7 +224,7 @@ export class Mediator {
     const last = this.history.fragments.findLast(f => f.role === 'operator' && !this.history.unheard(f))?.seq ?? -1;
     // GPT Live asking to pass on words already read: if they went, or the voice tool acted on them itself, it hears so; if
     // Jev kept them, they go now (either one asking sends them).
-    if (this.turn?.last === last) { if (delegationId) void this.turn.done.then(decision => decision?.send || decision?.told ? this.outcome(delegationId, decision) : this.passOn(delegationId)); return; }
+    if (this.turn?.last === last) { if (delegationId) void this.turn.done.then(decision => decision?.send || decision?.told ? this.outcome(delegationId, decision) : this.passOn(delegationId, decision?.reading)); return; }
     if (!this.route && !delegationId) return;
     const request = this.history.request();
     if (!request?.fresh) { if (delegationId) this.outcome(delegationId); return; }
@@ -373,9 +375,15 @@ export class Mediator {
     this.context.add('thinking', text, delegationId);
   }
   /** GPT Live asked to pass on words the voice tool read and kept: they go now, in turn (either one asking sends them). */
-  passOn(delegationId: string) {
+  passOn(delegationId: string, reading?: Reading) {
     this.pending++;
-    this.order = this.order.then(() => { this.undecidedSince = 0; this.undecidedNeeded = false; this.send(randomUUID(), [], delegationId, undefined, 'passed'); })
+    this.order = this.order.then(async () => {
+      this.undecidedSince = 0; this.undecidedNeeded = false;
+      // Which session they go to follows Jev's reading of them, as for words it sends itself (turn.ts, passingOn).
+      const told = await this.route?.passing?.(reading);
+      if (told && this.live.state === 'active') this.context.add('thinking', told, delegationId);
+      this.send(randomUUID(), [], delegationId, undefined, 'passed');
+    })
       .catch(error => this.fault(error as Error)).finally(() => { this.pending--; });
   }
   said(request: SpokenRequest) { return this.clean(request.utterances.filter(u => u.role === 'operator').map(u => u.text).join(' ').replace(/\s+/g, ' ').trim()); }

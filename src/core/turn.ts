@@ -31,7 +31,7 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
   // delegation (what its controls can do) and for the agent (what the user was looking at).
   const orchestration = bridge.features.has('orchestration');
   const [sessions, view] = await Promise.all([orchestration ? bridge.sessionSwitch.sessions(300) : undefined, bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
-  const fork = forkMoment(bridge);
+  const fork = forkMoment(bridge), since = heardAt(bridge);
   const reading = await bridge.read({ trigger: why, spoken, sessions, requestId: request.id, ...fork && { fork } });
   bridge.log({ type: 'turn.read', why, said: request.fresh.slice(-200), companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions });
   const standby = (reading.standby ?? 0) >= STANDBY;
@@ -51,7 +51,7 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
   const passed = why === 'delegation' && !handled;
   const returned = fork === 'fork' && (reading.tangent ?? 1) < STAYS && (passed || ((reading.settled ?? 0) >= SETTLED && !bridge.forks.busy))
     ? bridge.forks.back(passed ? 'work goes to the main session' : 'the operator moved on') : undefined;
-  const forked = fork === 'main' && passed ? await openFork(bridge, reading, request) : undefined;
+  const forked = fork === 'main' && passed ? await openFork(bridge, reading, since) : undefined;
   if (returned) bridge.jevAudit?.decided(reading.id, { fork: 'back' });
   const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent, bridge.features), forked, returned].filter(Boolean).join(' ') || undefined;
   return { reading, view, told, note: view ? lookingNote(view) : undefined, keptNote: handled && handledNote(handled), ...returned && { back: true } };
@@ -59,12 +59,25 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
 
 /** Where a fork decision stands (jev.ts): the main session in focus and in the middle of a turn (a question asked aside can go to a fork), or a fork in focus (the operator can move back). */
 const forkMoment = (bridge: Harness) => !bridge.forks.possible ? undefined : bridge.forks.focus === 'fork' ? 'fork' as const : bridge.agentWorking() !== undefined ? 'main' as const : undefined;
-/** Words on their way to the agent that Jev read as a question asked aside go to a fork, opened now: what the voice is told. */
-async function openFork(bridge: Harness, reading: Reading, request: SpokenRequest) {
-  if ((reading.tangent ?? 0) < TANGENT) return undefined;
-  const told = await bridge.forks.start(request.fresh);
+/** When the operator last spoke: a request is cut up to their latest words, so words said since a reading began would go with the ones it read. */
+const heardAt = (bridge: Harness) => bridge.mediator?.history.lastInputAt ?? 0;
+/**
+ * Words on their way to the agent that Jev read as a question asked aside go to a fork, opened now: what the voice is
+ * told. Not when the operator has gone on speaking since the reading began (`since`): what they added is unread, and may
+ * be work.
+ */
+async function openFork(bridge: Harness, reading: Reading, since: number) {
+  if ((reading.tangent ?? 0) < TANGENT || heardAt(bridge) > since) return undefined;
+  const told = await bridge.forks.start(reading.said);
   if (told) bridge.jevAudit?.decided(reading.id, { fork: bridge.forks.focus === 'fork' ? 'opened' : 'failed' });
   return told;
+}
+/** GPT Live asked to pass on words Jev had read and kept (mediator.ts, passOn): they go by the same rules, from that reading. */
+export async function passingOn(bridge: Harness, reading?: Reading) {
+  const fork = forkMoment(bridge);
+  if (!reading || !fork) return undefined;
+  if (fork === 'main') return openFork(bridge, reading, heardAt(bridge));
+  return (reading.tangent ?? 1) < STAYS ? bridge.forks.back('work goes to the main session') : undefined;
 }
 
 /** Words waiting undecided before this reading (mediator.ts): the operator went on speaking before the decision, the words have waited too long, or an earlier reading of them found they need the agent. */
@@ -80,7 +93,7 @@ export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: S
   // While the agent is in the middle of a turn it can be steered in, Jev is also asked whether these words must reach it
   // now or can wait for the turn to end (jev.ts, NOW): fdc then holds them until it does (outbox.ts).
   const working = bridge.agent.profile.canSteer ? bridge.agentWorking() : undefined;
-  const fork = actions.back ? undefined : forkMoment(bridge);
+  const fork = actions.back ? undefined : forkMoment(bridge), since = heardAt(bridge);
   const reading = await bridge.read({ trigger: 'job', spoken, reply, page: actions.view, requestId: request.id, ...recent && { sent: recent }, ...working !== undefined && { working }, ...fork && { fork } });
   // Words that add nothing to a request held for the turn's end still go when they press for it ("no, send it now"):
   // steered in, they bring the held request with them (outbox.ts).
@@ -93,10 +106,11 @@ export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: S
   // Not finished, or still being said: no decision yet. The next reading takes these words with what the operator adds, or
   // they go once the conversation stays quiet (mediator.ts). There is a next time, so a pause is no reason to send half a request.
   const wait = !send && (needed || continued);
-  // Forks (forks.ts), as the words are sent: a question asked aside opens a fork (it is free, so nothing is held); with a
-  // fork in focus, words that are no question for it go to the main session.
-  const forked = send && fork === 'main' ? await openFork(bridge, reading, request) : undefined;
-  const returned = send && fork === 'fork' && (reading.tangent ?? 1) < STAYS ? bridge.forks.back('work goes to the main session') : undefined;
+  // Forks (forks.ts), as the words are sent: a question asked aside opens a fork (it is free, so nothing is held). With a
+  // fork in focus, words for the agent that are no question for it are the main session's: back at once, also while they
+  // wait for the operator to finish, since waiting words go later without another reading (mediator.ts, sendHeld).
+  const forked = send && fork === 'main' ? await openFork(bridge, reading, since) : undefined;
+  const returned = (send || needed) && fork === 'fork' && (reading.tangent ?? 1) < STAYS ? bridge.forks.back('work goes to the main session') : undefined;
   // Held only on Jev's clear word that it can wait; words that waited already (overdue, or found needed before) go in now.
   const later = send && !forked && !overdue && !neededBefore && reading.now !== undefined && reading.now < NOW;
   bridge.log({ type: 'turn.job', said: request.fresh.slice(-200), reply: reply?.slice(-200) ?? null, needsAgent: reading.needsAgent, ready: reading.ready, ...reading.adds !== undefined && { adds: reading.adds }, ...reading.now !== undefined && { now: reading.now }, send, ...later && { later }, ...wait && { wait }, ...continued && { continued }, ...overdue && { overdue } });
