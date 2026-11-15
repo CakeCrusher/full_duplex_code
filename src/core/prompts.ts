@@ -173,12 +173,15 @@ export const withNote = (request: string, note: string) => request.includes('\n\
 
 // A delegated request as the agent receives it: a note on how to read it, then
 // the conversation since the previous request, one utterance per line.
-const SPEAKERS: Record<Exclude<Utterance['role'], 'event'>, string> = { operator: 'user', intermediary: 'voice assistant' };
-/** One utterance as everything fdc writes the conversation down: the speaker, then the words; a tag in the record as it is. */
-export const spokenLine = ({ role, text }: Pick<Utterance, 'role' | 'text'>) => role === 'event' ? text : `${SPEAKERS[role]}: ${text.replace(/\s+/g, ' ').trim()}`;
+const SPEAKERS: Record<Utterance['role'], string> = { operator: 'user', intermediary: 'voice assistant' };
+/** One utterance as everything fdc writes the conversation down: the speaker, then the words. */
+export const spokenLine = ({ role, text }: Pick<Utterance, 'role' | 'text'>) => `${SPEAKERS[role]}: ${text.replace(/\s+/g, ' ').trim()}`;
 const transcript = (utterances: readonly Pick<Utterance, 'role' | 'text'>[]) => utterances.map(spokenLine).join('\n');
 export const voiceRequest = (utterances: readonly Pick<Utterance, 'role' | 'text'>[], notes: readonly string[] = []) =>
-  `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.${utterances.some(u => u.role === 'event') ? ' A "<fork started>" line marks where the operator moved a tangent to a fork of this session, opened in a window of its own; "<fork ended>" where they came back: what is between went to the fork.' : ''}${notesText(notes)}\n\n${transcript(utterances)}`;
+  `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.${notesText(notes)}\n\n${transcript(utterances)}`;
+/** A request cut from the conversation record (perceived.ts): the same lines the voice was given and Jev reads, since the session's previous request. */
+export const recordRequest = (conversation: string, notes: readonly string[] = []) =>
+  `User request (transcribed speech): the conversation record since your previous voice request, as the voice assistant that passes requests on to you got it: the user's speech and the assistant's, one utterance per line, and what the voice tool told the assistant meanwhile (the bracketed lines, each followed by its text). The request is in the "user:" lines; the rest is context. A "<fork started>" line marks where the user moved a tangent to a fork of this session, opened in a window of its own; "<fork ended>" where they came back: what lies between went to the fork.${notesText(notes)}\n\n${conversation}`;
 // Why speech an earlier request took is in this one: it never reached the agent.
 const notesText = (notes: readonly string[]) => notes.length ? ` ${notes.join(' ')}` : '';
 const HANDLED = { sessions: 'about turning voice sessions on or off', companion: 'about how the voice assistant itself should behave' };

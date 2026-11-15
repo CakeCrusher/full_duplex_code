@@ -4,9 +4,9 @@ import type { AgentAdapter, Observation } from './adapter.ts';
 import type { Harness } from './bridge.ts';
 import { forkBack, forkFailed, forkNote, forkOpened } from './prompts.ts';
 import { openWindow, writeScript } from './window.ts';
-import type { VoiceHistory } from './voice-history.ts';
+import { perceive } from './perceived.ts';
 
-/** The tags the conversation record carries where a fork began and ended: both sessions read them as they are. */
+/** The tags the conversation record (perceived.ts) carries where a fork began and ended: the voice, Jev and both sessions read them as they are. */
 export const FORK_STARTED = '<fork started>', FORK_ENDED = '<fork ended>';
 
 // A tangent the operator starts while the main session works goes to a fork of the agent's session, opened in a terminal
@@ -27,8 +27,12 @@ export class Forks {
   constructor(bridge: Harness, { open = openWindow }: { open?: typeof openWindow } = {}) { this.bridge = bridge; this.open = open; }
   /** A tangent can go to a fork: always, when the agent can fork (not Codex yet) and the main session has an ID; Jev decides when. */
   get possible() { const b = this.bridge; return Boolean(b.agent.canFork) && Boolean(b.sessionId); }
-  /** The conversation record and the main session's place in it when the fork opened (voice-history.ts). */
-  record?: { history: VoiceHistory; main: number };
+  /**
+   * Where each session is in the conversation record: when its last request was cut from it (mediator.ts, send). A fork
+   * starts where the main session is; the main session, back from it, goes on from its own place, so its next request
+   * carries what went to the fork, between the tags.
+   */
+  cursors: Record<Focus, number> = { main: Date.now(), fork: 0 };
   /** The session the voice hears and requests go to. */
   observer() { return this.focus === 'fork' && this.adapter ? this.adapter.observations : this.bridge.observer; }
   adapterFor(target?: Focus) { return target === 'fork' && this.adapter ? this.adapter : this.bridge.adapter; }
@@ -38,20 +42,17 @@ export class Forks {
     if (!this.possible || this.focus === 'fork') return;
     // An earlier fork's window stays open; fdc stops following it.
     this.retire();
-    // The record says where the fork began; the main session's place in it is kept, to catch up from once the fork ends.
-    const history = b.voiceSessions.mediator?.history;
-    if (history) { this.record = { history, main: history.delegatedThrough }; history.tag(FORK_STARTED); }
     const n = ++this.count, runDir = path.join(b.runDir, `fork-${n}`);
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
     const adapter = b.agent.create({ ...b.agentSession, runDir, sessionId: undefined, forkOf: b.sessionId, prefix: '/fork', instructions: `${b.agentInstructions}\n\n${forkNote(b.agent)}`, log: event => b.log({ ...event, fork: n }) });
     try {
       const launch = await adapter.launch({ baseUrl: b.baseUrl, token: b.agentToken });
       const how = this.open(writeScript(path.join(runDir, 'fork.command'), launch, b.cwd));
-      this.adapter = adapter; this.ready = false; this.focus = 'fork';
+      this.adapter = adapter; this.ready = false; this.focus = 'fork'; this.cursors.fork = this.cursors.main;
       this.wire(adapter, n);
       b.log({ type: 'fork.opened', n, from: b.sessionId, window: how, said: said.slice(-160) });
       b.focusChanged();
-      return forkOpened(b.agent, how);
+      return this.record(`${FORK_STARTED} ${forkOpened(b.agent, how)}`);
     } catch (error) {
       void adapter.close();
       b.log({ type: 'fork.failed', n, message: (error as Error).message });
@@ -63,13 +64,9 @@ export class Forks {
     const b = this.bridge;
     if (this.focus !== 'fork') return;
     this.focus = 'main';
-    // The record says where it ended, and the main session's next request carries everything since its own last one: what
-    // went to the fork, between the tags, then what follows.
-    const record = this.record; this.record = undefined;
-    if (record) { record.history.tag(FORK_ENDED); record.history.reopen(record.main); }
     b.log({ type: 'fork.back', n: this.count, why });
     b.focusChanged();
-    return forkBack(b.agent, b.observer.state, why);
+    return this.record(`${FORK_ENDED} ${forkBack(b.agent, b.observer.state, why)}`);
   }
   /** What the fork does reaches the page and the record always, and the voice, Standby and the stage while it is in focus. */
   wire(adapter: AgentAdapter, n: number) {
@@ -93,6 +90,8 @@ export class Forks {
     adapter.on('session', (id: string) => b.log({ type: 'fork.session', n, sessionId: id }));
     adapter.on('fault', (error: Error) => b.fault(error));
   }
+  /** Into the record at once, before the turn's words are sent; the voice is told the same text (perceive keeps it once). */
+  record(text: string) { const run = this.bridge.voiceSessions.run; if (run) perceive(run.record, { at: Date.now(), kind: 'thinking', text }); return text; }
   /** Stops following the fork (its window, if open, stays the operator's). */
   retire() { const adapter = this.adapter; this.adapter = undefined; this.ready = false; if (adapter) void adapter.close(); }
   close() { this.retire(); }

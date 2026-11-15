@@ -60,6 +60,8 @@ export function beginPerceived(record: ResumeRecord, plan: ResumePlan, input: re
 /** Something fdc sent the running session. */
 export function perceive(record: ResumeRecord, entry: PerceivedEntry) {
   const kept = record.perceived ??= [];
+  // Recorded as it happened (a fork's tag, forks.ts), then sent to GPT Live: kept once.
+  if (kept.some(e => e.text === entry.text && Math.abs(e.at - entry.at) < 60000)) return;
   kept.push(entry);
   let bytes = kept.reduce((total, e) => total + Buffer.byteLength(e.text), 0);
   while (bytes > KEPT_BYTES && kept.length > 1) bytes -= Buffer.byteLength(kept.shift()!.text);
@@ -70,11 +72,12 @@ export function perceive(record: ResumeRecord, entry: PerceivedEntry) {
  * was said in this one (`spoken`: the words before the latest, as the caller reads them). Whole entries, but for the oldest,
  * cut to its end when only part of it fits.
  */
-export function perceivedText(record: ResumeRecord, spoken: readonly Spoken[], until: number, maxBytes: number): string {
+export function perceivedText(record: ResumeRecord, spoken: readonly Spoken[], until: number, maxBytes: number, from = -Infinity): string {
   const since = record.perceivedSince ?? 0, thisConnection = spoken[0]?.at ?? Infinity;
   const earlier = record.turns.filter(turn => (turn.at ?? 0) >= since && (turn.at ?? 0) < thisConnection).map(turn => ({ ...turn, at: turn.at ?? 0 }));
   // Sent in the same millisecond as `until` (the latest words' first) counts as before it.
-  const entries = [...(record.perceived ?? []).filter(e => e.at <= until), ...earlier, ...spoken]
+  // From `from` on (a request: since the session's last one, without the voice's startup input), or all of it (Jev).
+  const entries = [...(record.perceived ?? []).filter(e => e.at <= until && (from === -Infinity || !('kind' in e) || e.kind !== 'start')), ...earlier, ...spoken].filter(e => e.at > from)
     .map((entry, order) => ({ entry, order })).sort((a, b) => a.entry.at - b.entry.at || a.order - b.order).map(({ entry }) => entry);
   const kept: string[] = [];
   let room = maxBytes;

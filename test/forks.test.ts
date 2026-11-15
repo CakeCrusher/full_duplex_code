@@ -14,9 +14,7 @@ import { openWindow, writeScript } from '../src/core/window.ts';
 import { Jev } from '../src/core/jev.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { codex } from '../src/adapters/codex/index.ts';
-import { VoiceHistory } from '../src/core/voice-history.ts';
-import { FORK_ENDED, FORK_STARTED } from '../src/core/forks.ts';
-import { spokenLine, voiceRequest } from '../src/core/prompts.ts';
+import { perceivedText } from '../src/core/perceived.ts';
 import { routeActions } from '../src/core/turn.ts';
 import { fakeJev, harness, page, until } from './live-fake.ts';
 
@@ -120,7 +118,7 @@ test("a tangent opens a fork in a window of its own: Claude's fork of the sessio
   assert.equal(fed.length, 1, "the main session's work weighs nothing for the voice while the fork is in focus");
   assert.match(fed[0], /fork work/);
   // Settled: back to the main session.
-  assert.match(h.forks.back('the tangent is settled')!, /^Back to the main session of Claude Code \(the tangent is settled\)/);
+  assert.match(h.forks.back('the tangent is settled')!, /^<fork ended> Back to the main session of Claude Code \(the tangent is settled\)/);
   assert.equal(mediator.observer, h.observer);
   h.deliver({ id: 'main-again', content: 'Now add the legend.', voiceSessionId: lives[0].id, said: 'Now add the legend.' });
   await until(() => delivered.length === 2);
@@ -143,19 +141,30 @@ test("the voice tool's reading opens the fork before the turn's words are sent, 
   assert.equal(none.length, 0, 'Codex has no fork yet');
 });
 
-test('the record tags where a fork began and ended; the fork reads the start, and the main session then catches up on all of it', () => {
-  const history = new VoiceHistory(); let ms = 0;
-  const say = (role: 'operator' | 'intermediary', text: string) => { history.add({ type: role === 'operator' ? 'session.input_transcript.delta' : 'session.output_transcript.delta', delta: text, start_ms: ms, end_ms: ms += 1000 }); ms += 3000; };
-  say('operator', 'Build the chart.'); history.markDelivered(history.request()!);
-  say('intermediary', 'On it.'); say('operator', 'By the way, why is the build slow?');
-  const main = history.delegatedThrough; history.tag(FORK_STARTED);
-  const toFork = history.request()!;
-  assert.deepEqual(toFork.utterances.map(spokenLine), ['voice assistant: On it.', '<fork started>', 'user: By the way, why is the build slow?']);
-  history.markDelivered(toFork);
-  say('intermediary', 'Checking.'); say('operator', 'Okay, that answers it. Back to the chart: add a legend.');
-  history.tag(FORK_ENDED); history.reopen(main);
-  const toMain = history.request()!;
-  assert.deepEqual(toMain.utterances.map(spokenLine), ['voice assistant: On it.', '<fork started>', 'user: By the way, why is the build slow?', 'voice assistant: Checking.', '<fork ended>', 'user: Okay, that answers it. Back to the chart: add a legend.']);
-  assert.match(voiceRequest(toMain.utterances), /"<fork started>" line marks where the operator moved a tangent to a fork/);
-  assert.deepEqual(history.turns().map(t => t.role), ['operator', 'intermediary', 'operator', 'intermediary', 'operator'], 'the voice is never given the tags');
+test('one record: the fork tags are in what the voice is given and Jev reads, and each session gets the record since its own last request', async t => {
+  const { h } = await harness(t, { features: ['instructions'] });
+  h.forks.open = () => 'Terminal';
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  const mediator = h.voiceSessions.mediator!, sent: { id: string; content: string; to: string }[] = [];
+  h.deliver = ((request: any) => { sent.push({ id: request.id, content: request.content, to: h.forks.focus }); mediator.delivered(request.id); }) as any;
+  let ms = 0;
+  const say = async (role: 'operator' | 'intermediary', text: string) => { await settle(5); mediator.history.add({ type: role === 'operator' ? 'session.input_transcript.delta' : 'session.output_transcript.delta', delta: text, start_ms: ms, end_ms: ms += 1000 }); ms += 3000; await settle(5); };
+  await say('operator', 'Build the chart.'); mediator.send('r1', [], null);
+  await say('intermediary', 'On it.'); await say('operator', 'By the way, why is the build slow?');
+  await h.forks.start('By the way, why is the build slow?'); await settle(5);
+  mediator.send('r2', [], null);
+  await say('intermediary', 'Checking.'); await say('operator', 'Okay, that answers it. Back to the chart: add a legend.');
+  h.forks.back('the tangent is settled'); await settle(5);
+  mediator.send('r3', [], null);
+  const [r1, r2, r3] = sent, lines = (c: string) => c.split('\n\n').slice(1).join('\n\n');
+  assert.deepEqual(sent.map(s => s.to), ['main', 'fork', 'main']);
+  assert.match(lines(r1.content), /user: Build the chart\./);
+  assert.doesNotMatch(lines(r2.content), /Build the chart/, "the fork starts from the main session's place");
+  assert.match(lines(r2.content), /user: By the way, why is the build slow\?[\s\S]*<fork started>/);
+  for (const text of ['voice assistant: On it.', '<fork started>', 'By the way, why is the build slow?', 'voice assistant: Checking.', '<fork ended>', 'Back to the chart: add a legend.'])
+    assert.ok(lines(r3.content).includes(text), `the main session catches up: ${text}`);
+  assert.doesNotMatch(r3.content, /Full-Duplex|startup/i, "not the voice's startup input");
+  // Jev reads the same record, tags included.
+  const record = h.voiceSessions.run!.record;
+  assert.match(perceivedText(record, mediator.history.spoken(), Date.now(), 14000), /<fork started>[\s\S]*<fork ended>/);
 });

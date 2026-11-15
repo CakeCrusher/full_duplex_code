@@ -15,7 +15,8 @@ import { focusLine, placeOf, Stage, type StageCommand, type StageHere, type Stag
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
 import { operatorVoice, type MicrophoneLevel } from './floor.ts';
-import { beginPerceived, perceive, type PerceivedEntry, type SentKind } from './perceived.ts';
+import { beginPerceived, perceive, perceivedText, type PerceivedEntry, type SentKind } from './perceived.ts';
+import { HISTORY_BYTES } from './jev.ts';
 
 export interface Instruction { id: string; text: string; state: string; sessionId?: string; acknowledgedAt?: number; error?: string; appended?: boolean; /** Set for an instruction Jev learned: its short ID, such as I3, and the agent session it was learned in. */ learned?: string; learnedIn?: string }
 /** The latest voice session's span and GPT Live's usage reports, for the page's meters. */
@@ -458,7 +459,10 @@ export class VoiceSessions {
     const mediator: Mediator = this.mediator = new Mediator({ live, observer: bridge.forks.observer(), agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
       audit: bridge.handOffAudit, route: bridge.jev ? { actions: (request, spoken, why) => routeActions(bridge, request, spoken, why), job: (request, spoken, reply, actions, waiting) => jobTurn(bridge, request, spoken, reply, actions, waiting) } : undefined,
       read: bridge.jev ? (trigger, spoken, record) => bridge.read({ trigger, spoken, ...record }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
-      tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0, replays: Boolean(wake?.operator) });
+      tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0, replays: Boolean(wake?.operator),
+      // Requests are cut from the record Jev reads and the voice was given, from the session's own place in it.
+      conversation: { text: (from, until) => perceivedText(record, mediator.history.spoken(), until, HISTORY_BYTES, from), cursor: () => bridge.forks.cursors[bridge.forks.focus],
+        move: (at, back) => { const { cursors, focus } = bridge.forks; cursors[focus] = back ? Math.min(cursors[focus], at) : at; } } });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake, perceivedInput };
     // A fork knows the page state its source was told, and how full its context is; a new session, the page it starts with.
     Object.assign(run, plan === 'fork' ? { briefed: record.briefed, context: record.context } : { briefed: seen?.signature ?? NO_PAGE });

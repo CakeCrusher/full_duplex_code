@@ -10,7 +10,7 @@ import { DEFAULT_TUNING, holdOf, type Tuning } from './tuning.ts';
 import type { DelegationAudit, HandOff } from './delegation-audit.ts';
 import type { Reading, Trigger } from './jev.ts';
 import type { Actions, Waiting } from './turn.ts';
-import { cueNoDelegation, heldNote, nothingToSend, queueFailed, sessionEndRequest, turnOutcome, uncertainNote, voiceRequest } from './prompts.ts';
+import { cueNoDelegation, heldNote, nothingToSend, queueFailed, sessionEndRequest, turnOutcome, uncertainNote, voiceRequest, recordRequest } from './prompts.ts';
 
 /** What the voice tool made of the operator's turn (turn.ts): Jev's reading, whether their words go to the agent, and what it did itself. */
 export interface Decision {
@@ -57,6 +57,9 @@ export interface MediatedLive extends ContextSink, Pick<EventEmitter, 'on' | 'of
 // agent. With Jev, each turn is read twice (turn.ts): as it ends, for what the voice tool does itself (the page, sessions,
 // how the companion behaves); and once the companion has replied, for whether their words need the agent, which then
 // gets them. Without Jev, GPT Live decides, and its delegations send the operator's words.
+/** The conversation record a request is cut from (perceived.ts), and the session's place in it (forks.ts). */
+export interface Conversation { text(from: number, until: number): string; cursor(): number; move(at: number, back?: boolean): void }
+
 export class Mediator {
   live: MediatedLive; observer: AgentObserver; agent: ObservedAgent;
   deliver: (request: VoiceRequest) => void;
@@ -120,9 +123,16 @@ export class Mediator {
   /** The request that last went to the agent from this connection: when, and the operator's words in it (turn.ts asks whether words right after it add to it). */
   lastSent?: { at: number; said: string; id: string };
   replays: boolean;
+  /**
+   * The conversation record (perceived.ts) a request is cut from, the one Jev reads and the voice was given: its text from
+   * the session's place (forks.ts, cursors) to now, and moving that place. Without it (tests), the speech alone.
+   */
+  conversation?: Conversation;
+  /** Where each request on its way was cut from: a request that doesn't arrive puts the place back. */
+  cutFrom = new Map<string, number>();
   onObservation: (event: Observation) => void;
   onLive: (event: any) => void;
-  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, audit, route, read, consider, firstRecordId = 0, replays = false }: {
+  constructor({ live, observer, deliver, log, publish, clean, agent = observer.agent, tuning = DEFAULT_TUNING, hold, audit, route, read, consider, firstRecordId = 0, replays = false, conversation }: {
     live: MediatedLive; observer: AgentObserver; deliver: (request: VoiceRequest) => void; log: (event: Record<string, unknown>) => void;
     publish: (event: Record<string, unknown>) => void; clean: (text: string) => string; agent?: ObservedAgent; tuning?: Tuning; hold?: Hold | null; audit?: DelegationAudit;
     route?: Route; read?: Mediator['read']; consider?: (reading: Reading, requestId?: string) => void;
@@ -130,7 +140,9 @@ export class Mediator {
     firstRecordId?: number;
     /** The connection begins with the operator's held words: their voice woke it from Standby, and the page replays them to it. */
     replays?: boolean;
+    conversation?: Conversation;
   }) {
+    this.conversation = conversation;
     this.live = live; this.observer = observer; this.deliver = deliver; this.log = log; this.publish = publish; this.clean = clean; this.audit = audit; this.route = route; this.read = read; this.consider = consider;
     this.agent = agent; this.replays = replays;
     this.floor = new Floor({ thinkMs: tuning.thinkMs, pauseMs: tuning.pauseMs });
@@ -408,7 +420,11 @@ export class Mediator {
     this.history.claim(request, id);
     this.jobRead = Math.max(this.jobRead, request.through);
     try {
-      const said = this.said(request), content = this.clean(voiceRequest(request.utterances, [...request.notes ?? [], ...notes]));
+      const now = Date.now(), from = this.conversation?.cursor(), allNotes = [...request.notes ?? [], ...notes];
+      const said = this.said(request), content = this.clean(this.conversation ? recordRequest(this.conversation.text(from!, now), allNotes) : voiceRequest(request.utterances, allNotes));
+      // The next request starts just before this one ended: a line heard in the same millisecond after it was cut comes
+      // with the next, never with neither (at worst one line twice).
+      if (this.conversation) { this.cutFrom.set(id, from!); this.conversation.move(now - .5); }
       this.deliver({ id, content, delegationId, voiceSessionId: this.live.id, queuedAt: Date.now(), said, ...followUp && { followUp } });
       this.lastSent = { at: Date.now(), said, id };
       this.check(id, request, handOff, delegationId, reading).catch(error => this.fault(error as Error));
@@ -422,6 +438,7 @@ export class Mediator {
   delivered(id: string) { this.history.commit(id); }
   /** Request `id`'s delivery was uncertain: its speech goes again with the next request. */
   undelivered(id: string) {
+    const from = this.cutFrom.get(id); if (from !== undefined) this.conversation?.move(from, true);
     // A hand-off whose delivery is uncertain is not sent again by itself: the outbox shows it.
     if (this.history.release(id, uncertainNote) && this.ended) this.log({ type: 'bridge.undelivered_after_voice', id });
   }
