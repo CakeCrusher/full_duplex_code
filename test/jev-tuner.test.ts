@@ -12,6 +12,7 @@ test('Jev picks a level per setting; a level that is not offered, or the current
   const { tuning, changes } = tuningFrom({ thinkMs: { choice: 'level_3000' }, compactTokens: { choice: 'level_1234' }, pauseMs: { choice: 'level_0' } }, DEFAULT_TUNING);
   assert.deepEqual(changes, [{ name: 'thinkMs', from: 2000, to: 3000 }]);
   assert.equal(tuning.thinkMs, 3000); assert.equal(tuning.compactTokens, DEFAULT_TUNING.compactTokens);
+  assert.deepEqual(tuningFrom({ forkFrom: { choice: 'level_0.8' } }, DEFAULT_TUNING).changes, [{ name: 'forkFrom', from: 0.55, to: 0.8 }], 'a level can be a fraction');
   assert.deepEqual(Object.keys(tunerQuestions(DEFAULT_TUNING).thinkMs.criteria), ['level_1000', 'level_2000', 'level_3000']);
 });
 

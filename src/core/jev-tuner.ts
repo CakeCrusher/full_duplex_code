@@ -34,7 +34,7 @@ export function tuningFrom(answers: Record<string, any> | undefined, current: Tu
   for (const [name, knob] of knobs(pinned)) {
     // No answer is no change (an empty choice would read as level 0).
     const choice = answers?.[name]?.choice, likely = answers?.[name]?.probabilities;
-    if (typeof choice !== 'string' || !/^level_\d+$/.test(choice)) continue;
+    if (typeof choice !== 'string' || !/^level_\d+(\.\d+)?$/.test(choice)) continue;
     const value = Number(choice.slice('level_'.length));
     if (!knob.levels.some(level => level.value === value) || value === current[name]) continue;
     if (likely && Number(likely[choice] ?? 0) - Number(likely[`level_${current[name]}`] ?? 0) < TUNE_MARGIN) continue;

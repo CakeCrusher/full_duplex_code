@@ -21,7 +21,7 @@ import type { AgentProfile } from './adapter.ts';
 import type { HandOff } from './delegation-audit.ts';
 import type { JevCall } from './jev-audit.ts';
 import { focusLine, type StageCommand, type StageView } from './stage.ts';
-import type { Tuning } from './tuning.ts';
+import { DEFAULT_TUNING, type Tuning } from './tuning.ts';
 import { DEFAULT_FEATURES, type Feature, type Features } from './features.ts';
 import { tunerQuestions, TUNER_SETTING } from './jev-tuner.ts';
 import { spokenLine } from './prompts.ts';
@@ -89,13 +89,14 @@ export const ADDS = .4, RECENT_MS = 10000, PRESS = .5;
 export const NOW = .3;
 // The operator is done for now: the companion goes on Standby as soon as it has answered.
 export const STANDBY = .7;
-// Forks (the questions and what they were measured on are below, FORK): a question asked aside opens a fork from
-// TANGENT; with a fork open, words stay with it from STAYS, and the focus moves back to the main session from SETTLED.
-export const TANGENT = .8, STAYS = .5, SETTLED = .5;
+// Forks (the questions and what they were measured on are below, FORK): a question asked aside opens a fork from the
+// setting forkFrom (tuning.ts); with a fork open, words stay with it from STAYS (from forkFrom, set lower: what opens
+// a fork stays in one), and the focus moves back to the main session from SETTLED.
+export const STAYS = .5, SETTLED = .5;
 // What Jev reads of what the voice companion perceived: its latest 14 KB (perceived.ts).
 export const HISTORY_BYTES = 14000;
 /** For the record (jev-audit.ts): the likelihood at which each question's answer changes what fdc does. */
-const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, now: NOW, remove: REMOVE, gave_up: GAVE_UP, standby: STANDBY, tangent: TANGENT, settled: SETTLED, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
+const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, now: NOW, remove: REMOVE, gave_up: GAVE_UP, standby: STANDBY, tangent: DEFAULT_TUNING.forkFrom, settled: SETTLED, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
 
 /** One utterance of the conversation. */
 export interface Line { role: 'operator' | 'intermediary'; text: string }
@@ -172,6 +173,8 @@ export interface Moment {
   tune?: { earlier: string[]; current: Tuning; pinned: (keyof Tuning)[] };
   /** For the record only (jev-audit.ts), not sent: the request the words go to the agent by, and how words already sent went (trigger unsent). */
   requestId?: string; handOff?: HandOff;
+  /** For the record only: the thresholds that are settings (tuning.ts), as in force. */
+  thresholds?: Record<string, number>;
 }
 
 
@@ -205,10 +208,10 @@ const JOB = {
 // sent to the main session goes as it did without forks.
 // - `tangent`: are the latest words such a question? With the main session in focus and in the middle of a turn, asked in
 //   the reading that sends the words (the job delegation's, or the voice tool's own when GPT Live asked to pass them on):
-//   from TANGENT they go to a fork. On 278 recorded requests made while the agent worked, labeled by a blind judge on
-//   the operator's rule (their 12 all matched; .scratch/round2/forks), it separates forks from main work at AUC .94 (the
-//   wording before it: .66); at .8 it finds 23 of 34 forks and forks 6 of 186 main-work requests, each of them a
-//   question about the work under way.
+//   from the setting forkFrom they go to a fork. On 278 recorded requests made while the agent worked, labeled by a
+//   blind judge on the operator's rule (their 12 all matched; .scratch/round2/forks), it separates forks from main work
+//   at AUC .94 (the wording before it: .66). At the default .55, the operator's choice, it finds 30 of 34 forks and
+//   forks 28 of 186 main-work requests, most of them questions about the work under way (at .8: 23 and 6).
 // - `settled`: with a fork in focus, has the operator left its matter? Asked with `tangent` in the voice tool's own
 //   reading. No recorded session has a fork, so it was measured on 133 turns that followed requests a fork would have
 //   opened for, with the fork's tag put in their history (.scratch/round2/forks/back): words that are no question
@@ -408,7 +411,7 @@ export class Jev {
     const said = latest?.text.replace(/\s+/g, ' ').trim() ?? '', gate = trigger === 'turn' || trigger === 'delegation';
     const { state, questions } = this.ask(moment);
     const call: JevCall = { id: randomUUID(), at: started, trigger, ...requestId && { requestId }, ...handOff && { handOff },
-      config: { url: URL, model: MODEL, timeoutMs, features: this.features, thresholds: Object.fromEntries(Object.keys(questions).filter(name => name in THRESHOLDS).map(name => [name, THRESHOLDS[name]])) },
+      config: { url: URL, model: MODEL, timeoutMs, features: this.features, thresholds: Object.fromEntries(Object.keys(questions).filter(name => name in THRESHOLDS).map(name => [name, moment.thresholds?.[name] ?? THRESHOLDS[name]])) },
       state, questions, ms: 0 };
     let answers: any;
     try {

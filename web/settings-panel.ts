@@ -7,8 +7,9 @@ interface Status { tuning?: Record<string, number>; tuningPinned?: string[]; tun
 
 const GROUPS: [title: string, names: string[]][] = [
   ['How agent updates reach GPT Live', ['holdFirstMs', 'holdPerUpdateMs', 'holdLongestMs', 'thinkMs', 'pauseMs', 'compactTokens']],
-  ['Standby', ['standbyAfterMs', 'wakeThreshold']],
+  ['Standby', ['standbyAfterMs', 'wakeThreshold', 'standbyQuickMs', 'standbyQuickAfterMs']],
   ['Standby prices', ['speechPrice', 'liveSpeechPrice', 'toolPrice', 'promptPrice', 'messagePrice', 'turnEndPrice', 'failurePrice', 'approvalPrice', 'requestPrice']],
+  ['Forks', ['forkFrom']],
 ];
 const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const format = (name: string, value: number) => name.endsWith('Ms') ? `${value / 1000} s` : name === 'compactTokens' ? `${value.toLocaleString()} tokens` : name.endsWith('Price') || name === 'wakeThreshold' ? `${value} pts` : String(value);

@@ -266,6 +266,16 @@ test('a fork takes only words Jev read; waiting work and words GPT Live passes o
   assert.equal(await passingOn(h, reading(.9)), undefined, 'a question stays with the fork');
   assert.match((await passingOn(h, reading(.2)))!, /work goes to the main session/);
   assert.equal(await passingOn(h, reading(.2)), undefined, 'in the main session, words that are no question stay there');
+  // How sure Jev must be is a setting (forkFrom, .55 unless set): the same reading opens a fork or not as it says, and
+  // what opens a fork stays in one.
+  h.setTuning({ ...h.tuning, forkFrom: .8 });
+  assert.equal(await passingOn(h, reading(.6)), undefined, 'under the setting: no fork');
+  h.setTuning({ ...h.tuning, forkFrom: .4 });
+  assert.match((await passingOn(h, reading(.45)))!, /goes to a fork/);
+  assert.equal(await passingOn(h, reading(.45)), undefined, 'it stays with the fork it opened');
+  assert.match((await passingOn(h, reading(.3)))!, /work goes to the main session/);
+  h.setTuning({ ...h.tuning, forkFrom: .55 });
+  assert.match((await passingOn(h, reading(.6)))!, /goes to a fork/, 'the default');
 });
 
 test("the fork's answer is on the way until its turn ends: a permission prompt is no answer, and a fork that reports nothing for minutes no longer holds the focus", async t => {

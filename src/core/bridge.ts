@@ -315,7 +315,7 @@ export class Harness {
       goal: moment.goal ?? this.voiceSessions.goalLine(),
       instructions: this.voiceSessions.additionalInstructions.map(item => item.text), learn: (words && this.features.has('instructions')) || undefined,
       removable: words && this.features.has('instructions') ? this.voiceSessions.learnedInForce() : undefined,
-      tune: tune ? { earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined }, timeoutMs)
+      tune: tune ? { earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined, thresholds: { tangent: this.tuning.forkFrom } }, timeoutMs)
       .then(reading => Object.assign(reading, ask ? { tuneAsk: ask } : {}));
   }
   /**
