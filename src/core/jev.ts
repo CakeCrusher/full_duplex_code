@@ -211,7 +211,8 @@ const JOB = {
 //   from the setting forkFrom they go to a fork. On 278 recorded requests made while the agent worked, labeled by a
 //   blind judge on the operator's rule (their 12 all matched; .scratch/round2/forks), it separates forks from main work
 //   at AUC .94 (the wording before it: .66). At the default .55, the operator's choice, it finds 30 of 34 forks and
-//   forks 28 of 186 main-work requests, most of them questions about the work under way (at .8: 23 and 6).
+//   forks 28 of 186 main-work requests: about half are questions about the work under way, the others steer it or ask
+//   for something to be shown (at .8: 23 forks and 6 main-work requests, all six of them questions).
 // - `settled`: with a fork in focus, has the operator left its matter? Asked with `tangent` in the voice tool's own
 //   reading. No recorded session has a fork, so it was measured on 133 turns that followed requests a fork would have
 //   opened for, with the fork's tag put in their history (.scratch/round2/forks/back): words that are no question
