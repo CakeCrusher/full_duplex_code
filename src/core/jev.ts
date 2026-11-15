@@ -89,10 +89,13 @@ export const ADDS = .4, RECENT_MS = 10000, PRESS = .5;
 export const NOW = .3;
 // The operator is done for now: the companion goes on Standby as soon as it has answered.
 export const STANDBY = .7;
+// Forks (the questions and what they were measured on are below, FORK): a question asked aside opens a fork from
+// TANGENT; with a fork open, words stay with it from STAYS, and the focus moves back to the main session from SETTLED.
+export const TANGENT = .8, STAYS = .5, SETTLED = .5;
 // What Jev reads of what the voice companion perceived: its latest 14 KB (perceived.ts).
 export const HISTORY_BYTES = 14000;
 /** For the record (jev-audit.ts): the likelihood at which each question's answer changes what fdc does. */
-const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, now: NOW, remove: REMOVE, gave_up: GAVE_UP, standby: STANDBY, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
+const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, now: NOW, remove: REMOVE, gave_up: GAVE_UP, standby: STANDBY, tangent: TANGENT, settled: SETTLED, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
 
 /** One utterance of the conversation. */
 export interface Line { role: 'operator' | 'intermediary'; text: string }
@@ -136,7 +139,7 @@ export interface Reading {
   tuning?: Record<string, unknown>;
   /** That the latest words end the conversation for now (the companion then goes on Standby). */
   standby?: number;
-  /** The latest words start a tangent (a fork's worth), or settle the one open (forks.ts). */
+  /** The latest words are a question asked aside (a fork's), and, with a fork in focus, whether the operator has left its matter (forks.ts). */
   tangent?: number; settled?: number;
   /** Acted on already (learner and tuner): a reading reused for the same words isn't acted on twice. */
   considered?: boolean;
@@ -159,7 +162,7 @@ export interface Moment {
   working?: number;
   /** The request that went to the agent moments before this reading, within RECENT_MS (trigger job): how long ago, the operator's words in it, and whether it is held until the agent's turn ends. The latest words may only be its tail. */
   sent?: { ago: number; said: string; held?: boolean };
-  /** With forks on (forks.ts): which session is in focus, so the voice tool's own reading asks whether a tangent starts, or whether the one open is settled. */
+  /** Forks (forks.ts): the session in focus when a fork decision can be made: the main one while it works (a question asked aside can go to a fork), or the fork (the operator can move back). */
   fork?: 'main' | 'fork';
   /** Ask whether the words give a standing instruction (the learner). */
   learn?: boolean;
@@ -194,21 +197,32 @@ const JOB = {
     "They hold something that request didn't: an instruction, detail, constraint, correction, decision or question the agent needs; an addition to it, a change to it, or another request.",
     'Nothing the agent needs beyond it: the tail end of the same sentence, filler, an acknowledgment or thanks, a repeat or rewording of what was sent, words meant only for the voice companion (to go on, repeat, wait or stop talking), or stray fragments and noise.'),
 };
-// Forks (forks.ts): a tangent the operator starts while the main work goes on is worked on in a fork of the agent's
-// session, and they come back to the main session once it is settled. Asked in the voice tool's own reading, with the
-// feature on and an agent that can fork: whether a tangent starts while the main session is in focus, whether it is
-// settled while a fork is. A wrong fork costs more than a missed one (the main work's words go to the fork; a missed
-// tangent goes to the main session, as without forks): on 208 recorded mid-turn requests two blind judges agreed on,
-// .6 forked none of the 194 main-work ones and 3 of the 14 tangents (the highest main one reads .52). SETTLED is not
-// measured yet: no recorded session has a fork.
-export const TANGENT = .6, SETTLED = .6;
+// Forks (forks.ts): while the main session works, a question the operator turns aside to ask goes to a fork of the
+// agent's session, and they move back to the main session after it. The operator's rule (Nov 14, from their own labels
+// of 12 recorded requests): a fork is for a clarifying question, an answer or explanation for themselves; anything to
+// be done or executed is main work, also on another topic or "in the background"; what should not have gone to the
+// agent at all is neither. A fork is thrown away on the way back, so work sent to one is the costly mistake; a question
+// sent to the main session goes as it did without forks.
+// - `tangent`: are the latest words such a question? With the main session in focus and in the middle of a turn, asked in
+//   the reading that sends the words (the job delegation's, or the voice tool's own when GPT Live asked to pass them on):
+//   from TANGENT they go to a fork. On 278 recorded requests made while the agent worked, labeled by a blind judge on
+//   the operator's rule (their 12 all matched; .scratch/round2/forks), it separates forks from main work at AUC .94 (the
+//   wording before it: .66); at .8 it finds 23 of 34 forks and forks 6 of 186 main-work requests, each of them a
+//   question about the work under way.
+// - `settled`: with a fork in focus, has the operator left its matter? Asked with `tangent` in the voice tool's own
+//   reading. No recorded session has a fork, so it was measured on 133 turns that followed requests a fork would have
+//   opened for, with the fork's tag put in their history (.scratch/round2/forks/back): words that are no question
+//   (below STAYS) move the focus back when the operator has left the matter (from SETTLED) or when they are on their way
+//   to the agent, which moves back for 38 of 45 turns that should and leaves the fork in 8 of 39 that go on with it. The
+//   wording before it ("do the latest words settle the tangent?") was near chance there (AUC .59 against .81; both
+//   answers together .89).
 const FORK = {
-  tangent: noul('Do the latest words start a tangent: a side matter apart from the work under way (another task, question or investigation that doesn\'t change, correct or depend on what the coding agent is doing), to be worked on while the main work goes on?',
-    'They start a separate matter, one that could be worked on in a copy of the session while the main work goes on undisturbed ("by the way, can you check…", "unrelated, but…", "while that runs, look into…").',
-    'They continue, correct, redirect, stop, add to or ask about the work under way, answer the agent, or are its next step; or they are talk for the voice companion.'),
-  settled: noul('A fork of the coding agent\'s session is open for a tangent the operator started. Do the latest words settle it: the operator is done with that side matter, or turns back to the main work?',
-    'They close the tangent ("okay, that\'s enough of that", "thanks, that answers it") or turn back to the main work ("back to the main thing", "now, where were we with…").',
-    'They go on with the tangent, or ask more about it.'),
+  tangent: noul('The coding agent is in the middle of its work. Do the latest words turn aside to ask something: a question the operator wants answered or explained for themselves now, with nothing asked to be done?',
+    'A clarifying question or a request to explain: what something means, why something is so, what a number or a state currently is, how two things differ, to be walked through something. Answering may take looking something up, but nothing is to be built, changed, fixed, run, added or tried, and the work under way is not steered.',
+    "A request for work, on any topic: to make, change, fix, run, add, try, explore, compare, measure or find something, even 'in the background' or 'as a subagent'; a correction, redirection, stop, decision, preference or added requirement for the work under way; an answer to what the agent asked; the next step of a process the agent runs; feedback on what the agent is building, including a question that is really a criticism of it or that needs new work to answer. Also words that are not for the agent: talk with or about the voice companion, a question the companion can answer from what it was told, thinking aloud, fragments."),
+  settled: noul('A fork of the coding agent\'s session is open for a question the operator turned aside to ask (`<fork started>` in `history`), while the main session goes on with its work. Do the latest words leave it: the operator is done with that question, turns to the main work, or asks for something to be done?',
+    "They accept or close the answer ('okay, got it', 'thanks, that answers it') and move on; they turn to the main work or ask how it is going; or they ask for something to be made, changed, fixed, run or tried, or steer the work: work belongs to the main session, also when it follows from the answer.",
+    'They stay with it: a follow-up question, another thing they want explained, asking for the answer again or in more detail, or talk with the voice companion about it.'),
 };
 // The voice tool's own actions on the operator's turn (triggers turn, delegation): never whether anything goes to the agent.
 const GATE = {
@@ -376,8 +390,12 @@ export class Jev {
     if (tune) Object.assign(state, { earlier_sessions: tune.earlier.join('\n').slice(0, 4000) || '(none)', current_settings: JSON.stringify(tune.current) });
     const questions = {
       ...job && { needs_agent: JOB.needs_agent }, ...trigger === 'job' && { ready: JOB.ready }, ...trigger === 'job' && moment.sent && { adds: JOB.adds }, ...trigger === 'job' && moment.working !== undefined && { now: JOB.now },
+      // Forks: whether the words are a question asked aside. With the main session in focus, asked where they are sent; with
+      // a fork in focus, at every reading of the turn, after whether the operator has left its matter (turn.ts).
+      ...moment.fork === 'main' && (trigger === 'job' || trigger === 'delegation') && { tangent: FORK.tangent },
       // Words about how the companion behaves are for the learner and the tuner: asked only while either is on.
-      ...gate && { ...(learn || tune) && { companion_only: GATE.companion_only }, standby: GATE.standby, ...GOAL_QUESTION, ...sessions && sessionQuestions(sessions), ...moment.fork === 'main' && { tangent: FORK.tangent }, ...moment.fork === 'fork' && { settled: FORK.settled } },
+      ...gate && { ...(learn || tune) && { companion_only: GATE.companion_only }, standby: GATE.standby, ...GOAL_QUESTION, ...sessions && sessionQuestions(sessions), ...moment.fork === 'fork' && { settled: FORK.settled } },
+      ...moment.fork === 'fork' && (gate || trigger === 'job') && { tangent: FORK.tangent },
       ...page && (trigger === 'cue' || trigger === 'step') && pageQuestions(page, trigger),
       ...learn && LEARNER, ...learn && gate && removable?.length && removeQuestion(removable),
       ...tune && tunerQuestions(tune.current, tune.pinned, trigger !== 'settings'),
@@ -407,10 +425,10 @@ export class Jev {
     this.record?.(call);
     const p = (name: string, missing = 0) => { const value = Number(answers?.[name]?.noul); return Number.isFinite(value) ? value : missing; };
     const reading: Reading = { trigger, id: call.id, said, transcript: `${history}${latest ? `► ${spokenLine(latest)}` : ''}`, needsAgent: 'needs_agent' in questions ? p('needs_agent') : null, ...'ready' in questions && { ready: p('ready', 1) }, ...'adds' in questions && { adds: p('adds', 1) }, ...'now' in questions && { now: p('now', 1) } };
+    if ('tangent' in questions) reading.tangent = p('tangent');
     if (gate) {
       if ('companion_only' in questions) reading.companionOnly = p('companion_only');
       reading.standby = p('standby');
-      if ('tangent' in questions) reading.tangent = p('tangent');
       if ('settled' in questions) reading.settled = p('settled');
       const goal = answers?.goal, choice = goal?.choice;
       if (choice === 'keep' || choice === 'new' || choice === 'walk' || choice === 'done') reading.goal = { choice, p: Number(goal.probabilities?.[choice] ?? goal.confidence ?? 1) };

@@ -196,6 +196,8 @@ export class VoiceSessions {
     if (!done && (now - (live.startedAt ?? now) < windowMs || this.activity.value(windowMs, price, now) >= wakeThreshold)) return;
     // A request on its way to the agent keeps voice Live until the agent has it.
     if ([...bridge.outbox.values()].some(entry => entry.state === 'queued' || entry.state === 'dispatching')) return;
+    // A fork that has answered doesn't keep the focus through the quiet: the main session's news is what wakes the voice (forks.ts).
+    bridge.forks.quiet();
     this.standby = { since: Date.now(), page }; this.doneAt = undefined;
     bridge.log({ type: 'voice.standby', liveRun: live.reservation, afterMs: windowMs, threshold: wakeThreshold, value: this.activity.value(windowMs, price, now), asked: done || undefined, ...quick && { quick: true, previousQuietMs: this.lastQuietMs } });
     bridge.publish({ type: 'standby', state: 'on' });
@@ -470,6 +472,8 @@ export class VoiceSessions {
     // A dropped or moved session's unsent speech: this session takes it if it starts; meanwhile it isn't handed off.
     // The copies are now the ones to carry or hand off: if this connection fails to start, they go on from here.
     if (this.carried) { clearTimeout(this.carried.timer); mediator.history.carry(this.carried.mediator.history); this.carried.mediator = mediator; }
+    // The way back from a fork made as voice went on Standby (forks.ts): told now, and so in the record.
+    if (bridge.forks.untold) { mediator.context.add('thinking', bridge.forks.untold); bridge.forks.untold = undefined; }
     // Instead of a greeting, a waking session gets the agent's work it missed as it would have live: a fork, all since its
     // source last had it; a new session (told at its start that the conversation continues), what came during Standby.
     if (wake) {

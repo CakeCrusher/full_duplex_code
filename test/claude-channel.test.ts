@@ -50,10 +50,10 @@ test("a fork's channel connects on the fork's route", async t => {
   const seen: string[] = [];
   server.on('connection', (ws, request) => { seen.push(request.url!); ws.on('message', raw => seen.push(JSON.parse(raw.toString()).type)); });
   const child = spawn(process.execPath, [fileURLToPath(new URL('../src/adapters/claude/channel-server.ts', import.meta.url))], {
-    env: { ...process.env, FD_BRIDGE_URL: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/fork/channel`, FD_BRIDGE_TOKEN: 'local-test-token' },
+    env: { ...process.env, FD_BRIDGE_URL: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/fork/1/channel`, FD_BRIDGE_TOKEN: 'local-test-token' },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   t.after(async () => { child.kill(); for (const ws of server.clients) ws.terminate(); await new Promise(resolve => server.close(resolve)); });
   await until(() => seen.includes('channel.ready'));
-  assert.equal(seen[0], '/fork/channel');
+  assert.equal(seen[0], '/fork/1/channel');
 });

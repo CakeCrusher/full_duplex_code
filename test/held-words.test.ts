@@ -116,7 +116,7 @@ test('words that have waited too long are read as overdue even while the operato
 
 test("the job delegation's rule: sent once needed and finished; waits while unfinished or still being said; once needed, never dropped", async () => {
   const decide = async (needsAgent: number, ready: number, waiting: Waiting = {}) => {
-    const bridge: any = { agent: claude, agentWorking: () => undefined, read: async () => ({ trigger: 'job', said: '', transcript: '', needsAgent, ready }), log: () => {} };
+    const bridge: any = { agent: claude, forks: { possible: false }, agentWorking: () => undefined, read: async () => ({ trigger: 'job', said: '', transcript: '', needsAgent, ready }), log: () => {} };
     const { send, wait, needed } = await jobTurn(bridge, { utterances: [], through: 0, seqs: [0], fresh: 'x' }, [], undefined, {}, waiting);
     return { send, wait, needed };
   };
@@ -132,7 +132,7 @@ test("the job delegation's rule: sent once needed and finished; waits while unfi
 test("while the agent is in the middle of a turn, a request is steered in unless Jev finds it can wait; then it is held for the turn's end", async () => {
   const decide = async (working: number | undefined, now: number, waiting: Waiting = {}) => {
     const asked: any[] = [];
-    const bridge: any = { agent: claude, agentWorking: () => working, log: () => {},
+    const bridge: any = { agent: claude, forks: { possible: false }, agentWorking: () => working, log: () => {},
       read: async (moment: any) => { asked.push(moment); return { trigger: 'job', said: '', transcript: '', needsAgent: .9, ready: .9, ...moment.working !== undefined && { now } }; } };
     const { send, later } = await jobTurn(bridge, { utterances: [], through: 0, seqs: [0], fresh: 'x' }, [], undefined, {}, waiting);
     return { send, later, asked: asked[0].working };
@@ -211,7 +211,7 @@ test("moments after a request was held for the turn's end, an acknowledgment sta
   // Where the request sent moments ago is now is the outbox's to say.
   const decide = async (adds: number, now: number, state: 'held' | 'sent' | 'uncertain') => {
     const asked: any[] = [];
-    const bridge: any = { agent: claude, agentWorking: () => 95000, log: () => {}, outbox: new Map([['legend', { state }]]),
+    const bridge: any = { agent: claude, forks: { possible: false }, agentWorking: () => 95000, log: () => {}, outbox: new Map([['legend', { state }]]),
       read: async (moment: any) => { asked.push(moment); return { trigger: 'job', said: '', transcript: '', needsAgent: .7, ready: .9, ...moment.sent && { adds }, now }; } };
     const { send, later } = await jobTurn(bridge, { utterances: [], through: 0, seqs: [0], fresh: 'x' }, [], undefined, {}, { sent: { ago: 4000, said: 'Add a legend when you are done.', id: 'legend' } });
     return { send, later, held: asked[0].sent?.held };

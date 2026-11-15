@@ -224,7 +224,7 @@ export class Harness {
   instructions() { return this.voiceSessions.instructions(); }
   appendInstruction(text: unknown) { return this.voiceSessions.appendInstruction(text); }
   startLive(sdp?: unknown, page?: Page, mode: 'resume' | 'fresh' = 'fresh', automatic = false) { return this.voiceSessions.start(sdp, page, mode, automatic); }
-  deliver(request: VoiceRequest) { this.outbox.add({ ...request, target: this.forks.focus }); }
+  deliver(request: VoiceRequest) { const target = this.forks.focus; if (target === 'fork') this.forks.asked = Date.now(); this.outbox.add({ ...request, target }); }
   /** The session in focus changed (forks.ts): the voice hears that session's work from now. */
   focusChanged() { this.mediator?.observe(this.forks.observer()); this.publish(this.status()); }
   /** A line for the voice about what fdc did by itself, quietly. */

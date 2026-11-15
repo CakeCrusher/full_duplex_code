@@ -13,7 +13,7 @@ import type { Harness } from './bridge.ts';
 import type { Decision } from './mediator.ts';
 import type { StageView } from './stage.ts';
 import type { Spoken, SpokenRequest } from './voice-history.ts';
-import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, NOW, PRESS, READY, RECENT_MS, SETTLED, STANDBY, TANGENT, type Reading, type Trigger } from './jev.ts';
+import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, NOW, PRESS, READY, RECENT_MS, SETTLED, STANDBY, STAYS, TANGENT, type Reading, type Trigger } from './jev.ts';
 import { companionNoted, handledNote, lookingNote, sessionsChanging } from './prompts.ts';
 
 /** What the voice tool did itself for the operator's turn: for GPT Live at once (told), and for the agent with their words (note). */
@@ -22,6 +22,8 @@ export interface Actions {
   told?: string;
   /** For the agent if their words go to it; if they don't, carried to the next request (keptNote). */
   note?: string; keptNote?: string;
+  /** These words moved the focus back from a fork: they go to the main session, not to a new fork. */
+  back?: boolean;
 }
 
 export async function routeActions(bridge: Harness, request: SpokenRequest, spoken: Spoken[], why: Trigger): Promise<Actions> {
@@ -29,7 +31,7 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
   // delegation (what its controls can do) and for the agent (what the user was looking at).
   const orchestration = bridge.features.has('orchestration');
   const [sessions, view] = await Promise.all([orchestration ? bridge.sessionSwitch.sessions(300) : undefined, bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
-  const fork = bridge.forks.possible ? bridge.forks.focus : undefined;
+  const fork = forkMoment(bridge);
   const reading = await bridge.read({ trigger: why, spoken, sessions, requestId: request.id, ...fork && { fork } });
   bridge.log({ type: 'turn.read', why, said: request.fresh.slice(-200), companionOnly: reading.companionOnly, standby: reading.standby, sessions: reading.sessions });
   const standby = (reading.standby ?? 0) >= STANDBY;
@@ -41,13 +43,28 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
   if (goal) bridge.voiceSessions.setGoal(goal === 'done' ? undefined : request.fresh, { walk: goal === 'walk' });
   // The learner and the tuner add theirs, and complete the record (bridge.ts, consider).
   bridge.jevAudit?.decided(reading.id, { standby, ...sessions && { sessions: asked?.told ?? false }, ...reading.companionOnly !== undefined && { companionOnly: companion }, ...goal && { goal } });
-  // A tangent goes to a fork of the agent's session, before its words are sent; settled, back to the main session (forks.ts).
-  const forked = fork === 'main' && (reading.tangent ?? 0) >= TANGENT ? await bridge.forks.start(request.fresh) : undefined;
-  const returned = fork === 'fork' && (reading.settled ?? 0) >= SETTLED ? bridge.forks.back('the tangent is settled') : undefined;
-  if (forked || returned) bridge.jevAudit?.decided(reading.id, { ...forked && { fork: 'opened' }, ...returned && { fork: 'back' } });
-  const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent, bridge.features), forked, returned].filter(Boolean).join(' ') || undefined;
   const handled = asked ? 'sessions' : companion ? 'companion' : undefined;
-  return { reading, view, told, note: view ? lookingNote(view) : undefined, keptNote: handled && handledNote(handled) };
+  // Forks (forks.ts). With a fork in focus, words that are no question for it move the focus back to the main session,
+  // before anything is sent: when the operator has left the fork's matter (not while its answer is still on the way: an
+  // "okay" then answers the voice), or when GPT Live asked to pass them on (work goes to the main session). With the
+  // main session in focus, a question GPT Live asked to pass on goes to a fork. Words Jev sends itself: jobTurn.
+  const passed = why === 'delegation' && !handled;
+  const returned = fork === 'fork' && (reading.tangent ?? 1) < STAYS && (passed || ((reading.settled ?? 0) >= SETTLED && !bridge.forks.busy))
+    ? bridge.forks.back(passed ? 'work goes to the main session' : 'the operator moved on') : undefined;
+  const forked = fork === 'main' && passed ? await openFork(bridge, reading, request) : undefined;
+  if (returned) bridge.jevAudit?.decided(reading.id, { fork: 'back' });
+  const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent, bridge.features), forked, returned].filter(Boolean).join(' ') || undefined;
+  return { reading, view, told, note: view ? lookingNote(view) : undefined, keptNote: handled && handledNote(handled), ...returned && { back: true } };
+}
+
+/** Where a fork decision stands (jev.ts): the main session in focus and in the middle of a turn (a question asked aside can go to a fork), or a fork in focus (the operator can move back). */
+const forkMoment = (bridge: Harness) => !bridge.forks.possible ? undefined : bridge.forks.focus === 'fork' ? 'fork' as const : bridge.agentWorking() !== undefined ? 'main' as const : undefined;
+/** Words on their way to the agent that Jev read as a question asked aside go to a fork, opened now: what the voice is told. */
+async function openFork(bridge: Harness, reading: Reading, request: SpokenRequest) {
+  if ((reading.tangent ?? 0) < TANGENT) return undefined;
+  const told = await bridge.forks.start(request.fresh);
+  if (told) bridge.jevAudit?.decided(reading.id, { fork: bridge.forks.focus === 'fork' ? 'opened' : 'failed' });
+  return told;
 }
 
 /** Words waiting undecided before this reading (mediator.ts): the operator went on speaking before the decision, the words have waited too long, or an earlier reading of them found they need the agent. */
@@ -63,7 +80,8 @@ export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: S
   // While the agent is in the middle of a turn it can be steered in, Jev is also asked whether these words must reach it
   // now or can wait for the turn to end (jev.ts, NOW): fdc then holds them until it does (outbox.ts).
   const working = bridge.agent.profile.canSteer ? bridge.agentWorking() : undefined;
-  const reading = await bridge.read({ trigger: 'job', spoken, reply, page: actions.view, requestId: request.id, ...recent && { sent: recent }, ...working !== undefined && { working } });
+  const fork = actions.back ? undefined : forkMoment(bridge);
+  const reading = await bridge.read({ trigger: 'job', spoken, reply, page: actions.view, requestId: request.id, ...recent && { sent: recent }, ...working !== undefined && { working }, ...fork && { fork } });
   // Words that add nothing to a request held for the turn's end still go when they press for it ("no, send it now"):
   // steered in, they bring the held request with them (outbox.ts).
   const adds = reading.adds === undefined || reading.adds >= ADDS || Boolean(recent?.held && (reading.now ?? 0) >= PRESS);
@@ -75,15 +93,20 @@ export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: S
   // Not finished, or still being said: no decision yet. The next reading takes these words with what the operator adds, or
   // they go once the conversation stays quiet (mediator.ts). There is a next time, so a pause is no reason to send half a request.
   const wait = !send && (needed || continued);
+  // Forks (forks.ts), as the words are sent: a question asked aside opens a fork (it is free, so nothing is held); with a
+  // fork in focus, words that are no question for it go to the main session.
+  const forked = send && fork === 'main' ? await openFork(bridge, reading, request) : undefined;
+  const returned = send && fork === 'fork' && (reading.tangent ?? 1) < STAYS ? bridge.forks.back('work goes to the main session') : undefined;
   // Held only on Jev's clear word that it can wait; words that waited already (overdue, or found needed before) go in now.
-  const later = send && !overdue && !neededBefore && reading.now !== undefined && reading.now < NOW;
+  const later = send && !forked && !overdue && !neededBefore && reading.now !== undefined && reading.now < NOW;
   bridge.log({ type: 'turn.job', said: request.fresh.slice(-200), reply: reply?.slice(-200) ?? null, needsAgent: reading.needsAgent, ready: reading.ready, ...reading.adds !== undefined && { adds: reading.adds }, ...reading.now !== undefined && { now: reading.now }, send, ...later && { later }, ...wait && { wait }, ...continued && { continued }, ...overdue && { overdue } });
-  bridge.jevAudit?.decided(reading.id, { outcome: send ? 'send' : wait ? 'wait' : 'keep', needed, finished: ready, ...reading.adds !== undefined && { adds }, ...reading.now !== undefined && { delivery: later ? 'follow-up' : 'steer' }, ...neededBefore && { neededBefore }, ...continued && { continued }, ...overdue && { overdue } }, true);
-  return { reading, send, later, wait, needed: wait && needed, note: send ? actions.note : actions.keptNote };
+  bridge.jevAudit?.decided(reading.id, { outcome: send ? 'send' : wait ? 'wait' : 'keep', ...returned && { fork: 'back' }, needed, finished: ready, ...reading.adds !== undefined && { adds }, ...reading.now !== undefined && { delivery: later ? 'follow-up' : 'steer' }, ...neededBefore && { neededBefore }, ...continued && { continued }, ...overdue && { overdue } }, true);
+  return { reading, send, later, wait, needed: wait && needed, note: send ? actions.note : actions.keptNote, ...(forked || returned) && { told: forked ?? returned } };
 }
 
 /** Both calls in turn, without waiting for a reply: the turn as the tests (and a voice tool that heard none) read it. */
 export async function routeTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], why: Trigger, reply?: string): Promise<Decision> {
   const actions = await routeActions(bridge, request, spoken, why);
-  return { ...await jobTurn(bridge, request, spoken, reply, actions), told: actions.told, actions };
+  const job = await jobTurn(bridge, request, spoken, reply, actions);
+  return { ...job, told: [actions.told, job.told].filter(Boolean).join(' ') || undefined, actions };
 }

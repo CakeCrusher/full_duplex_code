@@ -79,12 +79,13 @@ export class Endpoints {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; frame-src http://127.0.0.1:* https://*.trycloudflare.com; frame-ancestors 'self' http://127.0.0.1:* https://*.trycloudflare.com");
     const { local, allowed } = this.access(req);
     if (!allowed) { res.writeHead(403); return res.end(); }
-    if ((req.url === '/hook' || req.url === '/fork/hook') && req.method === 'POST') {
+    const forkHook = /^\/fork\/\d+\/hook$/.test(req.url ?? '');
+    if ((req.url === '/hook' || forkHook) && req.method === 'POST') {
       if (!local || !equal(req.headers.authorization, `Bearer ${bridge.agentToken}`)) { res.writeHead(403); return res.end(); }
       const event = await body(req, MAX_HOOK_BYTES);
       // Never wait for a model or a network append before returning to the agent.
-      // The observer refuses events from another agent session; a fork's go to the fork's (forks.ts).
-      const observer = req.url === '/fork/hook' ? bridge.forks.adapter?.observations : bridge.observer;
+      // The observer refuses events from another agent session; a fork's go to the fork's, on its own route, and those of a fork left behind go nowhere (forks.ts).
+      const observer = !forkHook ? bridge.observer : req.url === `${bridge.forks.route}/hook` ? bridge.forks.adapter?.observations : undefined;
       if (!observer?.hook(event)) { res.writeHead(409); return res.end('{}'); }
       // The hook's answer: nothing, except for a voice request this bridge delivered (AgentDefinition.vouch), and fdc's
       // instructions for an agent they reach through its hook (AgentDefinition.instruct).
