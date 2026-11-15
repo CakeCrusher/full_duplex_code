@@ -19,39 +19,57 @@ const file = (name: string) => path.join(cwd, name);
 const events = () => fs.readFileSync(path.join(harness.runDir, 'events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
 const receivedBy = (id: string) => events().find(e => e.type === 'agent.input' && String(e.text).includes(id));
 try {
-  const first = send('Create a file named main.txt containing the word main. Nothing else.');
+  // The main session starts a long job: the tangent comes while it works, as in real use.
+  const first = send('Create a file named main.txt containing the word main. Then run the shell command `sleep 75` in the foreground, and after it finishes create a file named slow-done.txt containing the word done. Nothing else.');
   await until(() => fs.existsSync(file('main.txt')), { label: 'main.txt', timeout: 120000 });
   assert.equal(receivedBy(first)?.fork, undefined, 'the first request reached the main session');
+  await until(() => harness.observer.state === 'working', { label: 'the main session at work', timeout: 30000 });
   // The fork, in a terminal of its own: confirm Claude's development-channel prompt as the main one was.
   harness.forks.open = script => {
     // A new window's shell, as Terminal would start it: not this process's Claude session or OpenAI key.
     const env: Record<string, string> = { ...process.env as Record<string, string>, TERM: 'xterm-256color' }; delete env.OPENAI_API_KEY;
     for (const name of Object.keys(env)) if (/^CLAUDE(CODE$|_CODE_|_PID$|_EFFORT$)/.test(name)) delete env[name];
-    fork = pty.spawn('/bin/sh', [script], { name: 'xterm-256color', cols: 120, rows: 35, cwd, env });
+    const term = fork = pty.spawn('/bin/sh', [script], { name: 'xterm-256color', cols: 120, rows: 35, cwd, env });
     let raw = '', confirmed = false;
-    fork.onData(data => {
+    term.onData(data => {
       fs.appendFileSync(path.join(harness.runDir, 'fork-terminal.log'), data);
       raw = (raw + data).slice(-40000);
       const compact = stripVTControlCharacters(raw).replace(/[^A-Za-z]/g, '');
-      if (!confirmed && compact.includes('Iamusingthisforlocaldevelopment')) { confirmed = true; let n = 0; const t = setInterval(() => { if (harness.forks.ready || ++n > 8) clearInterval(t); else fork!.write('\r'); }, 1000); }
+      if (!confirmed && compact.includes('Iamusingthisforlocaldevelopment')) { confirmed = true; let n = 0; const t = setInterval(() => { if (harness.forks.ready || ++n > 8) clearInterval(t); else term.write('\r'); }, 1000); }
     });
     return 'test terminal';
   };
-  const told = await harness.forks.start('By the way, unrelated: make a tangent file.');
-  evidence.told = told;
+  const openedAt = Date.now();
+  evidence.told = await harness.forks.start('By the way, unrelated: make a tangent file.');
   assert.equal(harness.forks.focus, 'fork');
   await until(() => harness.forks.ready, { label: "the fork's channel", timeout: 90000 });
-  const tangent = send('In this session, which file did you create first? Write its exact name into a new file named history.txt, and create tangent.txt containing the word tangent.');
+  const tangent = send('In this session, which file did you create first? Write its exact name into a new file named history.txt, and create tangent.txt containing the word tangent. Do not wait for anything else.');
   await until(() => fs.existsSync(file('tangent.txt')) && fs.existsSync(file('history.txt')), { label: 'the fork did the tangent', timeout: 180000 });
   assert.ok(receivedBy(tangent)?.fork, 'the tangent reached the fork, not the main session');
   assert.match(fs.readFileSync(file('history.txt'), 'utf8'), /main\.txt/, "the fork knows the main session's history");
+  assert.equal(fs.existsSync(file('slow-done.txt')), false, 'the fork finished its tangent while the main session still worked');
   const forkSession = events().find(e => e.type === 'fork.session')?.sessionId;
   assert.ok(forkSession && forkSession !== harness.sessionId, 'the fork is a session of its own');
-  // Settled: back to the main session.
+  // Both sessions' hooks reached fdc meanwhile, each on its own route.
+  await until(() => events().some(e => e.at >= openedAt && e.fork && e.type === 'agent.hook' && e.name === 'Stop'), { label: "the fork's turn end", timeout: 60000 });
+  const during = events().filter(e => e.at >= openedAt && e.type === 'agent.hook');
+  evidence.hooks = { fork: [...new Set(during.filter(e => e.fork).map(e => e.name))], main: [...new Set(during.filter(e => !e.fork).map(e => e.name))] };
+  assert.ok(during.some(e => e.fork && e.name === 'PostToolUse') && during.some(e => e.fork && e.name === 'Stop'), "the fork's tool calls and turn end reached fdc");
+  // Settled while the main session still works: the next request goes to it.
   evidence.back = harness.forks.back('the tangent is settled');
-  const again = send('Create a file named back.txt containing the word back.');
-  await until(() => fs.existsSync(file('back.txt')), { label: 'back.txt', timeout: 120000 });
+  const again = send('Also create a file named back.txt containing the word back.');
+  await until(() => fs.existsSync(file('back.txt')) && fs.existsSync(file('slow-done.txt')), { label: 'back.txt and the long job', timeout: 240000 });
   assert.equal(receivedBy(again)?.fork, undefined, 'after the tangent, requests reach the main session');
+  assert.ok(events().some(e => !e.fork && e.type === 'agent.hook' && e.name === 'Stop' && e.at > openedAt), "the main session's turn end reached fdc");
+  // A second fork, whose window the operator closes: the focus comes back by itself.
+  const firstFork = fork!;
+  evidence.second = await harness.forks.start('Another aside: what does the README say?');
+  assert.equal(harness.forks.focus, 'fork');
+  await until(() => harness.forks.ready, { label: "the second fork's channel", timeout: 90000 });
+  firstFork.kill('SIGTERM');
+  fork!.kill('SIGHUP');
+  await until(() => harness.forks.focus === 'main', { label: 'the focus back once the window closed', timeout: 30000 });
+  evidence.closed = events().filter(e => e.type === 'fork.back').map(e => e.why);
   Object.assign(evidence, { passed: true, main: harness.sessionId, fork: forkSession, files: fs.readdirSync(cwd).filter(f => f.endsWith('.txt')).sort() });
   console.log('FORK END TO END PASSED');
 } catch (error) {
