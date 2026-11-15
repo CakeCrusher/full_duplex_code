@@ -50,6 +50,11 @@ async function launch(name: string, args: string[]) {
   // Run with npm run, npm's variables would make fdc work in this checkout
   // (it honors INIT_CWD for npm start) instead of the test project.
   for (const name of Object.keys(env)) if (/^(npm_|INIT_CWD$)/.test(name)) delete env[name];
+  // A question asked while the agent works would open a fork in a new terminal window on this desktop (forks.ts): here
+  // the window can't open, so the question goes to the main session, as it does for an agent that can't fork.
+  const bin = path.join(testDir, 'bin'); fs.mkdirSync(bin, { recursive: true });
+  for (const name of ['open', 'osascript']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\necho "no windows in this test" >&2\nexit 1\n', { mode: 0o755 });
+  env.PATH = `${bin}${path.delimiter}${env.PATH}`;
   const terminal = pty.spawn(fdc, ['--port', '0', agent, ...args], { name: 'xterm-256color', cols: 140, rows: 45, cwd, env });
   let raw = '', exited: number | null = null, entered = false, trusted = false, channel = false, update = false;
   terminal.onData(data => {

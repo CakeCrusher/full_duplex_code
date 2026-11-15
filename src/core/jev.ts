@@ -214,8 +214,8 @@ const JOB = {
 //   opened for, with the fork's tag put in their history (.scratch/round2/forks/back): words that are no question
 //   (below STAYS) move the focus back when the operator has left the matter (from SETTLED) or when they are on their way
 //   to the agent, which moves back for 38 of 45 turns that should and leaves the fork in 8 of 39 that go on with it. The
-//   wording before it ("do the latest words settle the tangent?") was near chance there (AUC .59 against .81; both
-//   answers together .89).
+//   wording before it ("do the latest words settle the tangent?") was near chance there (AUC .59 against .83; both
+//   answers together .88).
 const FORK = {
   tangent: noul('The coding agent is in the middle of its work. Do the latest words turn aside to ask something: a question the operator wants answered or explained for themselves now, with nothing asked to be done?',
     'A clarifying question or a request to explain: what something means, why something is so, what a number or a state currently is, how two things differ, to be walked through something. Answering may take looking something up, but nothing is to be built, changed, fixed, run, added or tried, and the work under way is not steered.',
