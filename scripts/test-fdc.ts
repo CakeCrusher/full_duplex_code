@@ -94,7 +94,8 @@ async function waitFor(check: () => Promise<boolean>, label: string, timeout: nu
 const said = (voice: Awaited<ReturnType<typeof connectVoice>>, since: number) => voice.events.filter(e => e.type === 'caption' && e.role === 'intermediary' && e.at >= since).map(e => e.text).join('');
 const files = () => fs.readdirSync(cwd).filter(f => f.endsWith('.txt')).sort();
 // A file named as the voice says it ("a.txt", "a dot txt", "a dot t-x-t"): the greeting's own "voice companion" is no answer.
-const namesFile = (text: string) => /\b[a-e](\.| dot )t(xt|-x-t)\b/i.test(text);
+// As the voice says it and the transcript spells it: "a.txt", "a dot txt", "a-dot-txt", "a through e", "a, b, c, d, and e".
+const namesFile = (text: string) => /\b[a-e](\.|[ -]dot[ -])t(xt|-x-t)\b/i.test(text) || /\ba\b[^.]{0,30}\b(through|to)\b[^.]{0,12}\be\b/i.test(text) || /\ba, b, c, d,? (and )?e\b/i.test(text);
 
 let run: Awaited<ReturnType<typeof launch>> | undefined, voice: Awaited<ReturnType<typeof connectVoice>> | undefined;
 try {
@@ -144,6 +145,7 @@ try {
   run.terminal.write('Run the shell command `sleep 15`, then run it once more, then say READY.'); await delay(500); run.terminal.write('\r');
   await until(() => run!.events().some(e => e.type === 'agent.status' && e.at >= again && / is using bash$/i.test(e.detail ?? '')), { label: `${agent} started the second piece of work`, timeout: 90000 });
   await delay(2500);
+  const spoke = Date.now();
   await voice.speak(waiting);
   const later = await until(() => run!.events().find(e => e.type === 'task' && e.at >= again && ['held', 'sent'].includes(e.state)), { label: 'the request that can wait went, or is held', timeout: 60000 });
   await until(() => fs.existsSync(path.join(cwd, 'later.txt')), { label: 'the request that could wait was done', timeout: 300000 });
@@ -155,9 +157,11 @@ try {
   } else {
     // Delivered at once. Between turns that is right (the agent ended its turn early, with the command left running in
     // the background); in the middle of one, Jev read words that say they can wait as needed now.
-    const asked = run.events().findLast(e => e.type === 'turn.job' && e.at >= again)?.now;
+    // Or GPT Live asked to pass them on itself: either one asking sends, and its asking sends at once.
+    const passed = run.events().some(e => e.type === 'turn.read' && e.why === 'delegation' && e.at >= spoke && e.at <= later.at + 500);
+    const asked = passed ? undefined : run.events().findLast(e => e.type === 'turn.job' && e.at >= spoke && e.at <= later.at + 500)?.now;
     assert.equal(asked, undefined, `words that say they can wait were steered into the turn (Jev read now at ${asked})`);
-    evidence.waitingRequest = 'delivered at once and done: the agent was between turns, so holding was not exercised';
+    evidence.waitingRequest = passed ? 'delivered at once and done: GPT Live asked to pass it on itself, so holding was not exercised' : 'delivered at once and done: the agent was between turns, so holding was not exercised';
   }
   await delay(3000); await voice.close(); voice = undefined;
   Object.assign(evidence, { sessionId: run.sessionId, request: task.id, receivedMidTurn: true, files: files(), answer });
