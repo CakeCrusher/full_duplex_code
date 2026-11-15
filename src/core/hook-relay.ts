@@ -9,8 +9,8 @@ const url = process.argv[2];
 let answer: unknown = {};
 const token = process.env.FD_BRIDGE_TOKEN;
 try {
-  // A fork of the session has its hooks on the fork's route (forks.ts).
-  if (!token || !/^http:\/\/127\.0\.0\.1:\d+(?:\/fork\/\d+)?\/hook$/.test(url)) throw new Error('Missing local voice hook configuration');
+  // A fork of the session has its hooks on a route of its own (forks.ts): /fork/<n>, or /fork for an fdc started before forks had numbers.
+  if (!token || !/^http:\/\/127\.0\.0\.1:\d+(?:\/fork(?:\/\d+)?)?\/hook$/.test(url)) throw new Error('Missing local voice hook configuration');
   let size = 0; const buffers: Buffer[] = [];
   for await (const chunk of process.stdin) {
     size += chunk.length;

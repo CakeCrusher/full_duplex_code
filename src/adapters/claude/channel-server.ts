@@ -13,8 +13,8 @@ const url = process.env.FD_BRIDGE_URL;
 const token = process.env.FD_BRIDGE_TOKEN;
 // A companion started before fdc passed them leaves them out: the channel still delivers.
 const instructions = process.env.FD_INSTRUCTIONS || undefined;
-// A fork of the session has its channel on the fork's route (forks.ts).
-if (!url || !token || !/^ws:\/\/127\.0\.0\.1:\d+(?:\/fork\/\d+)?\/channel$/.test(url)) {
+// A fork of the session has its channel on a route of its own (forks.ts): /fork/<n>, or /fork for an fdc started before forks had numbers.
+if (!url || !token || !/^ws:\/\/127\.0\.0\.1:\d+(?:\/fork(?:\/\d+)?)?\/channel$/.test(url)) {
   console.error('Voice channel requires its local harness connection. Start with npm start.');
   process.exit(1);
 }

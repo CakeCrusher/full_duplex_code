@@ -33,7 +33,7 @@ export default function companion(pi: PiApi) {
   const base = process.env.FD_BRIDGE_URL, token = process.env.FD_BRIDGE_TOKEN;
   if (!base || !token || !/^http:\/\/127\.0\.0\.1:\d+$/.test(base)) return;
   // A fork of the operator's session (fdc's forks.ts) has its own routes on the bridge.
-  const prefix = /^\/fork\/\d+$/.test(process.env.FD_BRIDGE_PREFIX ?? '') ? process.env.FD_BRIDGE_PREFIX : '';
+  const prefix = /^\/fork(\/\d+)?$/.test(process.env.FD_BRIDGE_PREFIX ?? '') ? process.env.FD_BRIDGE_PREFIX : '';
   // Pi builds its system prompt for every run from options a handler can change for that run alone, beside the
   // operator's own (--system-prompt, --append-system-prompt): new, continued and resumed sessions all get the section,
   // and compaction keeps it. A Pi without prompt sections gets the instructions at the end of its prompt instead.
