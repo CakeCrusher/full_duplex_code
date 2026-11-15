@@ -113,13 +113,13 @@ try {
   const commandsStarted = () => run!.events().filter(e => e.type === 'agent.status' && / is using bash$/i.test(e.detail ?? '')).length;
   const started = commandsStarted();
   await until(() => commandsStarted() > started, { label: `${agent} started a long command`, timeout: 90000 });
-  await delay(2500);
+  await delay(2500); await voice.quiet();
   assert.equal((await run.status()).agent, 'working', `${agent} is still working when the request is spoken`);
   await voice.speak(request);
   // The request is on its way: steered into the running turn, or (with Jev) held until the turn ends when it can wait.
   const task = await until(() => run!.events().find(e => e.type === 'task' && ['held', 'sent'].includes(e.state)), { label: 'the request went, or is held for the end of the turn', timeout: 60000 });
   // Words that can't wait reach the agent mid-turn, and bring a held request in before them.
-  await delay(3000);
+  await delay(1500); await voice.quiet();
   assert.equal((await run.status()).agent, 'working', `${agent} is still working when the pressing words are spoken`);
   await voice.speak(pressing);
   const urgent = await until(() => run!.events().find(e => e.type === 'task' && e.id !== task.id && e.state === 'sent'), { label: 'the words that cannot wait were sent', timeout: 60000 });
@@ -134,7 +134,7 @@ try {
   evidence.firstRequest = task.state === 'held' ? 'held for the end of the turn, then brought in by words that could not wait' : 'steered into the turn';
   evidence.shorterSleepUsed = run.events().some(e => e.type === 'agent.hook' && e.at > pressed.at && /sleep 5\b/.test(JSON.stringify(e.tool_input ?? '')));
   assert.match(fs.readFileSync(path.join(cwd, 'voice.txt'), 'utf8'), /voice/i);
-  await delay(4000);
+  await delay(4000); await voice.quiet();
   const asked = Date.now();
   await voice.speak(question);
   const answer = await until(() => { const text = said(voice!, asked); return /voice/i.test(text) && namesFile(text) ? text : ''; }, { label: 'an answer naming the files', timeout: 45000 });
@@ -144,7 +144,7 @@ try {
   // Two short sleeps: Claude runs a long one in the background and ends its turn, or declines to wait in the foreground.
   run.terminal.write('Run the shell command `sleep 15`, then run it once more, then say READY.'); await delay(500); run.terminal.write('\r');
   await until(() => run!.events().some(e => e.type === 'agent.status' && e.at >= again && / is using bash$/i.test(e.detail ?? '')), { label: `${agent} started the second piece of work`, timeout: 90000 });
-  await delay(2500);
+  await delay(2500); await voice.quiet();
   const spoke = Date.now();
   await voice.speak(waiting);
   const later = await until(() => run!.events().find(e => e.type === 'task' && e.at >= again && ['held', 'sent'].includes(e.state)), { label: 'the request that can wait went, or is held', timeout: 60000 });
@@ -173,7 +173,7 @@ try {
   assert.equal(run.sessionId, evidence.sessionId, 'fdc resumed the same session');
   voice = await connectVoice({ baseUrl: run.baseUrl, browserToken: run.browserToken, runDir: run.runDir });
   await until(() => voice!.events.some(e => e.type === 'caption' && e.role === 'intermediary'), { label: 'voice greeting after resume', timeout: 30000 });
-  await delay(1500);
+  await delay(1500); await voice.quiet();
   const recalled = Date.now();
   await voice.speak(recall);
   evidence.recall = await until(() => { const text = said(voice!, recalled); return namesFile(text) ? text : ''; }, { label: 'history recalled after resume', timeout: 45000 });

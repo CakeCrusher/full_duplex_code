@@ -122,8 +122,12 @@ export async function connectTestVoice(harness: Harness) {
 export async function connectVoice({ baseUrl, browserToken, runDir, log = () => {} }: { baseUrl: string; browserToken: string; runDir: string; log?: (event: Record<string, unknown>) => void }) {
   const ws = new WebSocket(baseUrl.replace('http:', 'ws:') + '/voice', { headers: { Authorization: `Bearer ${browserToken}` } });
   const events: any[] = []; const outputs: Buffer[] = []; let file: Buffer | null = null; let offset = 0; let resolvePlayback: (() => void) | undefined;
+  // When the voice's speech received so far will have played out: audio can arrive faster than it plays, and the silence
+  // GPT Live streams between its words is no speech (24 kHz, 16 bits: 48 bytes a millisecond).
+  let speechUntil = 0;
+  const loud = (pcm: Buffer) => { let power = 0; for (let i = 0; i + 1 < pcm.length; i += 2) power += (pcm.readInt16LE(i) / 32768) ** 2; return Math.sqrt(power / Math.max(1, pcm.length / 2)) >= .003; };
   ws.on('message', (data, binary) => {
-    if (binary) outputs.push(Buffer.from(data as Buffer));
+    if (binary) { const chunk = Buffer.from(data as Buffer); outputs.push(chunk); if (loud(chunk)) speechUntil = Math.max(speechUntil, Date.now()) + chunk.length / 48; }
     else { const e = JSON.parse(data.toString()); events.push({ at: Date.now(), ...e }); if (e.type === 'caption') process.stdout.write(e.text); if (e.type === 'fault') console.error('\nFAULT:', e.message); }
   });
   await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
@@ -153,6 +157,12 @@ export async function connectVoice({ baseUrl, browserToken, runDir, log = () => 
       await new Promise<void>(resolve => { file = fixture.pcm; offset = 0; resolvePlayback = resolve; });
       log({ type: 'test.audio_ended', text: fixture.text });
     },
+    /**
+     * Waits for the voice to finish what it is saying, as an operator who lets it finish does. Spoken over it, a
+     * sentence loses words in GPT Live's transcript ("use sleep five instead of sleep fifteen" arrived as "use sleep of
+     * sleep fifteen", Nov 15), and the agent then rightly asks what was meant: a check of fdc must not hang on that.
+     */
+    async quiet(ms = 1000, timeout = 20000) { await until(() => Date.now() - speechUntil >= ms, { timeout, label: 'the voice to finish speaking' }).catch(() => {}); },
     async close() {
       ws.send(JSON.stringify({ type: 'stop' }));
       await until(() => events.find(e => e.type === 'voice_closed'), { timeout: 20000, label: 'final Live usage' }).catch(error => console.error(error.message));
