@@ -25,6 +25,8 @@ export interface Tuning {
   standbyQuickMs: number;
   /** How long the conversation's previous quiet must have lasted for Standby to come sooner. */
   standbyQuickAfterMs: number;
+  /** How sure Jev must be, once the conversation has gone quiet, that no meaningful exchange is about to begin, for Standby at once (0 to 1; jev.ts, QUIET). */
+  standbyFrom: number;
   // What each input is worth in Standby's currency (activity.ts): speech per tenth of a second of sound, the rest per event.
   speechPrice: number;
   liveSpeechPrice: number;
@@ -117,6 +119,20 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     { value: 30000, consequence: 'With standbyQuickMs 10 s: saved 26%, wakes 20.6 -> 40.3 an hour (329 wrong against 184 right).' },
     { value: 60000, consequence: 'The default, with standbyQuickMs 5 s: saved 20%, wakes 20.6 -> 26.5 an hour (99 wrong against 173 right).' },
   ] },
+  // Measured on 400 recorded decision points (Oct 31 to Nov 14; 100 an hour of voice): 2 s after the voice companion
+  // stopped speaking, or 6 s after the operator did if it gave no answer. Each was judged blind, from the three minutes
+  // that followed, on the operator's definition: Standby there interrupts when a meaningful exchange (a steer, or news
+  // they listened to and accepted) begins within the 13 s the window would still have waited (.scratch/round2/standby).
+  // Waiting out the 15 s window alone: 26 Standbys an hour, 5 of them interrupting.
+  standbyFrom: { min: 0.05, max: 1, describe:
+    "How sure Jev must be that no meaningful exchange is about to begin (0 to 1) for voice to go on Standby at once when the conversation goes quiet, instead of waiting out the quiet window (standbyAfterMs). Jev reads the conversation once the voice companion has had its say, as the operator judges it: how engaged they seem, whether they have just handed the agent a long task, whether they asked something that gets an immediate answer; a spoken request to go quiet, sleep or stand by counts as sure. A Standby that interrupts costs the operator a moment: voice is back a few seconds after they speak, their words included. Lower: Standby more often and sooner, more of the voice bill saved, more exchanges interrupted. Higher: only when Jev is surer. 1: never on Jev's word, only the quiet window. Choose lower when the operator says voice should go on Standby sooner or more often, or wants to spend less; higher when they say it goes on Standby while they are still talking or listening.",
+    levels: [
+    { value: 0.4, consequence: 'Leans furthest toward Standby: 28 more Standbys an hour than the window alone (54 instead of 26), 13 more of them interrupting a meaningful exchange (18 an hour instead of 5); saved 11% of the voice time billed.' },
+    { value: 0.5, consequence: 'The default: 10 more Standbys an hour, 3.5 more of them interrupting (8.6 an hour instead of 5.1; 3 in 4 right, the window alone 4 in 5); saved 6% of the voice time billed. Every recorded spoken request for Standby passed it (7 of 7).' },
+    { value: 0.6, consequence: "Only when Jev is surer: 4 more Standbys an hour, 1 more interrupting; as often right as the window's own (4 in 5); saved 2.6%. 5 of 7 recorded spoken requests for Standby passed it." },
+    { value: 0.7, consequence: 'Hardly ever on Jev\'s word: under 1 more Standby an hour, 0.8% saved; 3 of 7 recorded spoken requests for Standby passed it.' },
+    { value: 1, consequence: "Never on Jev's word: Standby only after the quiet window, as before Nov 15 for everything but a spoken request." },
+  ] },
   wakeThreshold: { min: 1, max: 1000, describe:
     "How much currency in the quiet window keeps voice Live, and wakes it from Standby. Everything is priced in one currency by the price settings, by default: each tenth of a second of the operator's sound or of GPT Live's audio 20; each display batch of an agent message 10 (a message is usually about 3 batches); a finished turn 50; a failed turn 50; an approval request 100; a request GPT Live passes on 100; a tool call or a prompt 1. At the default 50: about 0.3 s of the operator's sound wakes it; an approval, a request, or a finished or failed turn always does; tool calls practically never do (50 within the window). The levels' finished turns that waited silently were measured with a finished turn worth 30; at 50 they wake it up to a threshold of 50. Higher: voice is on Standby more and wakes less often for noise, but more finished turns wait silently until the operator speaks, and GPT Live misses more of what it would have said; above 100 even an approval request no longer wakes it. Lower: the reverse. Choose higher when the operator says it wakes up for nothing, for coughs or noises; lower when they say they missed that the agent finished, or want to hear about its work right away.",
     levels: [
@@ -205,7 +221,7 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
 };
 
 // Standby's defaults are the operator's choice in the Standby sandbox (Oct 18).
-export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 15000, wakeThreshold: 50, standbyQuickMs: 5000, standbyQuickAfterMs: 60000,
+export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 15000, wakeThreshold: 50, standbyQuickMs: 5000, standbyQuickAfterMs: 60000, standbyFrom: 0.5,
   speechPrice: 20, liveSpeechPrice: 20, toolPrice: 1, promptPrice: 1, messagePrice: 10, turnEndPrice: 50, failurePrice: 50, approvalPrice: 100, requestPrice: 100, forkFrom: 0.55 };
 
 /** Settings from partial overrides: unknown names and values out of range are refused. */

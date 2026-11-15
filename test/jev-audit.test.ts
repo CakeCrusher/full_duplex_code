@@ -39,9 +39,9 @@ test('each Jev call of a turn is recorded with what fdc asked, what Jev answered
   assert.equal(jobCall.status, 200);
   assert.ok(jobCall.ms >= 0);
   assert.deepEqual(jobCall.decision, { outcome: 'send', needed: true, finished: true });
-  assert.deepEqual(turnCall.config.thresholds, { companion_only: .85, standby: .7, goal: .6, behave: .6, design_talk: .5 });
+  assert.deepEqual(turnCall.config.thresholds, { companion_only: .85, goal: .6, behave: .6, design_talk: .5 });
   assert.deepEqual(turnCall.answers, own);
-  assert.deepEqual(turnCall.decision, { standby: false, companionOnly: false, learned: false }, "the voice tool's own actions, then the learner's");
+  assert.deepEqual(turnCall.decision, { companionOnly: false, learned: false }, "the voice tool's own actions, then the learner's");
   const text = fs.readFileSync(file, 'utf8');
   assert.ok(!text.includes(KEY) && !text.includes('Bearer'));
   assert.deepEqual(lines(path.join(h.runDir, 'events.jsonl')).filter(e => e.type === 'jev.read').map(e => e.id).sort(), [turnCall.id, jobCall.id].sort(), "events.jsonl's line for each call has its ID");
@@ -68,14 +68,14 @@ test('a call that fails is recorded at once with why; the words still go to the 
   assert.deepEqual(unsent.decision, { learned: false });
 });
 
-test("the voice tool's own reading records what came of it: Standby, the instruction learned, the settings chosen", async t => {
+test("the voice tool's own reading records what came of it: the instruction learned, the settings chosen", async t => {
   const { h, calls } = await audited(t, body => ({ answers: body.questions.needs_agent ? { needs_agent: { noul: .1 }, ready: { noul: .9 } }
     : { standby: { noul: .9 }, companion_only: { noul: .9 }, behave: { noul: .9 }, design_talk: { noul: .1 }, lasting: { choice: 'always' }, wakeThreshold: { choice: 'level_100', probabilities: { level_100: .8, level_50: .1 } } } }), { features: ['instructions', 'configuration'] });
   h.ask = async () => { throw new Error('no harness in tests'); };
   const decision = await turn(h, 'Stop waking up for every little thing from now on. Bye for now.');
   h.consider(decision.actions!.reading!);
   const turnCall = calls().find(c => c.trigger === 'turn')!;
-  assert.deepEqual(turnCall.decision, { standby: true, companionOnly: true, learned: 'always', settings: [{ name: 'wakeThreshold', from: 50, to: 100 }] });
+  assert.deepEqual(turnCall.decision, { companionOnly: true, learned: 'always', settings: [{ name: 'wakeThreshold', from: 50, to: 100 }] });
   assert.deepEqual(turnCall.config.features, ['instructions', 'configuration']);
   assert.ok('earlier_sessions' in turnCall.state && 'current_settings' in turnCall.state, "the tuner's state, as sent");
   assert.deepEqual(calls().find(c => c.trigger === 'job')!.decision, { outcome: 'keep', needed: false, finished: true });
@@ -99,7 +99,7 @@ test('a reading fdc has not finished acting on is recorded as it is when fdc sto
   await turn(h, 'Just thinking out loud here.');
   assert.deepEqual(calls().map(c => c.trigger), ['job'], "the voice tool's own reading waits for the learner, which the mediator asks");
   await h.close();
-  assert.deepEqual(calls().find(c => c.trigger === 'turn')?.decision, { standby: false, companionOnly: false });
+  assert.deepEqual(calls().find(c => c.trigger === 'turn')?.decision, { companionOnly: false });
   const file = path.join(h.runDir, 'unit.jsonl'), audit = new JevAudit({ file, waitMs: 20 });
   const call = (id: string, more: Partial<JevCall> = {}): JevCall => ({ id, at: 0, trigger: 'job', config: { url: '', model: '', timeoutMs: 0, features: [], thresholds: {} }, state: {}, questions: {}, ms: 0, answers: {}, ...more });
   audit.called(call('late'));

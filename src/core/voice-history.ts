@@ -169,8 +169,9 @@ export class VoiceHistory {
    * With `since` (the last word read before), all of the operator's words after it are the latest, whatever was said among
    * them: read only to its last pause, "…send it" then "over" was read as "over" and kept. Words carried over from the
    * connection before are its conversation, which GPT Live heard there (record.turns), unless they are among the latest.
+   * With `answered`, to now: what GPT Live has said since their latest words stays (the quiet after its answer, voice-sessions.ts).
    */
-  spoken(through = Infinity, since?: number): Spoken[] {
+  spoken(through = Infinity, since?: number, answered = false): Spoken[] {
     const latest = since === undefined ? [] : this.fragments.filter(f => f.seq > since && f.seq <= through && f.role === 'operator' && !this.unheard(f));
     const joined: (Spoken & { endMs: number })[] = [];
     for (const f of this.fragments) {
@@ -183,7 +184,7 @@ export class VoiceHistory {
     const words = latest.map(f => f.text).join('').replace(/\s+/g, ' ').trim();
     if (words) all.push({ role: 'operator', text: words, at: latest[0].receivedAt });
     // GPT Live answering is not part of what the operator's latest words are.
-    while (all.length && all.at(-1)!.role !== 'operator') all.pop();
+    while (!answered && all.length && all.at(-1)!.role !== 'operator') all.pop();
     return all;
   }
   /** Speech a dropped connection had not passed on, placed before this one's so that its next request includes it. */

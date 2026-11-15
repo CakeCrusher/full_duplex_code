@@ -32,6 +32,10 @@ const FIRST_AUDIO_MS = 15000, AUDIO_GAP_MS = 5000;
 export const STANDBY = 'Standby: the conversation was quiet';
 // A page asked to wake voice is asked again, then Standby ends: voice can't be left neither on nor off.
 const WAKE_AGAIN_MS = 10000, WAKE_GIVE_UP_MS = 30000;
+// When the voice companion has had its say (readQuiet): this long after GPT Live stopped speaking, or after the operator did if it gave no answer.
+const QUIET_ANSWERED_MS = 2000, QUIET_UNANSWERED_MS = 6000;
+// GPT Live bills each session it connects at least this long (USAGE.md): Standby sooner saves nothing, and its wake would be billed again.
+const BILLED_AT_LEAST_MS = 15000;
 /** A page's address without its query or fragment: a reload that busts the cache is the same page. */
 const address = (url: string) => url.replace(/[?#].*$/, '');
 /** What GPT Live was told when no page is on the stage. */
@@ -133,8 +137,8 @@ export class VoiceSessions {
   senders = new Map<string, Mediator>();
   /** Voice on Standby, and what is happening in the conversation, priced (activity.ts); and when a wake's fork last failed. */
   standby?: Standby; activity = new Activity(); standbyTimer: NodeJS.Timeout; wakeForkFailedAt = -Infinity;
-  /** When Jev found the operator done for now (turn.ts): voice goes on Standby once GPT Live has answered, unless they go on talking. */
-  doneAt?: number;
+  /** The quiet Jev has read (when either side last spoke before it): one reading for each (readQuiet). */
+  quietRead = -Infinity;
   constructor(bridge: Harness, { store = true, resumeDir = path.join(bridge.root, '.runs', 'voice-resume') }: { store?: boolean; resumeDir?: string } = {}) {
     this.bridge = bridge; this.store = store; this.resumeStore = new ResumeStore(resumeDir);
     this.standbyTimer = setInterval(() => this.checkStandby(), 1000); this.standbyTimer.unref();
@@ -143,8 +147,8 @@ export class VoiceSessions {
   listensTo(page: Page) { return page === this.page || page === this.standby?.page; }
   /** When the microphone last heard the operator's voice, and when GPT Live's audio last played. */
   voiceAt = -Infinity; liveSpeechAt = 0;
-  /** When either side last spoke, and how long the quiet before that lasted (Standby comes sooner after a long one). */
-  spokeAt = -Infinity; lastQuietMs = 0;
+  /** When either side last spoke, and how long the quiet before that lasted (Standby comes sooner after a long one); whether the last to speak was GPT Live. */
+  spokeAt = -Infinity; lastQuietMs = 0; liveSpokeLast = false;
   /**
    * The listening page's microphone and speaker levels (about 0.1 s each), priced: the operator's voice and GPT Live's.
    * A voice holds for more than a moment: a knock rings through one window, a word through several. On the operator's
@@ -158,7 +162,7 @@ export class VoiceSessions {
     // again within a second (Oct 21, twice), for a new session billed at least 15 s.
     const live = (level.outputRms ?? 0) >= LIVE_SPEECH_RMS && !this.standby;
     if (live) { this.activity.add('live'); this.liveSpeechAt = level.at; }
-    if (held || live) { const now = Date.now(); if (now - this.spokeAt > 1500 && Number.isFinite(this.spokeAt)) this.lastQuietMs = now - this.spokeAt; this.spokeAt = now; }
+    if (held || live) { const now = Date.now(); if (now - this.spokeAt > 1500 && Number.isFinite(this.spokeAt)) this.lastQuietMs = now - this.spokeAt; this.spokeAt = now; this.liveSpokeLast = live && !held; }
   }
   /**
    * Every second: voice that has been quiet for the Standby window goes on Standby, and voice on
@@ -187,26 +191,51 @@ export class VoiceSessions {
       return;
     }
     const live = this.live, run = this.run, page = this.page;
-    // Done for now, they spoke again: the conversation goes on.
-    if (this.doneAt && this.voiceAt > this.doneAt) this.doneAt = undefined;
     if (!standbyAfterMs || bridge.stopping || this.moving || !live || live.state !== 'active' || run?.live !== live || !page || page.ws.readyState !== WebSocket.OPEN) return;
-    // Jev found the operator done for now: Standby once GPT Live has answered (quiet for a moment after speaking, or after
-    // 6 s if it doesn't); otherwise a voice session gets the whole window before it can go quiet.
-    const done = this.doneAt !== undefined && (this.liveSpeechAt >= this.doneAt ? now - this.liveSpeechAt > 1500 : now - this.doneAt > 6000);
-    // After a long quiet the next is usually long too: Standby comes sooner (tuning.ts, standbyQuickMs).
-    const quick = standbyQuickMs > 0 && standbyQuickMs < standbyAfterMs && this.lastQuietMs >= standbyQuickAfterMs, windowMs = quick ? standbyQuickMs : standbyAfterMs;
-    if (!done && (now - (live.startedAt ?? now) < windowMs || this.activity.value(windowMs, price, now) >= wakeThreshold)) return;
     // A request on its way to the agent keeps voice Live until the agent has it.
     if ([...bridge.outbox.values()].some(entry => entry.state === 'queued' || entry.state === 'dispatching')) return;
+    // Quiet once the voice companion has had its say: Jev reads whether a meaningful exchange is about to begin, and if
+    // it is sure enough that none is, voice goes on Standby now. Otherwise, as without Jev, the quiet window decides.
+    this.readQuiet(now, live, page);
+    // After a long quiet the next is usually long too: Standby comes sooner (tuning.ts, standbyQuickMs).
+    const quick = standbyQuickMs > 0 && standbyQuickMs < standbyAfterMs && this.lastQuietMs >= standbyQuickAfterMs, windowMs = quick ? standbyQuickMs : standbyAfterMs;
+    // A voice session gets the whole window before it can go quiet.
+    if (now - (live.startedAt ?? now) < windowMs || this.activity.value(windowMs, price, now) >= wakeThreshold) return;
+    this.toStandby(live, page, { afterMs: windowMs, threshold: wakeThreshold, value: this.activity.value(windowMs, price, now), ...quick && { quick: true, previousQuietMs: this.lastQuietMs } });
+  }
+  /** Voice goes on Standby: GPT Live disconnects, the page keeps listening. */
+  toStandby(live: LiveSession, page: Page, how: Record<string, unknown>) {
+    const bridge = this.bridge;
     // A fork that has answered doesn't keep the focus through the quiet: the main session's news is what wakes the voice (forks.ts).
     bridge.forks.quiet();
-    this.standby = { since: Date.now(), page }; this.doneAt = undefined;
-    bridge.log({ type: 'voice.standby', liveRun: live.reservation, afterMs: windowMs, threshold: wakeThreshold, value: this.activity.value(windowMs, price, now), asked: done || undefined, ...quick && { quick: true, previousQuietMs: this.lastQuietMs } });
+    this.standby = { since: Date.now(), page };
+    bridge.log({ type: 'voice.standby', liveRun: live.reservation, ...how });
     bridge.publish({ type: 'standby', state: 'on' });
     void live.close(STANDBY);
   }
-  /** Jev found the operator done for now (their goodbye, stepping away, asking the voice to sleep): Standby follows GPT Live's answer. */
-  standbyAsked() { if (this.live?.state === 'active' && this.bridge.tuning.standbyAfterMs) { this.doneAt = Date.now(); this.bridge.log({ type: 'voice.standby_asked' }); } }
+  /**
+   * Standby on Jev's word (jev.ts, QUIET), the operator's rule of Nov 14: the decision waits until the voice companion
+   * has had its say, 2 s after GPT Live stopped speaking, or 6 s after the operator did if it gave no answer. Jev then
+   * reads the conversation once for this quiet. Sure enough that no meaningful exchange is about to begin (the setting
+   * standbyFrom, tuning.ts; 1 never asks), and nobody having spoken meanwhile, voice goes on Standby at once: a request
+   * to go quiet or sleep, work handed off for a while, an operator who has drifted off. Otherwise the window decides.
+   * Not in a session's first 15 s, which are billed whatever happens: a quiet that outlasts them is read then.
+   */
+  readQuiet(now: number, live: LiveSession, page: Page) {
+    const bridge = this.bridge, mediator = this.mediator, at = this.spokeAt;
+    if (!bridge.jev || bridge.tuning.standbyFrom >= 1 || !mediator || at === this.quietRead || at < (live.startedAt ?? Infinity) || now - live.startedAt! < BILLED_AT_LEAST_MS) return;
+    // A turn still being decided may send a request yet: the reading waits for it.
+    if (now - at < (this.liveSpokeLast ? QUIET_ANSWERED_MS : QUIET_UNANSWERED_MS) || mediator.pending) return;
+    this.quietRead = at;
+    bridge.read({ trigger: 'quiet', spoken: mediator.history.spoken(Infinity, undefined, true), unanswered: !this.liveSpokeLast }).then(reading => {
+      const sure = (reading.standby ?? 0) >= bridge.tuning.standbyFrom;
+      // Still the same quiet, and nothing on its way to the agent: someone speaking while Jev read keeps voice on.
+      const still = this.spokeAt === at && this.live === live && live.state === 'active' && !this.standby && !bridge.stopping && !this.moving && page.ws.readyState === WebSocket.OPEN
+        && !mediator.pending && ![...bridge.outbox.values()].some(entry => entry.state === 'queued' || entry.state === 'dispatching');
+      bridge.jevAudit?.decided(reading.id, { standby: sure && still, ...sure && !still && { overtaken: true } }, true);
+      if (sure && still) this.toStandby(live, page, { jev: reading.standby, from: bridge.tuning.standbyFrom, quietMs: Date.now() - at });
+    }, error => bridge.log({ type: 'jev.error', message: (error as Error).message }));
+  }
   /** Asks the page on Standby to reconnect voice. */
   wake(reason: string, operator: boolean) {
     const standby = this.standby;

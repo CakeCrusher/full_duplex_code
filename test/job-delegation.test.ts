@@ -23,7 +23,7 @@ test("two calls over the same state that ask different questions: the job delega
   assert.match(bodies[0].state.page_commands, /^- Go to the next section\n- Go to the section "Options"$/);
   assert.match(bodies[0].state.why, /the voice companion has replied/);
   assert.ok(!('needs_agent' in bodies[1].questions), "the voice tool's own reading never asks whether the words go to the agent");
-  assert.ok('companion_only' in bodies[1].questions && 'standby' in bodies[1].questions);
+  assert.ok('companion_only' in bodies[1].questions && !('standby' in bodies[1].questions), 'Standby is read later, once the conversation has gone quiet');
   assert.ok(!('page_command' in bodies[1].questions), "the operator's words never move the page: only the voice's do");
   assert.equal(bodies[1].state.voice_reply, undefined);
   assert.deepEqual([job.needsAgent, job.ready, own.needsAgent], [.8, .6, null]);
@@ -32,7 +32,7 @@ test("two calls over the same state that ask different questions: the job delega
   assert.equal(bodies[2].state.page_commands, undefined, 'no page, no commands');
   assert.equal(silent.needsAgent, .8);
   await jev.read({ trigger: 'turn', latest });
-  assert.deepEqual(Object.keys(bodies[3].questions), ['standby', 'goal'], "without the learner or the tuner, nothing acts on words about the companion's behavior, so they aren't asked about");
+  assert.deepEqual(Object.keys(bodies[3].questions), ['goal'], "without the learner or the tuner, nothing acts on words about the companion's behavior, so they aren't asked about");
   assert.equal(bodies[3].state.goal, '(none)', 'the goal in force, which new words may replace or end');
 });
 

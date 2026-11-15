@@ -10,7 +10,7 @@ import { Timeline } from '../src/core/timeline.ts';
 import { stripTypes } from '../src/core/page.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { CueTracker } from '../web/cues.ts';
-import { harness, learn, Live, page, settle, until } from './live-fake.ts';
+import { fakeJev, harness, learn, Live, page, settle, until } from './live-fake.ts';
 
 const WINDOW = 2000;
 // The operator speaking for about this long, as the page's level reports (0.1 s each) say.
@@ -350,34 +350,103 @@ test("waking, the page reports the held words still going out, and when they all
   assert.equal(w.posted.filter(m => m.type === 'level').at(-1).backlogMs, 0);
 });
 
-test("the operator done for now: Standby follows GPT Live's answer, not the quiet window; their goodbye doesn't wake it, and speaking again keeps voice on", async t => {
+// GPT Live speaking for about this long, as the page's level reports say.
+const answer = (h: any, reports = 5, at = Date.now()) => { for (let i = 0; i < reports; i++) h.voiceSessions.heard({ at, inputRms: 0, outputRms: .05 }); };
+
+test("Standby on Jev's word: once the voice companion has had its say, Jev reads the quiet, once; sure that no meaningful exchange is about to begin, voice goes on Standby at once, not after the window", async t => {
   const { h, lives, sent } = await quiet(t, { tuning: { standbyAfterMs: 60000, wakeThreshold: 30 } });
-  speak(h, 5, undefined, later(-1000));
-  h.voiceSessions.standbyAsked();
-  h.voiceSessions.checkStandby();
-  assert.equal(lives[0].state, 'active', 'GPT Live answers first');
-  for (let i = 0; i < 5; i++) h.voiceSessions.heard({ at: later(100), inputRms: 0, outputRms: .05 });
-  h.voiceSessions.checkStandby(later(600));
-  assert.equal(lives[0].state, 'active', 'still answering');
-  h.voiceSessions.checkStandby(later(2000));
+  const moments = fakeJev(h, () => ({ standby: .9 })), quiets = () => moments.filter(m => m.trigger === 'quiet');
+  const logged: any[] = [], log = h.log.bind(h); h.log = ((event: any) => { logged.push(event); log(event); }) as typeof h.log;
+  lives[0].startedAt = Date.now() - 20000;
+  speak(h, 5); answer(h);
+  h.voiceSessions.checkStandby(later(1000));
+  assert.equal(quiets().length, 0, 'the companion has only just stopped speaking');
+  h.voiceSessions.checkStandby(later(2500)); h.voiceSessions.checkStandby(later(3500));
   await until(() => lives[0].state === 'closed');
+  assert.equal(lives[0].closeReason, STANDBY);
+  assert.equal(quiets().length, 1, 'one reading for a quiet');
+  assert.equal(quiets()[0].unanswered, false);
+  assert.match(`${quiets()[0].history}\n${quiets()[0].latest?.text}`, /dark mode toggle[\s\S]*On it\./, 'Jev reads the conversation as the voice has it, the answer included');
+  const went = logged.filter(e => e.type === 'voice.standby').at(-1);
+  assert.deepEqual([went.jev, went.from], [.9, .5], "the record says it was Jev's reading, and what it had to pass");
   h.voiceSessions.checkStandby();
-  assert.equal(sent('voice_wake').length, 0, "what was said before Standby doesn't wake it, though the window still holds it");
+  assert.equal(sent('voice_wake').length, 0, "what was said before Standby doesn't wake it");
   speak(h, 3); h.voiceSessions.checkStandby();
   assert.deepEqual(sent('voice_wake').map(e => e.reason), ['operator'], 'speaking again does');
 });
 
-test("the operator done for now, then speaking on: voice stays on; with no answer from GPT Live, Standby comes after 6 s", async t => {
+test('the quiet reading asks Jev one question, says whether the companion answered, and records the threshold in force', async () => {
+  const { Jev } = await import('../src/core/jev.ts');
+  const bodies: any[] = [], calls: any[] = [];
+  const jev = new Jev({ apiKey: 'k', log: () => {}, record: (call: any) => calls.push(call), fetch: async (_url: string, init: any) => { bodies.push(JSON.parse(String(init.body))); return { ok: true, status: 200, json: async () => ({ answers: { standby: { noul: .8 } } }) }; } } as any);
+  const latest = { role: 'intermediary' as const, text: "That's with Claude now. I'll stay quiet." };
+  const reading = await jev.read({ trigger: 'quiet', latest, history: 'user: Refactor the queue, take your time.', instructions: ['I1: be brief'], goal: 'none set', thresholds: { standby: .4 } });
+  assert.equal(reading.standby, .8);
+  assert.deepEqual(Object.keys(bodies[0].questions), ['standby']);
+  assert.match(bodies[0].questions.standby.instructions, /Will the next 15 seconds pass without a meaningful exchange/);
+  assert.match(bodies[0].state.why, /the voice companion finished speaking a moment ago/);
+  assert.deepEqual([bodies[0].state.latest, bodies[0].state.goal, bodies[0].state.operator_instructions], ["voice assistant: That's with Claude now. I'll stay quiet.", 'none set', 'I1: be brief']);
+  assert.deepEqual(calls[0].config.thresholds, { standby: .4 });
+  await jev.read({ trigger: 'quiet', latest: { role: 'operator', text: 'Hello?' }, unanswered: true });
+  assert.match(bodies[1].state.why, /the voice companion has not answered/);
+  assert.deepEqual(calls[1].config.thresholds, { standby: .5 }, 'the default');
+});
+
+test("Standby on Jev's word waits for the companion's answer, takes no for an answer, and gives way to anyone who speaks while Jev reads", async t => {
   const { h, lives } = await quiet(t, { tuning: { standbyAfterMs: 60000, wakeThreshold: 30 } });
-  h.voiceSessions.standbyAsked();
-  speak(h, 3, undefined, later(5));
-  h.voiceSessions.checkStandby(later(7000));
-  assert.equal(lives[0].state, 'active', 'they went on talking');
-  await new Promise(resolve => setTimeout(resolve, 20));
-  h.voiceSessions.standbyAsked();
+  let sure = .9, during = () => {};
+  const moments = fakeJev(h, moment => { if (moment.trigger === 'quiet') during(); return { standby: sure }; }), quiets = () => moments.filter(m => m.trigger === 'quiet');
+  lives[0].startedAt = Date.now() - 20000;
+  // The operator spoke last and GPT Live gave no answer: it may still be coming, so Jev is asked only after 6 s.
+  speak(h, 5);
   h.voiceSessions.checkStandby(later(3000));
-  assert.equal(lives[0].state, 'active');
+  assert.equal(quiets().length, 0, 'an answer may still come');
+  // They go on speaking while Jev reads: the reading is overtaken, voice stays on.
+  await new Promise(resolve => setTimeout(resolve, 5));
+  during = () => speak(h, 3, undefined, later(50));
   h.voiceSessions.checkStandby(later(6500));
+  await settle(); await settle();
+  assert.deepEqual([quiets().length, quiets()[0].unanswered, lives[0].state], [1, true, 'active']);
+  // The next quiet is read again; Jev not sure enough: the window decides, and that quiet is not read twice.
+  during = () => {}; sure = .3;
+  answer(h);
+  h.voiceSessions.checkStandby(later(2500)); h.voiceSessions.checkStandby(later(4000));
+  await settle(); await settle();
+  assert.deepEqual([quiets().length, lives[0].state], [2, 'active']);
+  // How sure Jev must be is a setting (standbyFrom): lower it and the same reading is enough; 1 never asks.
+  h.setTuning({ ...h.tuning, standbyFrom: 1 });
+  answer(h);
+  h.voiceSessions.checkStandby(later(2500));
+  await settle();
+  assert.equal(quiets().length, 2, 'set to 1, Jev is not asked');
+  h.setTuning({ ...h.tuning, standbyFrom: .25 });
+  h.voiceSessions.checkStandby(later(2500));
+  await until(() => lives[0].state === 'closed');
+  assert.equal(quiets().length, 3);
+});
+
+test("Standby on Jev's word never begins with a request on its way to the agent, a turn still being decided, before anyone has spoken in the session, or in the 15 s every session is billed", async t => {
+  const { h, lives } = await quiet(t, { tuning: { standbyAfterMs: 60000, wakeThreshold: 30 } });
+  const moments = fakeJev(h, () => ({ standby: .9 })), quiets = () => moments.filter(m => m.trigger === 'quiet');
+  h.voiceSessions.checkStandby(later(20000));
+  await settle();
+  assert.equal(quiets().length, 0, 'nobody has spoken in this session yet');
+  speak(h, 5); answer(h);
+  h.voiceSessions.checkStandby(later(2500));
+  await settle();
+  assert.equal(quiets().length, 0, "a session's first 15 s are billed whatever happens: Standby then saves nothing");
+  lives[0].startedAt = Date.now() - 20000;
+  h.voiceSessions.mediator!.pending++;
+  h.voiceSessions.checkStandby(later(2500));
+  await settle();
+  assert.equal(quiets().length, 0, 'the turn is still being decided: its request may be about to go');
+  h.voiceSessions.mediator!.pending--;
+  h.outbox.set('r1', { id: 'r1', content: 'Add a legend.', state: 'queued' } as any);
+  h.voiceSessions.checkStandby(later(2500));
+  await settle();
+  assert.deepEqual([quiets().length, lives[0].state], [0, 'active'], 'a request on its way keeps voice on');
+  h.outbox.delete('r1');
+  h.voiceSessions.checkStandby(later(2500));
   await until(() => lives[0].state === 'closed');
 });
 

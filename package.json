@@ -32,7 +32,8 @@
     "test:stage-page": "node scripts/test-stage-page.ts",
     "test:presenting": "node scripts/test-presenting.ts",
     "test:standby": "node scripts/test-standby.ts",
-    "test:standby-voice": "node scripts/test-standby-voice.ts"
+    "test:standby-voice": "node scripts/test-standby-voice.ts",
+    "test:standby-jev": "node scripts/test-standby-jev.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

@@ -31,7 +31,7 @@ type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: 
 const URL = 'https://api.typesafe.ai/v1/systemone', MODEL = 'jev-latest';
 
 /** Why Jev is asked now: its provenance, part of what it reads. */
-export type Trigger = 'turn' | 'delegation' | 'job' | 'unsent' | 'cue' | 'step' | 'settings';
+export type Trigger = 'turn' | 'delegation' | 'job' | 'unsent' | 'cue' | 'step' | 'quiet' | 'settings';
 const WHY: Record<Trigger, string> = {
   turn: 'The operator has just stopped speaking.',
   job: 'The operator has just stopped speaking and the voice companion has replied to them (`voice_reply`, what it has said so far).',
@@ -39,8 +39,11 @@ const WHY: Record<Trigger, string> = {
   unsent: 'The operator\'s latest words are going to the coding agent although the voice companion never passed them on (voice ended, or the voice tool sends them itself).',
   cue: 'The voice companion has just said the latest words, with a page open beside the operator.',
   step: 'Page commands just ran for the voice companion\'s latest words (`page_done`, in order), and the page is now where `page` says.',
+  quiet: 'The conversation has gone quiet: the voice companion finished speaking a moment ago and the operator has said nothing since.',
   settings: 'The operator\'s instructions to the companion have changed, or voice has started.',
 };
+// The same quiet when the companion gave the operator's last words no answer.
+const QUIET_UNANSWERED = 'The conversation has gone quiet: the operator stopped speaking several seconds ago and the voice companion has not answered.';
 /** What Jev is told of its place, by the agent and the features on: who does what (shared with the companion), then its own part and how to read its state. */
 const setting = (agent: { profile: Pick<AgentProfile, 'name'> }, features: Features) => `An operator talks by voice (transcribed, may be imperfect) to a voice companion that presents the work of a coding agent, ${agent.profile.name}, while it works. ${roles(agent, features)} You judge for the voice tool: what it does itself follows your reading, and everything else must reach ${agent.profile.name} unless the companion handled it; keeping work from ${agent.profile.name} is the costly mistake. \`latest\` holds the latest words: judge those. \`history\` is what the voice companion had heard and been told before them, oldest first, word for word as it got it: \`user:\` lines are the operator's speech and \`voice assistant:\` lines the companion's own, transcribed; a block that opens with a line in square brackets is something fdc sent the companion, and that line says how, and how long before the latest words. It is context: what "it", "that one" or "yes, please" refers to, and what the companion knows already. \`operator_instructions\` are the operator's instructions to the companion in force now; they hold for your reading too, such as what should or shouldn't reach ${agent.profile.name}. \`why\` says why you are asked now.`;
 const SESSIONS_SETTING = ' The operator may run several companions at once, each beside its own coding session (`sessions`); each one\'s voice can be on or off, and several can be on together. Each session is listed as the operator sees it in the page\'s list of running companions: its folder, its coding agent, the start of its session ID and its state, then what hovering it shows. The operator may name a session by any of these, and a session ID by its first characters, which speech may spell out ("six two zero" or "620" for an ID that starts with 620). fdc, the voice tool itself, turns them on or off; the coding agent does not. Every listed session is already running, so starting, opening or turning on a listed session means turning its voice on, and stopping or closing one means turning its voice off.';
@@ -87,8 +90,6 @@ export const ADDS = .4, RECENT_MS = 10000, PRESS = .5;
 // fdc holds it until the turn ends (outbox.ts). Steering is the default: a correction made to wait costs the operator more
 // than an interruption that could have waited.
 export const NOW = .3;
-// The operator is done for now: the companion goes on Standby as soon as it has answered.
-export const STANDBY = .7;
 // Forks (the questions and what they were measured on are below, FORK): a question asked aside opens a fork from the
 // setting forkFrom (tuning.ts); with a fork open, words stay with it from STAYS (from forkFrom, set lower: what opens
 // a fork stays in one), and the focus moves back to the main session from SETTLED.
@@ -96,7 +97,7 @@ export const STAYS = .5, SETTLED = .5;
 // What Jev reads of what the voice companion perceived: its latest 14 KB (perceived.ts).
 export const HISTORY_BYTES = 14000;
 /** For the record (jev-audit.ts): the likelihood at which each question's answer changes what fdc does. */
-const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, now: NOW, remove: REMOVE, gave_up: GAVE_UP, standby: STANDBY, tangent: DEFAULT_TUNING.forkFrom, settled: SETTLED, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
+const THRESHOLDS: Record<string, number> = { needs_agent: NEEDS_AGENT, ready: READY, adds: ADDS, now: NOW, remove: REMOVE, gave_up: GAVE_UP, standby: DEFAULT_TUNING.standbyFrom, tangent: DEFAULT_TUNING.forkFrom, settled: SETTLED, companion_only: COMPANION_ONLY, sessions_asked: ASKED, unlisted_session: UNLISTED, page_command: PAGE_STEP, page_more: PAGE_MORE, goal: GOAL, behave: BEHAVE, design_talk: DESIGN };
 
 /** One utterance of the conversation. */
 export interface Line { role: 'operator' | 'intermediary'; text: string }
@@ -138,7 +139,7 @@ export interface Reading {
   remove?: { id: string; p: number };
   /** The level of each setting Jev chose (jev-tuner.ts). */
   tuning?: Record<string, unknown>;
-  /** That the latest words end the conversation for now (the companion then goes on Standby). */
+  /** That no meaningful exchange is about to begin, now that the conversation has gone quiet (trigger quiet): from the setting standbyFrom the companion goes on Standby at once. */
   standby?: number;
   /** The latest words are a question asked aside (a fork's), and, with a fork in focus, whether the operator has left its matter (forks.ts). */
   tangent?: number; settled?: number;
@@ -163,6 +164,8 @@ export interface Moment {
   working?: number;
   /** The request that went to the agent moments before this reading, within RECENT_MS (trigger job): how long ago, the operator's words in it, and whether it is held until the agent's turn ends. The latest words may only be its tail. */
   sent?: { ago: number; said: string; held?: boolean };
+  /** The conversation has gone quiet (trigger quiet) and the voice companion gave the operator's last words no answer. */
+  unanswered?: boolean;
   /** Forks (forks.ts): the session in focus when a fork decision can be made: the main one while it works (a question asked aside can go to a fork), or the fork (the operator can move back). */
   fork?: 'main' | 'fork';
   /** Ask whether the words give a standing instruction (the learner). */
@@ -200,6 +203,24 @@ const JOB = {
     "They hold something that request didn't: an instruction, detail, constraint, correction, decision or question the agent needs; an addition to it, a change to it, or another request.",
     'Nothing the agent needs beyond it: the tail end of the same sentence, filler, an acknowledgment or thanks, a repeat or rewording of what was sent, words meant only for the voice companion (to go on, repeat, wait or stop talking), or stray fragments and noise.'),
 };
+// Standby on Jev's word (trigger quiet; voice-sessions.ts): once the conversation has gone quiet after the voice
+// companion has had its say, is a meaningful exchange about to begin? If Jev is sure enough that none is (the setting
+// standbyFrom, tuning.ts), voice goes on Standby at once instead of waiting out the quiet window. The operator's rule
+// (Nov 14, after labeling ten recorded moments by hand): judge it once the companion has spoken, by how engaged they
+// seem, whether they have just handed the agent a long task, and whether they asked something that gets an immediate
+// answer; and what counts afterward is a meaningful exchange (a steer, or news they listened to and accepted), not the
+// companion talking. Measured on 400 recorded decision points (Oct 31 to Nov 14, half of them held out), each judged
+// blind on that definition from the three minutes that followed (.scratch/round2/standby): a meaningful exchange began
+// within the rest of the window after 46% of all such points, so Standby as soon as the companion stops would
+// interrupt one almost every other time; this question separates them at AUC .66 to .67 (a stronger model forecasting
+// blind: .67), and its Standbys from .6 are as often right as the 15 s window's own (4 in 5), from .5 3 in 4. Every
+// recorded request for Standby in words passed .5 (7 of 7). The question it replaces was asked as the operator stopped
+// speaking, before the companion answered, and only caught such requests.
+const QUIET = {
+  standby: noul("The conversation has gone quiet. The voice companion costs money while it stays connected and could disconnect now; it is back a few seconds after the operator next speaks or the coding agent finishes. Will the next 15 seconds pass without a meaningful exchange: the operator giving direction or asking something, or the companion telling them something they want (an answer, news of the agent's work, the next part of an explanation they asked for)? Filler, the companion saying it is checking or waiting, and noise do not count. Judge it as the operator does, by three things: how engaged they seem (a live back-and-forth, or drifting off); whether they have just handed the agent a long task and now wait for it; and whether they asked something that gets an immediate answer (if nothing was passed to the agent, the companion will answer itself and the exchange goes on).",
+    'No meaningful exchange is about to begin: the operator handed off work and waits, has drifted off or stepped away, or the companion has finished and nothing it owes is ready yet. Certainly so when the operator said goodbye, that they are stepping away or done for now, or asked the companion to go quiet, sleep, stand by or wait until they call it.',
+    'One is about to begin or still going: the operator is in a live back-and-forth, the companion owes an answer it can give now or is partway through what they asked for, or the operator was just asked something.'),
+};
 // Forks (forks.ts): while the main session works, a question the operator turns aside to ask goes to a fork of the
 // agent's session, and they move back to the main session after it. The operator's rule (Nov 14, from their own labels
 // of 12 recorded requests): a fork is for a clarifying question, an answer or explanation for themselves; anything to
@@ -230,10 +251,6 @@ const FORK = {
 };
 // The voice tool's own actions on the operator's turn (triggers turn, delegation): never whether anything goes to the agent.
 const GATE = {
-  // Done talking for now: fdc pauses the companion (Standby) without waiting out the quiet window.
-  standby: noul('Do the latest words end the conversation for now: the operator says goodbye, that they are stepping away or done for now, or asks the voice companion to go quiet, sleep or wait until they call it?',
-    'They close the conversation for now or step away: "that\'s all for now", "thanks, bye", "I\'ll be back in a bit", "go to sleep", "stand by until I call you", also with a last request for the coding agent.',
-    'Anything else: a question, a request, an acknowledgment while the conversation goes on ("okay", "thanks", "got it"), or "stop" or "wait" asking the companion to stop talking or hold on.'),
   // Preferences and frustration about the companion itself: fdc adjusts its own settings from them (Jev's tuning).
   companion_only: noul('Are the latest words about how the voice companion itself should behave in this conversation: how much or when it talks, how fast it goes quiet or pauses, what wakes it, what it reports or passes on?',
     'A preference, complaint or frustration about the voice companion\'s own behavior, such as "stop waking up for every little thing", "don\'t pause so quickly" or "talk less".',
@@ -382,13 +399,13 @@ export class Jev {
     const gate = trigger === 'turn' || trigger === 'delegation', job = trigger === 'job' || trigger === 'unsent';
     // The latest words in their own field: marked inside the conversation instead, Jev read plain page moves as likelier
     // work for the agent (page_work up by .1 on average, Oct 21).
-    const state: Record<string, string> = { setting: this.setting + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : '') + (tune ? ` ${TUNER_SETTING}` : ''), why: WHY[trigger], history: history.trim() || '(none)', latest: latest ? spokenLine(latest) : '(none)' };
+    const state: Record<string, string> = { setting: this.setting + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : '') + (tune ? ` ${TUNER_SETTING}` : ''), why: trigger === 'quiet' && moment.unanswered ? QUIET_UNANSWERED : WHY[trigger], history: history.trim() || '(none)', latest: latest ? spokenLine(latest) : '(none)' };
     if (instructions) state.operator_instructions = instructions.join('\n') || '(none)';
     if (trigger === 'job') state.voice_reply = reply?.trim() || '(the companion has not replied)';
     if (sessions) state.sessions = sessionLines(sessions);
     if (page) state.page = pageLine(page);
     if (trigger === 'step') state.page_done = (moment.done ?? []).map((c, i) => `${i + 1}. ${c.say}${c.shown ? ` → ${c.shown.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`).join('\n') || '(none)';
-    if (gate || trigger === 'cue' || trigger === 'step' || trigger === 'job') state.goal = moment.goal || '(none)';
+    if (gate || trigger === 'cue' || trigger === 'step' || trigger === 'job' || trigger === 'quiet') state.goal = moment.goal || '(none)';
     // The job delegation knows what the page's controller can do: what it can't goes to the agent, to add it.
     if (page && job) state.page_commands = page.commands.map(c => `- ${c.say}`).join('\n').slice(0, 3000) || '(none)';
     if (tune) Object.assign(state, { earlier_sessions: tune.earlier.join('\n').slice(0, 4000) || '(none)', current_settings: JSON.stringify(tune.current) });
@@ -398,7 +415,8 @@ export class Jev {
       // a fork in focus, at every reading of the turn, after whether the operator has left its matter (turn.ts).
       ...moment.fork === 'main' && (trigger === 'job' || trigger === 'delegation') && { tangent: FORK.tangent },
       // Words about how the companion behaves are for the learner and the tuner: asked only while either is on.
-      ...gate && { ...(learn || tune) && { companion_only: GATE.companion_only }, standby: GATE.standby, ...GOAL_QUESTION, ...sessions && sessionQuestions(sessions), ...moment.fork === 'fork' && { settled: FORK.settled } },
+      ...trigger === 'quiet' && { standby: QUIET.standby },
+      ...gate && { ...(learn || tune) && { companion_only: GATE.companion_only }, ...GOAL_QUESTION, ...sessions && sessionQuestions(sessions), ...moment.fork === 'fork' && { settled: FORK.settled } },
       ...moment.fork === 'fork' && (gate || trigger === 'job') && { tangent: FORK.tangent },
       ...page && (trigger === 'cue' || trigger === 'step') && pageQuestions(page, trigger),
       ...learn && LEARNER, ...learn && gate && removable?.length && removeQuestion(removable),
@@ -430,9 +448,9 @@ export class Jev {
     const p = (name: string, missing = 0) => { const value = Number(answers?.[name]?.noul); return Number.isFinite(value) ? value : missing; };
     const reading: Reading = { trigger, id: call.id, said, transcript: `${history}${latest ? `► ${spokenLine(latest)}` : ''}`, needsAgent: 'needs_agent' in questions ? p('needs_agent') : null, ...'ready' in questions && { ready: p('ready', 1) }, ...'adds' in questions && { adds: p('adds', 1) }, ...'now' in questions && { now: p('now', 1) } };
     if ('tangent' in questions) reading.tangent = p('tangent');
+    if ('standby' in questions) reading.standby = p('standby');
     if (gate) {
       if ('companion_only' in questions) reading.companionOnly = p('companion_only');
-      reading.standby = p('standby');
       if ('settled' in questions) reading.settled = p('settled');
       const goal = answers?.goal, choice = goal?.choice;
       if (choice === 'keep' || choice === 'new' || choice === 'walk' || choice === 'done') reading.goal = { choice, p: Number(goal.probabilities?.[choice] ?? goal.confidence ?? 1) };

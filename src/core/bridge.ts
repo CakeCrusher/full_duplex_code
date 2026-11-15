@@ -311,11 +311,12 @@ export class Harness {
     if (!this.jev) return Promise.reject(new Error('Jev is not configured'));
     const words = ['turn', 'delegation', 'unsent'].includes(moment.trigger), tune = this.jevTuning && (words || moment.trigger === 'settings');
     const ask = tune ? ++this.tuneAsks : 0, latest = spoken.at(-1), record = this.voiceSessions.run?.record ?? this.voiceSessions.current();
-    return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(perceivedText(record, spoken.slice(0, -1), latest.at, HISTORY_BYTES)) },
+    // When the conversation has gone quiet (voice-sessions.ts), the history runs to now: what fdc sent since the last words is part of what Jev judges.
+    return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(perceivedText(record, spoken.slice(0, -1), moment.trigger === 'quiet' ? Date.now() : latest.at, HISTORY_BYTES)) },
       goal: moment.goal ?? this.voiceSessions.goalLine(),
       instructions: this.voiceSessions.additionalInstructions.map(item => item.text), learn: (words && this.features.has('instructions')) || undefined,
       removable: words && this.features.has('instructions') ? this.voiceSessions.learnedInForce() : undefined,
-      tune: tune ? { earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined, thresholds: { tangent: this.tuning.forkFrom } }, timeoutMs)
+      tune: tune ? { earlier: this.learned.earlier(this.sessionId), current: this.tuning, pinned: this.pinned } : undefined, thresholds: { tangent: this.tuning.forkFrom, standby: this.tuning.standbyFrom } }, timeoutMs)
       .then(reading => Object.assign(reading, ask ? { tuneAsk: ask } : {}));
   }
   /**
