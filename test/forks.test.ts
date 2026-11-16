@@ -52,6 +52,15 @@ test("the fork's window runs the agent by its full path, in the project, with fd
   assert.match(script, /^#!\/bin\/sh\ncd '\/tmp\/my project' \|\| exit 1\nexport PATH=/);
   assert.match(script, /export FD_BRIDGE_TOKEN='secret'\nexec '\/[^']+\/node' '--version' 'it'\\''s'\n$/);
   assert.equal(fs.statSync(file).mode & 0o777, 0o700, 'owner-only: it holds the bridge token');
+  // An agent that waits for Enter on a prompt as it starts: in a window the operator is not at, fdc answers it.
+  const asking = path.join(dir, 'asking.command'), expect = path.join(dir, 'expect'); fs.writeFileSync(expect, '');
+  writeScript(asking, { command: 'node', args: ['--resume', 'a b'], env: {}, confirm: 'I am using this for local development' }, '/tmp/my project', process.env, expect);
+  assert.match(fs.readFileSync(asking, 'utf8'), new RegExp(`\\nexec '${expect}' '-f' '${asking}\\.exp' '--' 'I am using this for local development' '/[^']+/node' '--resume' 'a b'\\n$`), "the agent runs under expect, the prompt's words first");
+  const program = fs.readFileSync(`${asking}.exp`, 'utf8');
+  assert.match(program, /interact \{\n  -o -nobuffer -re \$pattern \{ if \{\$answered < 3 && \[clock seconds\] - \$started < 90\} \{ incr answered; after 400; send "\\r" \} \}/, 'Enter once the words appear, early on only; the rest passes through');
+  assert.match(program, /trap \{[^}]*stty rows/, "and the agent's terminal keeps the window's size");
+  writeScript(asking, { command: 'node', args: [], env: {}, confirm: 'I am using this for local development' }, '/tmp/my project', process.env, path.join(dir, 'no-expect-here'));
+  assert.match(fs.readFileSync(asking, 'utf8'), /\nexec '\/[^']+\/node'\n$/, 'without expect the agent runs as before, and the operator answers');
   const ran: string[][] = [], run = (command: string, args: string[]) => { ran.push([command, ...args]); return { status: 0 }; };
   if (process.platform === 'darwin') {
     assert.equal(openWindow(file, { TERM_PROGRAM: 'iTerm.app' }, run), 'iTerm');

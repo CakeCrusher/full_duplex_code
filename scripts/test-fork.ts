@@ -7,7 +7,8 @@ import * as pty from 'node-pty';
 import { startTestHarness, until, delay } from './test-support.ts';
 
 // Forks with real Claude Code, without voice (uses the operator's Claude usage, no OpenAI spending): a request to the
-// main session; a fork opened for a tangent, run here in a terminal of its own instead of a window; a request that goes
+// main session; a fork opened for a tangent, run here in a terminal of its own instead of a window, where fdc answers
+// Claude's development-channel prompt itself (nobody is at a fork's window); a request that goes
 // to the fork, which knows the main session's history; then back to the main session, and a request that goes there.
 const test = await startTestHarness('fork');
 const { harness, cwd } = test;
@@ -24,25 +25,24 @@ try {
   await until(() => fs.existsSync(file('main.txt')), { label: 'main.txt', timeout: 120000 });
   assert.equal(receivedBy(first)?.fork, undefined, 'the first request reached the main session');
   await until(() => harness.observer.state === 'working', { label: 'the main session at work', timeout: 30000 });
-  // The fork, in a terminal of its own: confirm Claude's development-channel prompt as the main one was.
+  // The fork, in a terminal of its own, as its window would run it.
   harness.forks.open = script => {
     // A new window's shell, as Terminal would start it: not this process's Claude session or OpenAI key.
     const env: Record<string, string> = { ...process.env as Record<string, string>, TERM: 'xterm-256color' }; delete env.OPENAI_API_KEY;
     for (const name of Object.keys(env)) if (/^CLAUDE(CODE$|_CODE_|_PID$|_EFFORT$)/.test(name)) delete env[name];
     const term = fork = pty.spawn('/bin/sh', [script], { name: 'xterm-256color', cols: 120, rows: 35, cwd, env });
-    let raw = '', confirmed = false;
-    term.onData(data => {
-      fs.appendFileSync(path.join(harness.runDir, 'fork-terminal.log'), data);
-      raw = (raw + data).slice(-40000);
-      const compact = stripVTControlCharacters(raw).replace(/[^A-Za-z]/g, '');
-      if (!confirmed && compact.includes('Iamusingthisforlocaldevelopment')) { confirmed = true; let n = 0; const t = setInterval(() => { if (harness.forks.ready || ++n > 8) clearInterval(t); else term.write('\r'); }, 1000); }
-    });
+    // Nothing is typed in it: fdc's own script answers Claude's development-channel prompt (window.ts).
+    term.onData(data => fs.appendFileSync(path.join(harness.runDir, 'fork-terminal.log'), data));
     return 'test terminal';
   };
   const openedAt = Date.now();
   evidence.told = await harness.forks.start('By the way, unrelated: make a tangent file.');
   assert.equal(harness.forks.focus, 'fork');
   await until(() => harness.forks.ready, { label: "the fork's channel", timeout: 90000 });
+  // Claude asked about the voice channel there, and nobody typed: fdc answered.
+  const shown = stripVTControlCharacters(fs.readFileSync(path.join(harness.runDir, 'fork-terminal.log'), 'utf8')).replace(/[^A-Za-z]/g, '');
+  evidence.promptAnswered = { shown: shown.includes('Iamusingthisforlocaldevelopment'), connectedAfterMs: Date.now() - openedAt };
+  assert.ok(shown.includes('Iamusingthisforlocaldevelopment'), "Claude showed its development-channel prompt in the fork's terminal");
   const tangent = send('In this session, which file did you create first? Write its exact name into a new file named history.txt, and create tangent.txt containing the word tangent. Do not wait for anything else.');
   await until(() => fs.existsSync(file('tangent.txt')) && fs.existsSync(file('history.txt')), { label: 'the fork did the tangent', timeout: 180000 });
   assert.ok(receivedBy(tangent)?.fork, 'the tangent reached the fork, not the main session');

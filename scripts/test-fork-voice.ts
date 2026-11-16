@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { stripVTControlCharacters } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import * as pty from 'node-pty';
 import { startTestHarness, synthesize, connectTestVoice, until, delay } from './test-support.ts';
@@ -28,14 +27,8 @@ harness.forks.open = script => {
   const env: Record<string, string> = { ...process.env as Record<string, string>, TERM: 'xterm-256color' }; delete env.OPENAI_API_KEY;
   for (const name of Object.keys(env)) if (/^CLAUDE(CODE$|_CODE_|_PID$|_EFFORT$)/.test(name)) delete env[name];
   const term = fork = pty.spawn('/bin/sh', [script], { name: 'xterm-256color', cols: 120, rows: 35, cwd, env });
-  let raw = '', confirmed = false;
-  term.onData(data => {
-    fs.appendFileSync(path.join(harness.runDir, 'fork-terminal.log'), data);
-    raw = (raw + data).slice(-40000);
-    if (!confirmed && stripVTControlCharacters(raw).replace(/[^A-Za-z]/g, '').includes('Iamusingthisforlocaldevelopment')) {
-      confirmed = true; let n = 0; const t = setInterval(() => { if (harness.forks.ready || ++n > 8) clearInterval(t); else term.write('\r'); }, 1000);
-    }
-  });
+  // Nothing is typed in it: fdc's own script answers Claude's development-channel prompt (window.ts).
+  term.onData(data => fs.appendFileSync(path.join(harness.runDir, 'fork-terminal.log'), data));
   return 'test terminal';
 };
 try {

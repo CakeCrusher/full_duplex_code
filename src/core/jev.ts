@@ -209,13 +209,14 @@ const JOB = {
 // (Nov 14, after labeling ten recorded moments by hand): judge it once the companion has spoken, by how engaged they
 // seem, whether they have just handed the agent a long task, and whether they asked something that gets an immediate
 // answer; and what counts afterward is a meaningful exchange (a steer, or news they listened to and accepted), not the
-// companion talking. Measured on 400 recorded decision points (Oct 31 to Nov 14, half of them held out), each judged
-// blind on that definition from the three minutes that followed (.scratch/round2/standby): a meaningful exchange began
-// within the rest of the window after 46% of all such points, so Standby as soon as the companion stops would
-// interrupt one almost every other time; this question separates them at AUC .66 to .67 (a stronger model forecasting
-// blind: .67), and its Standbys from .6 are as often right as the 15 s window's own (4 in 5), from .5 3 in 4. Every
-// recorded request for Standby in words passed .5 (7 of 7). The question it replaces was asked as the operator stopped
-// speaking, before the companion answered, and only caught such requests.
+// companion talking. Measured on the recorded quiets of Oct 31 to Nov 14 (.scratch/round2/standby; 400 of them judged
+// blind on that definition from the three minutes that followed, half held out): this question tells the quiets that
+// last from those that don't at AUC .66 (.64 held out, on the operator's 20 s horizon of Nov 16). Ten wordings were
+// tried, among them the event itself, a present fact ("is anything still open between them?") and the two ways an
+// exchange begins asked apart: .51 to .67, and a stronger model forecasting blind did no better, so the wording stays
+// as measured (its "15 seconds" included: the thresholds were set on its scores). What each threshold buys with the
+// quiet window is in tuning.ts. Every recorded request for Standby in words passed .5 (7 of 7). The question it
+// replaces was asked as the operator stopped speaking, before the companion answered, and only caught such requests.
 const QUIET = {
   standby: noul("The conversation has gone quiet. The voice companion costs money while it stays connected and could disconnect now; it is back a few seconds after the operator next speaks or the coding agent finishes. Will the next 15 seconds pass without a meaningful exchange: the operator giving direction or asking something, or the companion telling them something they want (an answer, news of the agent's work, the next part of an explanation they asked for)? Filler, the companion saying it is checking or waiting, and noise do not count. Judge it as the operator does, by three things: how engaged they seem (a live back-and-forth, or drifting off); whether they have just handed the agent a long task and now wait for it; and whether they asked something that gets an immediate answer (if nothing was passed to the agent, the companion will answer itself and the exchange goes on).",
     'No meaningful exchange is about to begin: the operator handed off work and waits, has drifted off or stepped away, or the companion has finished and nothing it owes is ready yet. Certainly so when the operator said goodbye, that they are stepping away or done for now, or asked the companion to go quiet, sleep, stand by or wait until they call it.',

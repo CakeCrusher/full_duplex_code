@@ -12,6 +12,11 @@ import { forkArgs, readClaudeArgs } from './arguments.ts';
 // Claude Code: observed through command hooks (and its transcript on resume),
 // reached through the voice channel MCP server, whose instructions (fdc's) are
 // in its system prompt.
+// Claude Code asks before it loads a channel that is not on its list (fdc's voice channel is loaded as a development
+// one), and waits for Enter on the answer it has selected: this one. The operator answers it themselves in their own
+// terminal when they start fdc; in a fork's window, which they asked not to have to go to, fdc does.
+const CHANNEL_PROMPT = 'I am using this for local development';
+
 export class ClaudeAdapter extends EventEmitter implements AgentAdapter {
   readonly profile = claudeProfile;
   readonly observations: ClaudeObserver;
@@ -31,7 +36,8 @@ export class ClaudeAdapter extends EventEmitter implements AgentAdapter {
     const { root, runDir, sessionId, agentArgs, instructions, prefix, forkOf } = this.session;
     const config = makeClaudeConfig({ root, runDir, baseUrl, channelToken: token, instructions, prefix });
     // A fork: Claude's own fork of the session, with the operator's options but not their choice of session or prompt.
-    if (forkOf) return { command: 'claude', args: claudeArgs({ config, extraArgs: ['--resume', forkOf, '--fork-session', ...forkArgs(agentArgs, runDir)] }), env: { FD_BRIDGE_TOKEN: token }, files: { ...config } };
+    // Its window is one the operator is not at: fdc answers Claude's question about the voice channel there (CHANNEL_PROMPT).
+    if (forkOf) return { command: 'claude', args: claudeArgs({ config, extraArgs: ['--resume', forkOf, '--fork-session', ...forkArgs(agentArgs, runDir)] }), env: { FD_BRIDGE_TOKEN: token }, files: { ...config }, confirm: CHANNEL_PROMPT };
     // A new conversation gets the launcher's session ID; otherwise Claude's own arguments choose it.
     const assigned = readClaudeArgs(agentArgs).assignSession ? sessionId : undefined;
     return { command: 'claude', args: claudeArgs({ config, sessionId: assigned, extraArgs: agentArgs }), env: { FD_BRIDGE_TOKEN: token }, files: { ...config } };

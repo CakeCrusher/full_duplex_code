@@ -195,6 +195,11 @@ export interface AgentLaunch {
   args: string[];
   env: Record<string, string>;
   files: Record<string, string>;
+  /**
+   * Words of a prompt the agent shows in its terminal as it starts and waits at for Enter. In a window fdc opens (a
+   * fork's, window.ts) fdc answers it: the operator is not at that window, and the session would wait for them.
+   */
+  confirm?: string;
 }
 
 /** A local WebSocket route an adapter serves on the bridge, authenticated with the agent token. */
