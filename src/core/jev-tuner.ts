@@ -4,6 +4,9 @@
 // reads the instructions, with those it learned in earlier sessions and the conversation,
 // and picks a level for each low-level setting (tuning.ts) from what that level is measured
 // to cost and buy. The bridge applies the choice at once and logs it.
+// Two kinds of setting: most Jev fits to what the operator's instructions and words call for; a few are the operator's
+// own choice, made from measurements (how sure Jev must be for Standby at once, or for a fork), and change only when
+// they ask for that setting itself to change (Knob.asked, tuning.ts).
 import { KNOBS, type Tuning } from './tuning.ts';
 
 export interface TuningChange { name: keyof Tuning; from: number; to: number }
@@ -16,9 +19,12 @@ const knobs = (pinned: (keyof Tuning)[]) => Object.entries(KNOBS).filter(([name,
 /** One choice per setting. With the operator's words to read, the current levels stand unless they ask for a change: a setting their earlier words changed must not go back on the next unrelated request. */
 export function tunerQuestions(current: Tuning, pinned: (keyof Tuning)[] = [], words = true) {
   const ask = words ? 'Keep the current level unless their instructions, or their latest words, ask for something this setting changes.' : 'Choose the default unless they ask for something this setting changes.';
+  // A setting that is the operator's own choice (Knob.asked) changes only on their request for that setting itself: Jev
+  // looks for the request and for nothing else, where for the others it also weighs what their words call for.
+  const asked = words ? 'Keep the current level unless their instructions, or their latest words, ask for this setting itself to change: how the conversation is going, or what else they want, is no reason.' : 'Choose the default unless their instructions ask for this setting itself to change.';
   return Object.fromEntries(knobs(pinned).map(([name, knob]) => [name, {
     type: 'choice',
-    instructions: `${knob.describe} Which level fits the operator's instructions and preferences best? ${ask}`,
+    instructions: knob.asked ? `${knob.describe} Which level has the operator asked for? ${asked}` : `${knob.describe} Which level fits the operator's instructions and preferences best? ${ask}`,
     criteria: Object.fromEntries(knob.levels.map(level => [`level_${level.value}`, level.consequence])),
   }]));
 }
