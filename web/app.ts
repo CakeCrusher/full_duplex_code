@@ -222,6 +222,9 @@ function measured(data: WorkletMessage) {
   // Woken: the held words have all gone out (or GPT Live is already answering).
   if (data.type === 'replayed' || data.type === 'level' && loading && data.outputRms > .003) loaded(data.type === 'replayed');
   if (data.type === 'level') {
+    // The audio clock is kept on the wall clock (audio-io.ts): a step later is the audio device having stopped that long, on record.
+    const moved = audio.fit(data.endTime);
+    if (moved && bridge.open) bridge.send({ type: 'audio_clock', movedMs: Math.round(moved) });
     $<HTMLMeterElement>('level').value = Math.min(1, (data.rawRms ?? data.rms) * 5);
     $('gate-state').textContent = notePaused ? 'Paused for your note' : standby ? muted ? 'Muted' : data.rms > 0 ? 'Standby · speech wakes voice' : 'Standby · listening here' : !active ? 'Waiting for Live' : muted ? 'Muted' : data.rms > 0 ? 'Passing audio to Live' : 'Gate closed · sending silence';
     // On Standby too: the bridge hears the operator start speaking from these.

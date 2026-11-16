@@ -9,6 +9,8 @@ const TRANSPORT_FIELDS = ['clockRate', 'requestedJitterBufferMs', 'packetsReceiv
 const OUTBOUND_FIELDS = ['packetsSent', 'bytesSent', 'retransmittedPacketsSent', 'nackCount', 'targetBitrate', 'totalPacketSendDelay',
   'remotePacketsLost', 'remoteJitter', 'roundTripTime', 'fractionLost', 'currentRoundTripTime', 'availableOutgoingBitrate'];
 const PEER_STATES = ['new', 'checking', 'connecting', 'connected', 'completed', 'disconnected', 'failed', 'closed'];
+// A level stamped this far from the bridge's clock is timed by the bridge instead.
+const LEVEL_CLOCK_OFF_MS = 1000;
 
 // The bridge's side of /voice for one page: the page's controls, audio levels
 // and audit samples in, and bridge events out. Any page can change settings and
@@ -89,9 +91,16 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
         const stats = Object.fromEntries(fields.filter(key => Number.isFinite(event.stats[key])).map(key => [key, event.stats[key]]));
         bridge.log({ type: 'audio.transport', at: event.at, receivedAt: Date.now(), direction: outbound ? 'outbound' : undefined, liveRun: live.reservation, voiceSessionId: live.id, stats });
       }
+      // The page's audio clock stops whenever its audio device does (the page fits it again, and says by how much: audio-io.ts).
+      if (event.type === 'audio_clock' && Number.isFinite(event.movedMs)) bridge.log({ type: 'audio.clock_fitted', movedMs: event.movedMs, liveRun: bridge.live?.reservation, page: page.id });
       if (event.type === 'audio_level' && [event.at, event.durationMs, event.inputRms, event.outputRms].every(Number.isFinite)
-        && Math.abs(event.at - Date.now()) < 5000 && event.durationMs > 0 && event.durationMs <= 500
+        && event.durationMs > 0 && event.durationMs <= 500
         && event.inputRms >= 0 && event.inputRms <= 1 && event.outputRms >= 0 && event.outputRms <= 1) {
+        // A level is never refused for its time: one stamped far from the bridge's clock (a page whose clock is off) takes
+        // the bridge's. Refused, they left the bridge deaf: on Nov 16 a page's audio clock ended 6 s behind, every level
+        // was dropped as stale, and voice went on Standby mid-sentence, 15 s into each connection, with no voice able to wake it.
+        const now = Date.now();
+        if (Math.abs(event.at - now) >= LEVEL_CLOCK_OFF_MS) { event.pageAt = event.at; event.at = now; }
         bridge.log({ ...event, liveRun: bridge.live?.reservation, backlogMs: Number.isFinite(event.backlogMs) ? event.backlogMs : undefined });
         // The voice page's microphone tells the core when the operator is talking, and what the conversation is worth (Standby).
         if (page === bridge.voiceSessions.page) bridge.voiceSessions.mediator?.hear(event);

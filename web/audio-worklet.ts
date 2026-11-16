@@ -30,7 +30,9 @@ const WAKE_SPAN_GAP_S = 1.5, WAKE_LOOKBACK_S = 12;
 // case sound follows, and what is older is dropped. So what the operator says on Standby is on record whether or not it
 // wakes voice, as they said it and when, and more than they said. (The words that woke voice were only in the next
 // connection's `input` track, as replayed, seconds late; words that woke nothing were nowhere: 1% of their speech.)
-const STANDBY_SOUND = .002, STANDBY_BEFORE_S = 5, STANDBY_AFTER_S = 5;
+// What led up to a sound goes out a few blocks at a time, ahead of the sound itself: all at once it was half a megabyte in
+// one burst from the audio thread, which the page took for a backlogged connection, and dropped one to three seconds of.
+const STANDBY_SOUND = .002, STANDBY_BEFORE_S = 5, STANDBY_AFTER_S = 5, STANDBY_AT_ONCE = 8;
 interface StandbyBlock { type: 'standby'; microphone: ArrayBuffer; sessionId: string; offsetSamples: number; startTime: number }
 
 class DuplexAudio extends AudioWorkletProcessor {
@@ -57,7 +59,8 @@ class DuplexAudio extends AudioWorkletProcessor {
       if (data.type === 'wake') { this.keepAll = true; this.fromSpan(); }
       if (data.type === 'replay') { this.holding = false; this.replaying = this.held.length > 0; if (!this.replaying) this.port.postMessage({ type: 'replayed' }); }
       if (data.type === 'mute') { this.muted = data.muted; if (this.muted) this.gateHoldSamples = 0; }
-      if (data.type === 'audit_start') { this.auditSession = data.sessionId; this.auditOffset = 0; this.standby = false; this.lead = []; }
+      // The new connection's audit starts: what is still waiting of the sound before it goes first, in the old one's.
+      if (data.type === 'audit_start') { if (this.soundFor > 0) this.send(Infinity); this.auditSession = data.sessionId; this.auditOffset = 0; this.standby = false; this.lead = []; this.soundFor = 0; }
       if (data.type === 'gate' && Number.isFinite(data.threshold) && data.threshold >= 0 && data.threshold <= .05) {
         this.gateThreshold = data.threshold; this.gateHoldSamples = 0;
       }
@@ -76,10 +79,12 @@ class DuplexAudio extends AudioWorkletProcessor {
   /** On Standby: a block of the raw microphone goes to the audit when there is sound around it, after the silence that led up to it. */
   record(block: StandbyBlock, rawRms: number) {
     if (rawRms >= STANDBY_SOUND || this.keepAll) this.soundFor = sampleRate * STANDBY_AFTER_S;
-    if (this.soundFor <= 0) { this.lead.push(block); if (this.lead.length > STANDBY_BEFORE_S * sampleRate / 128) this.lead.shift(); return; }
-    for (const led of this.lead.splice(0)) this.port.postMessage(led, [led.microphone]);
-    this.port.postMessage(block, [block.microphone]); this.soundFor -= block.microphone.byteLength / 2;
+    this.lead.push(block);
+    if (this.soundFor <= 0) { if (this.lead.length > STANDBY_BEFORE_S * sampleRate / 128) this.lead.shift(); return; }
+    this.soundFor -= block.microphone.byteLength / 2; this.send(STANDBY_AT_ONCE);
   }
+  /** The blocks waiting go to the audit, oldest first. */
+  send(blocks: number) { for (const led of this.lead.splice(0, blocks)) this.port.postMessage(led, [led.microphone]); }
   process(inputs: Float32Array[][], outputs: Float32Array[][]) {
     const input = inputs[0]?.[0]; const output = outputs[1][0];
     const remote = inputs[1]?.[0];

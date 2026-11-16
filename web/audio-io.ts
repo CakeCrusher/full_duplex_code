@@ -40,6 +40,10 @@ export type WorkletMessage = { type: 'playback'; pcm: ArrayBuffer; microphone?: 
   | { type: 'standby'; microphone: ArrayBuffer; sessionId: string; offsetSamples: number; startTime: number }
   | { type: 'replayed' };
 
+// The audio clock is fitted over the levels of this long, once they span most of it (a page that was busy reads many at
+// once, all of them late but the last), and moved once it is this far off: less is the page's own delay in reading them.
+const CLOCK_WINDOW_MS = 1500, CLOCK_SPAN_MS = 1000, CLOCK_OFF_MS = 100;
+
 export class AudioIO {
   context: AudioContext | null = null;
   stream: MediaStream | null = null;
@@ -47,8 +51,21 @@ export class AudioIO {
   mic: MediaStreamAudioSourceNode | null = null;
   microphoneDestination: MediaStreamAudioDestinationNode | null = null;
   remote: MediaStreamAudioSourceNode | null = null;
-  /** Wall-clock time of the audio context's zero, for timestamps from the worklet. */
-  audioEpoch = 0;
+  /**
+   * Wall-clock time of the audio context's zero, for timestamps from the worklet. The audio clock stops whenever the
+   * audio device does, a second or two at a time, and never catches up: so it is fitted again from every level the
+   * worklet sends. A level reaches the page a moment after its audio time and never before, which makes the earliest
+   * of the last readings the clock's zero.
+   */
+  audioEpoch = 0; epochs: [at: number, epoch: number][] = [];
+  /** Fits the audio clock to the wall clock, from a worklet message's audio time (s). Returns how far it moved (ms; later is positive) when it did. */
+  fit(audioTime: number, now = Date.now()) {
+    this.epochs.push([now, now - audioTime * 1000]);
+    while (now - this.epochs[0][0] > CLOCK_WINDOW_MS) this.epochs.shift();
+    const moved = Math.min(...this.epochs.map(([, epoch]) => epoch)) - this.audioEpoch;
+    if (now - this.epochs[0][0] < CLOCK_SPAN_MS || Math.abs(moved) < CLOCK_OFF_MS) return 0;
+    this.audioEpoch += moved; return moved;
+  }
   /**
    * Captures the microphone and builds the graph. Returns the gated microphone
    * track for WebRTC, or nothing when a newer start replaced this one.
@@ -73,7 +90,7 @@ export class AudioIO {
     if (!current()) return;
     const node = this.node = new AudioWorkletNode(context, 'duplex-audio', { numberOfInputs: 2, numberOfOutputs: 2, outputChannelCount: [1, 1] });
     node.port.postMessage({ type: 'gate', threshold: gate });
-    this.audioEpoch = Date.now() - context.currentTime * 1000;
+    this.audioEpoch = Date.now() - context.currentTime * 1000; this.epochs = [];
     node.port.onmessage = ({ data }) => onMessage(data);
     // WebRTC owns decoding, jitter buffering and continuous playback. The
     // worklet gates the outgoing microphone and measures the decoded speaker
@@ -86,6 +103,8 @@ export class AudioIO {
   get running() { return Boolean(this.context && this.node); }
   /** Plays the decoded remote track through the worklet, the only audible output. */
   play(received: MediaStream) {
+    // The connection before this one (voice was on Standby) has ended: its source leaves the graph.
+    this.remote?.disconnect();
     this.remote = this.context!.createMediaStreamSource(received); this.remote.connect(this.node!, 0, 1);
   }
   gate(threshold: number) { this.node?.port.postMessage({ type: 'gate', threshold }); }

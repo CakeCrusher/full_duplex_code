@@ -15,6 +15,8 @@ import { CompanionRegistry } from '../src/core/companions.ts';
 // what was said before and while it started still reaches the other end, ahead of the live microphone,
 // with the waking sound until it has; a fork that never starts gives way to a new session on the same
 // microphone. What is said on Standby and while voice wakes is in the audit's microphone track, as the microphone had it.
+// And the page's audio device stopping for a couple of seconds, again and again, leaves the bridge hearing as before:
+// the page keeps its audio clock on the wall clock (on Nov 16 it ended 6 s behind, and every level was refused).
 // GPT Live is a stand-in peer in a helper page that measures what it hears; no API spending.
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-standby-'));
@@ -37,6 +39,9 @@ try {
   // A virtual microphone whose loudness the test sets: quiet room noise below the gate, or speech. And the page's
   // sounds, as the notes it starts (the virtual microphone's own 330 Hz tone aside).
   await page.addInitScript(() => {
+    // The page's own audio context (the one it asks low latency of), for the test to stop as a stalled audio device does.
+    const Native = window.AudioContext;
+    window.AudioContext = class extends Native { constructor(options?: AudioContextOptions) { super(options); if (options?.latencyHint === 'interactive') (window as any).pageAudio = this; } };
     const start = OscillatorNode.prototype.start, tones: [number, number][] = (window as any).tones = [];
     OscillatorNode.prototype.start = function (...args: any[]) { if (this.frequency.value !== 330) tones.push([Date.now(), this.frequency.value]); return start.apply(this, args as any); };
     navigator.mediaDevices.getUserMedia = async () => {
@@ -124,7 +129,9 @@ try {
   // 2. Speaking wakes it, resuming the paused session, whose fork takes 6 s to start: the operator speaks before it
   // and again while it starts, and all of it reaches the other end. The waking sound (the start cue's first note, then
   // softly again) plays until the held words are out; then the start cue.
+  // (A quiet of more than 5 s first: all of what the page keeps to record ahead of a sound.)
   fork.startMs = 6000;
+  await sleep(5500);
   const spokeAt = Date.now();
   await speak(1500);
   await waitFor(() => logged('voice.waking').length === 1, 'speech wakes voice', 5000);
@@ -150,11 +157,35 @@ try {
   assert.ok(onStandby > 2.6, `the first session's microphone track goes on through its Standby and holds nearly all 3 s said there (${onStandby.toFixed(2)} s)`);
   assert.ok(recorded(1) < .3, "and the next session's own track starts after them");
 
-  // 3. Quiet again, then a wake whose fork never starts: the page starts again on the same microphone, and the words
+  assert.equal(logged('audio.audit_paused').length, 0, 'what led up to the words went out without the page taking it for a backlog and dropping some');
+
+  // 3. The audio device stops four times while the operator talks, 1.8 s each: the page's audio clock stands still with
+  // it, 7 s behind by the end. The page fits it again each time, the bridge goes on hearing them (voice stays on while
+  // they talk, well past the window), and the stops are on record.
+  fork.startMs = 0;
+  await waitFor(async () => await text('#connection') === 'Standby · speak to wake it', 'quiet again: Standby', 12000);
+  await page.evaluate(() => (window as any).speak(true));
+  await waitFor(async () => await text('#connection') === 'Listening', 'their voice wakes it again', 15000);
+  const standbys = logged('voice.standby').length, connected = lives.length - 1;
+  for (let i = 0; i < 4; i++) {
+    await page.evaluate(async () => { const audio: AudioContext = (window as any).pageAudio; await audio.suspend(); await new Promise(resolve => setTimeout(resolve, 1800)); await audio.resume(); });
+    await sleep(1500);
+  }
+  await sleep(5000);
+  const fitted = logged('audio.clock_fitted').filter(e => e.movedMs > 1000), behind = fitted.reduce((sum, e) => sum + e.movedMs, 0);
+  const lastLevel = logged('audio_level').at(-1);
+  console.log({ audioDeviceStops: 4, clockFitted: fitted.map(e => e.movedMs), lastLevelOffByMs: Math.round(Date.now() - lastLevel.at), standbysMeanwhile: logged('voice.standby').length - standbys });
+  assert.equal(await text('#connection'), 'Listening', 'voice stays on while the operator talks');
+  assert.equal(logged('voice.standby').length, standbys, 'no Standby meanwhile');
+  assert.ok(fitted.length === 4 && behind > 6500 && behind < 9500, `each stop is fitted and on record (${fitted.map(e => e.movedMs)})`);
+  assert.ok(Date.now() - lastLevel.at < 1000 && !('pageAt' in lastLevel), "the page's levels carry the right time again");
+  await page.evaluate(() => (window as any).speak(false));
+
+  // 4. Quiet again, then a wake whose fork never starts: the page starts again on the same microphone, and the words
   // said meanwhile still arrive, in a new session.
   await waitFor(async () => await text('#connection') === 'Standby · speak to wake it', 'quiet again: Standby', 12000);
   fork.never = true;
-  const spokeAgainAt = Date.now();
+  const spokeAgainAt = Date.now(), recordedBefore = recorded(connected);
   await speak(1500);
   await waitFor(() => logged('voice.fork_never_started').length === 1, 'the fork never starts', 15000);
   await waitFor(async () => await text('#connection') === 'Listening', 'a new session started instead', 15000);
@@ -165,12 +196,12 @@ try {
   const again = await heardSince(spokeAgainAt);
   console.log({ fallbackPlan: fallback.plan, startedAfter: fallback.startMs / 1000, heardSpeechSeconds: again.seconds.toFixed(2) });
   assert.ok(again.seconds > 1.2, `the other end heard nearly all 1.5 s of speech said before the failed fork (${again.seconds.toFixed(2)} s)`);
-  assert.ok(recorded(1) > 1.2, `recorded too, in the track of the session that was on Standby (${recorded(1).toFixed(2)} s)`);
+  assert.ok(recorded(connected) - recordedBefore > 1.2, `recorded too, in the track of the session that was on Standby (${(recorded(connected) - recordedBefore).toFixed(2)} s)`);
 
-  // 4. Quiet again: Standby again. Ending voice there turns voice off.
+  // 5. Quiet again: Standby again. Ending voice there turns voice off.
   await waitFor(async () => await text('#connection') === 'Standby · speak to wake it', 'quiet again: Standby', 12000);
   await page.getByRole('button', { name: 'End voice' }).click();
   await waitFor(() => logged('voice.standby_ended').length === 1 && !harness.status().standby, 'ending voice on Standby turns it off');
   await waitFor(async () => await text('#start') === 'Resume voice' || await text('#start') === 'Start voice', 'the page offers to start voice again');
-  console.log('Standby in Chrome: quiet goes on Standby; speech wakes it, resuming the paused session even when its fork is slow, with the held speech replayed and the waking sound until it is; a fork that never starts gives way to a new session on the same microphone; ending voice there turns it off. No API spending.');
+  console.log('Standby in Chrome: quiet goes on Standby; speech wakes it, resuming the paused session even when its fork is slow, with the held speech replayed and the waking sound until it is; a fork that never starts gives way to a new session on the same microphone; an audio device that keeps stopping leaves the bridge hearing; ending voice there turns it off. No API spending.');
 } finally { await browser?.close(); await harness.close(); fs.rmSync(dir, { recursive: true, force: true }); }

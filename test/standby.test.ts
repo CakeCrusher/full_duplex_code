@@ -311,15 +311,16 @@ function worklet() {
   let Processor: any; const posted: any[] = [];
   const context = vm.createContext({ AudioWorkletProcessor: class { port = { postMessage: (message: any) => posted.push(message) }; }, registerProcessor: (_: string, type: any) => { Processor = type; }, sampleRate: 24000, currentTime: 0 });
   vm.runInContext(stripTypes(fs.readFileSync(new URL('../web/audio-worklet.ts', import.meta.url), 'utf8')), context);
-  const processor = new Processor(), sent: number[] = [];
+  const processor = new Processor(), sent: number[] = [], counts = { ran: 0, mostAtOnce: 0 };
   const run = (value: number, blocks: number) => {
     for (let i = 0; i < blocks; i++) {
-      const outgoing = new Float32Array(128);
+      const outgoing = new Float32Array(128), before = posted.length;
       processor.process([[new Float32Array(128).fill(value)], [new Float32Array(128)]], [[outgoing], [new Float32Array(128)]]);
-      sent.push(...outgoing);
+      sent.push(...outgoing); counts.ran++;
+      counts.mostAtOnce = Math.max(counts.mostAtOnce, posted.slice(before).filter(m => m.type === 'standby').length);
     }
   };
-  return { send: (data: any) => processor.port.onmessage({ data }), run, sent, posted };
+  return { send: (data: any) => processor.port.onmessage({ data }), run, sent, posted, counts };
 }
 
 test('on Standby the microphone is held; waking, it goes back to where the operator started talking; once connected it goes out first, then the live microphone, skipping silence', () => {
@@ -355,13 +356,19 @@ test('on Standby the microphone goes on being recorded wherever there is sound, 
   assert.ok(blocks.every((m, i) => m.offsetSamples === (first + i) * 128), "on that session's sample clock, without a break");
   assert.ok(Math.abs(spoken - first - 5 * second) <= 2 && Math.abs(blocks.length - 11 * second) <= 4, `5 s before the word, the word, 5 s after (${blocks.length} blocks from ${spoken - first} before it)`);
   assert.deepEqual([word.length, word[0].offsetSamples, new Int16Array(word[0].microphone)[0]], [Math.round(second), spoken * 128, Math.round(.004 * 32767)], 'the word as the microphone had it, where it was said');
+  // All at once, the 5 s before the word were a burst the page took for a backlogged connection, and dropped part of.
+  assert.ok(w.counts.mostAtOnce > 1 && w.counts.mostAtOnce <= 8, `what led up to the word goes out a few blocks at a time (${w.counts.mostAtOnce} at most)`);
   // Muted, nothing is recorded.
   w.posted.length = 0; w.send({ type: 'mute', muted: true }); w.run(.3, Math.round(2 * second)); w.send({ type: 'mute', muted: false });
   assert.equal(audit().length, 0);
   // Waking: everything from then on, up to the moment the next session's own audit takes over.
   w.send({ type: 'wake' }); w.run(0, 40);
   assert.ok(audit().length >= 40 && audit().every(m => m.type === 'standby'), 'the wait for the new connection is recorded whole');
-  w.send({ type: 'audit_start', sessionId: 'two' }); w.posted.length = 0; w.run(0, 3);
+  // The new connection is up before all of it has gone out: the rest goes first, still in the track it belongs to.
+  w.send({ type: 'audit_start', sessionId: 'two' });
+  const waited = audit(), from = waited[0].offsetSamples / 128;
+  assert.ok(waited.every((m, i) => m.sessionId === 'one' && m.offsetSamples === (from + i) * 128) && from + waited.length === w.counts.ran, 'nothing of it is left behind, and nothing out of order');
+  w.posted.length = 0; w.run(0, 3);
   assert.deepEqual(audit().map(m => [m.type, m.sessionId, m.offsetSamples]), [['playback', 'two', 0], ['playback', 'two', 128], ['playback', 'two', 256]]);
 });
 
@@ -395,6 +402,51 @@ test("a voice session's microphone track goes on through the Standby that follow
   assert.equal(track(lives[0]).length, said + 256, 'nothing is added to it afterwards');
   const gaps = fs.readFileSync(path.join(h.runDir, 'events.jsonl'), 'utf8').split('\n').filter(line => line.includes('"audio.audit_gap"')).map(line => JSON.parse(line));
   assert.deepEqual(gaps.map(g => [g.track, g.reason]), [['microphone', 'standby_quiet']], 'the silence of Standby is a gap the log names');
+});
+
+// Nov 16: a page's audio clock had stopped with its audio device, a second or two at a time, and ended 6 s behind. The
+// bridge refused every level as stale: voice went on Standby mid-sentence, 15 s into each connection, and no voice woke it.
+test("a page whose clock is far behind is still heard: the companion speaking keeps voice on, and the operator's voice wakes Standby", async t => {
+  const { h, lives, published } = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30 } });
+  const ws: any = Object.assign(new EventEmitter(), { readyState: 1, bufferedAmount: 0, send() {}, close() {}, terminate() {} });
+  attachPage(h, ws, 'local');
+  const voicePage = [...h.pages.all.values()].find(p => p.ws === ws)!;
+  const BEHIND = 6243;
+  const level = (sound: Record<string, number>, n: number) => { for (let i = 0; i < n; i++) ws.emit('message', Buffer.from(JSON.stringify({ type: 'audio_level', at: Date.now() - BEHIND + i * 107, durationMs: 107, inputRms: 0, outputRms: 0, gateThreshold: .008, ...sound })), false); };
+  await h.startLive(undefined, voicePage, 'fresh');
+  lives[0].say('operator', 'Walk me through step two.', 0);
+  // Well past the window, the companion is still speaking.
+  lives[0].startedAt = Date.now() - WINDOW - 1000;
+  level({ outputRms: .05 }, 10);
+  h.voiceSessions.checkStandby();
+  assert.ok(lives[0].state === 'active' && !h.voiceSessions.standby, 'mid-sentence is not quiet');
+  // Quiet for the window: Standby. Then the operator speaks.
+  h.voiceSessions.checkStandby(later(WINDOW + 500)); await until(() => lives[0].state === 'closed');
+  assert.ok(h.voiceSessions.standby);
+  level({ inputRms: .05, rawInputRms: .05, voiced: 1 }, 4);
+  h.voiceSessions.checkStandby();
+  assert.deepEqual(published.filter(p => p.event.type === 'voice_wake').map(p => p.event.reason), ['operator'], 'their voice wakes it');
+  const levels = fs.readFileSync(path.join(h.runDir, 'events.jsonl'), 'utf8').split('\n').filter(line => line.includes('"audio_level"')).map(line => JSON.parse(line));
+  assert.ok(levels.length === 14 && levels.every(e => Math.abs(e.at - Date.now()) < 1000 && e.at - e.pageAt > BEHIND - 1000), "each is on record at the bridge's time, with the page's own");
+});
+
+test("the page keeps its audio clock on the wall clock: a clock that stopped with the audio device is fitted again within a second or two, and a busy page is not mistaken for one", async () => {
+  const { AudioIO } = await import('../web/audio-io.ts');
+  const audio = new AudioIO(); let now = 1_000_000, clock = 0; audio.audioEpoch = now;
+  // A level every 107 ms of audio, read 5 ms after it, give or take.
+  const levels = (n: number, read = () => 5 + Math.random() * 10) => { let moved = 0; for (let i = 0; i < n; i++) { now += 107; clock += .107; moved += audio.fit(clock, now + read()); } return moved; };
+  assert.equal(levels(100), 0, "nothing moves while the clocks agree: the page's delay in reading a level is not the clock");
+  // The audio device stops for 2.2 s: the audio clock stands still, and stays behind.
+  now += 2200;
+  const moved = levels(30);
+  assert.ok(Math.abs(moved - 2200) < 30 && Math.abs(audio.audioEpoch - (1_000_000 + 2200)) < 30, `fitted again, by the 2.2 s it stopped (${Math.round(moved)} ms)`);
+  // Twice more, as on Nov 16: stamps stay right however often it stops.
+  now += 1400; levels(30); now += 2200; levels(30);
+  assert.ok(Math.abs(audio.audioEpoch - (1_000_000 + 5800)) < 30, 'and again each time');
+  // The page is busy for 3 s, then reads 28 levels at once: all late but the last, which the fit goes by.
+  const before = audio.audioEpoch;
+  for (let i = 0; i < 28; i++) { now += 107; clock += .107; assert.equal(audio.fit(clock, now + (27 - i) * 107), 0); }
+  assert.equal(levels(30), 0); assert.equal(audio.audioEpoch, before, 'a busy page moves nothing');
 });
 
 test("waking, the page reports the held words still going out, and when they all have", () => {
