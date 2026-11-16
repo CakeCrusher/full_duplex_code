@@ -30,7 +30,7 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
       try {
         const sending = bridge.live?.state === 'active';
         bridge.live?.audio(raw);
-        if (sending) bridge.audit?.write('input', raw);
+        if (sending) bridge.voiceSessions.auditOf(bridge.live!)?.write('input', raw);
       } catch (error) { bridge.fault(error as Error); }
       return;
     }
@@ -62,15 +62,24 @@ export function attachPage(bridge: Harness, ws: WebSocket, via: Page['via']) {
       }
       if (event.type === 'peer_state' && [event.connectionState, event.iceConnectionState].every(state => PEER_STATES.includes(state)))
         bridge.log({ type: 'audio.peer_state', at: Number.isFinite(event.at) ? event.at : undefined, receivedAt: Date.now(), liveRun: bridge.live?.reservation, connectionState: event.connectionState, iceConnectionState: event.iceConnectionState });
-      if (event.type === 'playback_audio' && bridge.audit && event.voiceSessionId === bridge.live?.id
+      if (event.type === 'playback_audio' && bridge.audit && event.voiceSessionId === bridge.live?.id && event.voiceSessionId === bridge.audit.sessionId
         && typeof event.pcm === 'string' && event.pcm.length <= 14000
         && Number.isSafeInteger(event.offsetSamples) && event.offsetSamples >= 0 && Number.isFinite(event.at)) {
+        // The page records this session now: the one before it, kept open through its Standby, is complete.
+        if (bridge.voiceSessions.pastAudit) { bridge.voiceSessions.pastAudit.close(); bridge.voiceSessions.pastAudit = null; }
         const pcm = Buffer.from(event.pcm, 'base64');
         if (pcm.length && pcm.length <= 9600 && pcm.length % 2 === 0) bridge.audit.write('playback', pcm, { offsetSamples: event.offsetSamples, at: event.at });
         if (typeof event.microphone === 'string' && event.microphone.length <= 14000) {
           const microphone = Buffer.from(event.microphone, 'base64');
           if (microphone.length === pcm.length) bridge.audit.write('microphone', microphone, { offsetSamples: event.offsetSamples, at: event.at });
         }
+      }
+      // On Standby the page goes on recording the microphone wherever there is sound (audio-worklet.ts): the track of the
+      // session that went on Standby continues, on its own clock, until the next session's audit takes over.
+      if (event.type === 'standby_audio' && typeof event.microphone === 'string' && event.microphone.length <= 14000
+        && Number.isSafeInteger(event.offsetSamples) && event.offsetSamples >= 0 && Number.isFinite(event.at)) {
+        const microphone = Buffer.from(event.microphone, 'base64');
+        if (microphone.length && microphone.length <= 9600 && microphone.length % 2 === 0) bridge.voiceSessions.auditFor(event.voiceSessionId)?.write('microphone', microphone, { offsetSamples: event.offsetSamples, at: event.at, standby: true });
       }
       const live = bridge.live;
       // Late stats are kept, with their arrival time: a backlog is exactly when they matter.

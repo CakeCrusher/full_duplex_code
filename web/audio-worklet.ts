@@ -24,6 +24,15 @@ function voiced(frame: Float32Array, rate: number) {
 // shorter pauses inside a sentence never count), held for at most WAKE_LOOKBACK_S. Tune both against real wakes.
 const WAKE_SPAN_GAP_S = 1.5, WAKE_LOOKBACK_S = 12;
 
+// On Standby the audit's microphone track goes on, on the same sample clock: the raw microphone is recorded wherever there
+// is sound (anything above the room's silence, far below the gate), with the seconds before it and after, and all of it
+// from the wake until the new connection's own audit starts. Only silence is let go: the last seconds are always kept in
+// case sound follows, and what is older is dropped. So what the operator says on Standby is on record whether or not it
+// wakes voice, as they said it and when, and more than they said. (The words that woke voice were only in the next
+// connection's `input` track, as replayed, seconds late; words that woke nothing were nowhere: 1% of their speech.)
+const STANDBY_SOUND = .002, STANDBY_BEFORE_S = 5, STANDBY_AFTER_S = 5;
+interface StandbyBlock { type: 'standby'; microphone: ArrayBuffer; sessionId: string; offsetSamples: number; startTime: number }
+
 class DuplexAudio extends AudioWorkletProcessor {
   muted = false; ticks = 0;
   inputPower = 0; outputPower = 0; levelSamples = 0;
@@ -36,17 +45,19 @@ class DuplexAudio extends AudioWorkletProcessor {
   // microphone follows behind it; silence in the backlog is skipped, so it catches up at the first pause.
   holding = false; keepAll = false; replaying = false;
   held: Float32Array[] = []; heldSamples = 0;
+  // On Standby, for the audit: the last silent seconds, kept in case sound follows, and how much longer the sound heard lasts.
+  standby = false; lead: StandbyBlock[] = []; soundFor = 0;
   // The raw microphone at about 12 kHz, in 30 ms windows, and how many of each level's windows were voiced.
   step = Math.max(1, Math.round(sampleRate / 12000)); sum = 0; summed = 0;
   window = new Float32Array(Math.round(.03 * sampleRate / this.step)); filled = 0; windows = 0; voicedWindows = 0;
   constructor() {
     super();
     this.port.onmessage = ({ data }) => {
-      if (data.type === 'hold') { this.holding = true; this.keepAll = false; this.replaying = false; this.held = []; this.heldSamples = 0; this.auditSession = null; }
+      if (data.type === 'hold') { this.holding = true; this.keepAll = false; this.replaying = false; this.held = []; this.heldSamples = 0; this.standby = Boolean(this.auditSession); this.lead = []; this.soundFor = 0; }
       if (data.type === 'wake') { this.keepAll = true; this.fromSpan(); }
       if (data.type === 'replay') { this.holding = false; this.replaying = this.held.length > 0; if (!this.replaying) this.port.postMessage({ type: 'replayed' }); }
       if (data.type === 'mute') { this.muted = data.muted; if (this.muted) this.gateHoldSamples = 0; }
-      if (data.type === 'audit_start') { this.auditSession = data.sessionId; this.auditOffset = 0; }
+      if (data.type === 'audit_start') { this.auditSession = data.sessionId; this.auditOffset = 0; this.standby = false; this.lead = []; }
       if (data.type === 'gate' && Number.isFinite(data.threshold) && data.threshold >= 0 && data.threshold <= .05) {
         this.gateThreshold = data.threshold; this.gateHoldSamples = 0;
       }
@@ -61,6 +72,13 @@ class DuplexAudio extends AudioWorkletProcessor {
       if (quiet >= sampleRate * WAKE_SPAN_GAP_S) { start = i; break; }
     }
     for (const frame of this.held.splice(0, start)) this.heldSamples -= frame.length;
+  }
+  /** On Standby: a block of the raw microphone goes to the audit when there is sound around it, after the silence that led up to it. */
+  record(block: StandbyBlock, rawRms: number) {
+    if (rawRms >= STANDBY_SOUND || this.keepAll) this.soundFor = sampleRate * STANDBY_AFTER_S;
+    if (this.soundFor <= 0) { this.lead.push(block); if (this.lead.length > STANDBY_BEFORE_S * sampleRate / 128) this.lead.shift(); return; }
+    for (const led of this.lead.splice(0)) this.port.postMessage(led, [led.microphone]);
+    this.port.postMessage(block, [block.microphone]); this.soundFor -= block.microphone.byteLength / 2;
   }
   process(inputs: Float32Array[][], outputs: Float32Array[][]) {
     const input = inputs[0]?.[0]; const output = outputs[1][0];
@@ -113,12 +131,15 @@ class DuplexAudio extends AudioWorkletProcessor {
     if (this.auditSession) {
       // Clamp only the audit's integer encoding. A decoded peak at +1 (or an
       // Opus overshoot) must not wrap to the opposite sign in the recording.
-      const pcm = Int16Array.from(output, sample => Math.max(-32768, Math.min(32767, Math.round(sample * 32768)))).buffer;
       const microphone = Int16Array.from({ length: output.length }, (_, i) => {
         const sample = this.muted ? 0 : Math.max(-1, Math.min(1, input?.[i] ?? 0));
         return Math.round(sample * (sample < 0 ? 32768 : 32767));
       }).buffer;
-      this.port.postMessage({ type: 'playback', pcm, microphone, sessionId: this.auditSession, offsetSamples: this.auditOffset, startTime: currentTime }, [pcm, microphone]);
+      if (this.standby) this.record({ type: 'standby', microphone, sessionId: this.auditSession, offsetSamples: this.auditOffset, startTime: currentTime }, rawRms);
+      else {
+        const pcm = Int16Array.from(output, sample => Math.max(-32768, Math.min(32767, Math.round(sample * 32768)))).buffer;
+        this.port.postMessage({ type: 'playback', pcm, microphone, sessionId: this.auditSession, offsetSamples: this.auditOffset, startTime: currentTime }, [pcm, microphone]);
+      }
       this.auditOffset += output.length;
     }
     if (++this.ticks % 20 === 0) {

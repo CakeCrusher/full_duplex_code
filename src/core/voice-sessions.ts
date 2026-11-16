@@ -103,7 +103,12 @@ export class VoiceSessions {
   mediator?: Mediator;
   /** The current voice session, from its start. */
   run?: Run;
-  audit: AudioAudit | null = null;
+  /**
+   * The running voice session's audio audit, and the one before it. A session's audit stays open through the Standby
+   * that follows it: the page goes on recording the microphone there (audio-worklet.ts), up to the moment the next
+   * session's own audit takes over on the page.
+   */
+  audit: AudioAudit | null = null; pastAudit: AudioAudit | null = null;
   additionalInstructions: Instruction[] = [];
   /** Every instruction appended to each session, in order, countermands included: nothing appended can be taken out. */
   appendedTo = new WeakMap<LiveSession, string[]>();
@@ -485,7 +490,7 @@ export class VoiceSessions {
     const live: LiveSession = this.createLive({ apiKey: bridge.apiKey, budget: bridge.ledger, voice: bridge.voice, instructions: this.instructions(), label: `${name} ${bridge.sessionId ?? 'session'}`,
       input: plan === 'fork' ? [] : input, store: this.store, fork: sourceId, log: event => log({ liveRun: live.reservation, ...event }) });
     attempt.live = live;
-    this.audit?.close(); this.audit = null; this.failed = undefined;
+    this.failed = undefined;
     this.live = live; this.page = page;
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
@@ -676,11 +681,15 @@ export class VoiceSessions {
     const timeout = new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), 1000).unref());
     return Promise.race([this.bridge.stage.describe().catch(() => undefined), timeout]);
   }
+  /** The audit of this voice session, if it is the one running: a session still connecting writes nothing into the one before it. */
+  auditOf(live: LiveSession) { return this.audit?.sessionId === live.id ? this.audit : null; }
+  /** The page's audit packets name their voice session: the running one's, or the one before it while the page still records its Standby. */
+  auditFor(sessionId: unknown) { return [this.audit, this.pastAudit].find(audit => audit && audit.sessionId === sessionId) ?? null; }
   liveEvent(run: Run, event: any) {
     const { live, page } = run;
     if (event.type === 'session.output_audio.delta') {
       const pcm = Buffer.from(event.delta, 'base64');
-      this.audit?.write('output', pcm, { startMs: event.start_ms, endMs: event.end_ms });
+      this.auditOf(live)?.write('output', pcm, { startMs: event.start_ms, endMs: event.end_ms });
       if (live.transport === 'webrtc') return; // The browser plays the negotiated media track.
       const browser = page?.ws;
       if (browser?.readyState !== WebSocket.OPEN) return;
@@ -689,7 +698,7 @@ export class VoiceSessions {
     }
     if (event.type === 'session.input_audio.append' && live.transport === 'webrtc') {
       this.lastAudioAt = Date.now();
-      this.audit?.write('input', Buffer.from(event.audio, 'base64'), { startMs: event.start_ms, endMs: event.end_ms });
+      this.auditOf(live)?.write('input', Buffer.from(event.audio, 'base64'), { startMs: event.start_ms, endMs: event.end_ms });
     }
     if (/^session\.(thinking|commentary|instructions)\.appended$/.test(event.type)) this.bridge.publish({ type: 'context_ack', id: event.client_event_id, startMs: event.start_ms, endMs: event.end_ms });
     if (event.type === 'session.started') this.begun(run);
@@ -727,7 +736,8 @@ export class VoiceSessions {
     // A fork started with its source's instructions; anything else with today's.
     if (plan !== 'fork') record.prompt = this.prompt();
     this.noteInForce(run);
-    this.audit = new AudioAudit({ dir: path.join(bridge.runDir, 'audio', live.reservation!), log: event => log({ liveRun: live.reservation, ...event }), onError: error => fault(error) });
+    this.pastAudit?.close(); this.pastAudit = this.audit;
+    this.audit = new AudioAudit({ dir: path.join(bridge.runDir, 'audio', live.reservation!), sessionId: live.id, log: event => log({ liveRun: live.reservation, ...event }), onError: error => fault(error) });
     this.usage = { voiceSessionId: live.id!, startedAt: live.startedAt ?? Date.now(), seconds: 0, ratio: null, points: [] };
     publish({ type: 'live_usage', ...this.usage });
     bridge.forks.untold = undefined;

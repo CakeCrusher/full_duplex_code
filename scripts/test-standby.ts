@@ -14,7 +14,8 @@ import { CompanionRegistry } from '../src/core/companions.ts';
 // speaking wakes it, resuming the paused session (a fork, which can take many seconds to start), and
 // what was said before and while it started still reaches the other end, ahead of the live microphone,
 // with the waking sound until it has; a fork that never starts gives way to a new session on the same
-// microphone. GPT Live is a stand-in peer in a helper page that measures what it hears; no API spending.
+// microphone. What is said on Standby and while voice wakes is in the audit's microphone track, as the microphone had it.
+// GPT Live is a stand-in peer in a helper page that measures what it hears; no API spending.
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-standby-'));
 const harness = new Harness({ agent: claude, root, runDir: dir, cwd: dir, sessionId: randomUUID(), apiKey: 'unused-standby-test-key', tuning: { standbyAfterMs: 3000, wakeThreshold: 10 } });
@@ -99,6 +100,14 @@ try {
   // What the other end heard after a moment: loud 20 ms windows, in seconds, and when the last one came.
   const heardSince = async (since: number) => { const loud = (await remote.evaluate(() => (window as any).heard) as [number, number][]).filter(([at, rms]) => at > since && rms > .05); return { seconds: loud.length * .02, lastAt: loud.at(-1)?.[0] ?? 0 }; };
   const tonesSince = async (since: number) => (await page.evaluate(() => (window as any).tones) as [number, number][]).filter(([at]) => at >= since);
+  // How much speech a session's microphone track holds (the audit, audio-audit.ts): loud 20 ms windows, in seconds.
+  const recorded = (session: number) => {
+    const file = path.join(dir, 'audio', `standby-${session}`, 'microphone.wav');
+    if (!fs.existsSync(file)) return 0;
+    const pcm = fs.readFileSync(file).subarray(44); let loud = 0;
+    for (let i = 0; i + 960 <= pcm.length; i += 960) { let power = 0; for (let j = i; j < i + 960; j += 2) power += (pcm.readInt16LE(j) / 32768) ** 2; if (Math.sqrt(power / 480) > .05) loud++; }
+    return loud * .02;
+  };
 
   // 1. Voice starts; with nobody speaking for the window, it goes on Standby and the page keeps listening.
   await page.goto(harness.browserUrl);
@@ -134,6 +143,12 @@ try {
   assert.ok(tones[0]?.[1] === 660 && tones[0][0] - wokeAt < 1000, 'the waking sound starts as voice wakes');
   assert.ok(tones.filter(([at, f]) => f === 660 && at < woke.at).length >= 6, 'and goes on while the session starts');
   assert.ok(startCue && startCue >= held.lastAt - 300, 'the start cue sounds once the held words are out');
+  // The audit has those words as the microphone had them, in the track of the session that went on Standby: nobody
+  // spoke while it was connected, so all the speech in it was said on Standby and while the fork started.
+  const onStandby = recorded(0);
+  console.log({ recordedOnStandbySeconds: onStandby.toFixed(2), gaps: logged('audio.audit_gap').filter(e => e.reason === 'standby_quiet').length });
+  assert.ok(onStandby > 2.6, `the first session's microphone track goes on through its Standby and holds nearly all 3 s said there (${onStandby.toFixed(2)} s)`);
+  assert.ok(recorded(1) < .3, "and the next session's own track starts after them");
 
   // 3. Quiet again, then a wake whose fork never starts: the page starts again on the same microphone, and the words
   // said meanwhile still arrive, in a new session.
@@ -150,6 +165,7 @@ try {
   const again = await heardSince(spokeAgainAt);
   console.log({ fallbackPlan: fallback.plan, startedAfter: fallback.startMs / 1000, heardSpeechSeconds: again.seconds.toFixed(2) });
   assert.ok(again.seconds > 1.2, `the other end heard nearly all 1.5 s of speech said before the failed fork (${again.seconds.toFixed(2)} s)`);
+  assert.ok(recorded(1) > 1.2, `recorded too, in the track of the session that was on Standby (${recorded(1).toFixed(2)} s)`);
 
   // 4. Quiet again: Standby again. Ending voice there turns voice off.
   await waitFor(async () => await text('#connection') === 'Standby · speak to wake it', 'quiet again: Standby', 12000);

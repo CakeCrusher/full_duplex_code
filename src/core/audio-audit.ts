@@ -14,17 +14,22 @@ function header(bytes: number) {
 
 // Local, independent tracks: input actually sent, API output on its own clock,
 // and browser-rendered output (including silent buffer underruns).
+// The microphone track goes on through the Standby that follows its session, on the same clock: the page records
+// wherever there is sound, with the seconds around it (audio-worklet.ts), and the silence between is a gap of any
+// length, logged and left as zeros the file system doesn't store.
 export class AudioAudit {
   dir: string; log: (event: Record<string, unknown>) => void; onError: (error: Error) => void;
+  /** The voice session it records: the page's packets name theirs. */
+  sessionId?: string;
   tracks = new Map<string, TrackFile>(); closed = false;
   /** Browser tracks whose next packet may follow a long gap: the page dropped audit audio while its connection was backlogged. */
   gaps = new Set<Track>();
-  constructor({ dir, log, onError }: { dir: string; log: (event: Record<string, unknown>) => void; onError: (error: Error) => void }) {
-    this.dir = dir; this.log = log; this.onError = onError;
+  constructor({ dir, log, onError, sessionId }: { dir: string; log: (event: Record<string, unknown>) => void; onError: (error: Error) => void; sessionId?: string }) {
+    this.dir = dir; this.log = log; this.onError = onError; this.sessionId = sessionId;
     try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); }
     catch (error) { this.fail(error as Error); }
   }
-  write(track: Track, pcm: Buffer, metadata: { startMs?: number; endMs?: number; offsetSamples?: number; at?: number } = {}) {
+  write(track: Track, pcm: Buffer, metadata: { startMs?: number; endMs?: number; offsetSamples?: number; at?: number; /** Recorded on Standby: any silence may lie before it. */ standby?: boolean } = {}) {
     if (this.closed || !pcm.length) return;
     try {
       if (!['input', 'microphone', 'output', 'playback'].includes(track) || pcm.length % 2) throw new Error('Invalid audit audio');
@@ -41,9 +46,9 @@ export class AudioAudit {
       // A missing browser packet is visible in the log and remains silence in
       // the recording; never silently squeeze time out of rendered playback.
       const paused = this.gaps.delete(track);
-      if (!Number.isSafeInteger(offset) || offset < file.samples || (apiOffset === undefined && offset > file.samples + RATE * (paused ? 3600 : 5))) throw new Error('Playback audit sample discontinuity');
+      if (!Number.isSafeInteger(offset) || offset < file.samples || (apiOffset === undefined && !metadata.standby && offset > file.samples + RATE * (paused ? 3600 : 5))) throw new Error('Playback audit sample discontinuity');
       if (offset !== file.samples) this.log({ type: 'audio.audit_gap', track, expected: file.samples, actual: offset,
-        reason: apiOffset !== undefined ? `missing_api_${track}` : paused ? 'audit_paused' : 'missing_audit_samples',
+        reason: apiOffset !== undefined ? `missing_api_${track}` : metadata.standby ? 'standby_quiet' : paused ? 'audit_paused' : 'missing_audit_samples',
         startMs: file.samples * 1000 / RATE, endMs: offset * 1000 / RATE,
         durationMs: (offset - file.samples) * 1000 / RATE });
       fs.writeSync(file.fd, pcm, 0, pcm.length, 44 + offset * 2);

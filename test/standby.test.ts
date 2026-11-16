@@ -2,10 +2,13 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import vm from 'node:vm';
+import { EventEmitter } from 'node:events';
 import { Activity, priceFor, priceOf } from '../src/core/activity.ts';
 import { DEFAULT_TUNING } from '../src/core/tuning.ts';
 import { STANDBY } from '../src/core/voice-sessions.ts';
+import { attachPage } from '../src/core/browser-socket.ts';
 import { Timeline } from '../src/core/timeline.ts';
 import { stripTypes } from '../src/core/page.ts';
 import { claude } from '../src/adapters/claude/index.ts';
@@ -334,6 +337,64 @@ test('on Standby the microphone is held; waking, it goes back to where the opera
   const held = w.sent.filter(x => Math.abs(x - .4) < .01).length;
   assert.ok(Math.abs(held - 5 * 24000) < 1000, `all 5 s the operator spoke before the wake (${held})`);
   assert.ok(w.sent.slice(-128).every(x => x > .5), 'the live microphone follows, the silence between skipped');
+});
+
+test('on Standby the microphone goes on being recorded wherever there is sound, with the seconds around it; silence is let go, and a muted microphone is not recorded', () => {
+  const w = worklet(), second = 24000 / 128, audit = () => w.posted.filter(m => m.type === 'standby' || m.type === 'playback');
+  w.send({ type: 'gate', threshold: .008 }); w.send({ type: 'audit_start', sessionId: 'one' });
+  w.run(.05, 10);
+  assert.deepEqual([audit().length, audit().at(-1).type, audit().at(-1).offsetSamples], [10, 'playback', 9 * 128], 'connected: every block, played and heard');
+  w.send({ type: 'hold' }); w.posted.length = 0;
+  w.run(0, Math.round(20 * second));
+  assert.equal(audit().length, 0, 'silence is not recorded, however long');
+  // A quiet word, under the gate (it would not wake voice, nor reach GPT Live): on record, with 5 s before it and 5 s after.
+  const spoken = 10 + Math.round(20 * second);
+  w.run(.004, Math.round(second)); w.run(0, Math.round(20 * second));
+  const blocks = audit(), first = blocks[0].offsetSamples / 128, word = blocks.filter(m => new Int16Array(m.microphone)[0] !== 0);
+  assert.ok(blocks.every(m => m.type === 'standby' && m.sessionId === 'one' && !('pcm' in m)), "the microphone alone, in the track of the session that went on Standby");
+  assert.ok(blocks.every((m, i) => m.offsetSamples === (first + i) * 128), "on that session's sample clock, without a break");
+  assert.ok(Math.abs(spoken - first - 5 * second) <= 2 && Math.abs(blocks.length - 11 * second) <= 4, `5 s before the word, the word, 5 s after (${blocks.length} blocks from ${spoken - first} before it)`);
+  assert.deepEqual([word.length, word[0].offsetSamples, new Int16Array(word[0].microphone)[0]], [Math.round(second), spoken * 128, Math.round(.004 * 32767)], 'the word as the microphone had it, where it was said');
+  // Muted, nothing is recorded.
+  w.posted.length = 0; w.send({ type: 'mute', muted: true }); w.run(.3, Math.round(2 * second)); w.send({ type: 'mute', muted: false });
+  assert.equal(audit().length, 0);
+  // Waking: everything from then on, up to the moment the next session's own audit takes over.
+  w.send({ type: 'wake' }); w.run(0, 40);
+  assert.ok(audit().length >= 40 && audit().every(m => m.type === 'standby'), 'the wait for the new connection is recorded whole');
+  w.send({ type: 'audit_start', sessionId: 'two' }); w.posted.length = 0; w.run(0, 3);
+  assert.deepEqual(audit().map(m => [m.type, m.sessionId, m.offsetSamples]), [['playback', 'two', 0], ['playback', 'two', 128], ['playback', 'two', 256]]);
+});
+
+test("a voice session's microphone track goes on through the Standby that follows it, until the next session's audit takes over on the page", async t => {
+  const { h, lives } = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10 } });
+  const ws: any = Object.assign(new EventEmitter(), { readyState: 1, bufferedAmount: 0, send() {}, close() {}, terminate() {} });
+  attachPage(h, ws, 'local');
+  const voicePage = [...h.pages.all.values()].find(p => p.ws === ws)!;
+  const from = (event: Record<string, unknown>) => ws.emit('message', Buffer.from(JSON.stringify(event)), false);
+  const pcm = (value: number) => Buffer.from(new Int16Array(128).fill(value).buffer).toString('base64');
+  const track = (live: Live) => { const file = path.join(h.runDir, 'audio', live.reservation!, 'microphone.wav'); return fs.existsSync(file) ? new Int16Array(new Uint8Array(fs.readFileSync(file).subarray(44)).buffer) : new Int16Array(0); };
+  await h.startLive(undefined, voicePage, 'fresh');
+  lives[0].say('operator', 'Add a dark mode toggle.', 0); lives[0].say('intermediary', 'On it.', 1000);
+  from({ type: 'playback_audio', voiceSessionId: lives[0].id, offsetSamples: 0, at: Date.now(), pcm: pcm(0), microphone: pcm(11) });
+  assert.equal(track(lives[0]).length, 128);
+  h.voiceSessions.checkStandby(later(WINDOW + 500)); await until(() => lives[0].state === 'closed');
+  assert.ok(h.voiceSessions.standby);
+  // Ten minutes into Standby the operator says something: it lands where it was said, the silence before it a gap.
+  const said = 24000 * 600;
+  from({ type: 'standby_audio', voiceSessionId: lives[0].id, offsetSamples: said, at: Date.now(), microphone: pcm(22) });
+  assert.deepEqual([track(lives[0]).length, track(lives[0])[said], track(lives[0])[said - 1]], [said + 128, 22, 0]);
+  // Their voice wakes it. While the new session connects, and until the page's audit moves to it, their words still go to the track they belong to.
+  speak(h, 3); h.voiceSessions.checkStandby();
+  await h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true);
+  assert.equal(lives.length, 2);
+  from({ type: 'standby_audio', voiceSessionId: lives[0].id, offsetSamples: said + 128, at: Date.now(), microphone: pcm(33) });
+  assert.equal(track(lives[0])[said + 128], 33, 'said as the new session came up');
+  from({ type: 'playback_audio', voiceSessionId: lives[1].id, offsetSamples: 0, at: Date.now(), pcm: pcm(0), microphone: pcm(44) });
+  assert.deepEqual([track(lives[1])[0], h.voiceSessions.pastAudit], [44, null], "the new session's own track begins, and the one before it is complete");
+  from({ type: 'standby_audio', voiceSessionId: lives[0].id, offsetSamples: said + 256, at: Date.now(), microphone: pcm(55) });
+  assert.equal(track(lives[0]).length, said + 256, 'nothing is added to it afterwards');
+  const gaps = fs.readFileSync(path.join(h.runDir, 'events.jsonl'), 'utf8').split('\n').filter(line => line.includes('"audio.audit_gap"')).map(line => JSON.parse(line));
+  assert.deepEqual(gaps.map(g => [g.track, g.reason]), [['microphone', 'standby_quiet']], 'the silence of Standby is a gap the log names');
 });
 
 test("waking, the page reports the held words still going out, and when they all have", () => {

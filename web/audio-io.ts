@@ -37,6 +37,7 @@ export function watchMicrophones(notice: (text: string) => void) {
 /** Messages from the audio worklet. */
 export type WorkletMessage = { type: 'playback'; pcm: ArrayBuffer; microphone?: ArrayBuffer; sessionId: string; offsetSamples: number; startTime: number }
   | { type: 'level'; rms: number; rawRms?: number; outputRms: number; gateThreshold: number; voiced?: number; durationMs: number; endTime: number; backlogMs?: number }
+  | { type: 'standby'; microphone: ArrayBuffer; sessionId: string; offsetSamples: number; startTime: number }
   | { type: 'replayed' };
 
 export class AudioIO {
@@ -90,7 +91,7 @@ export class AudioIO {
   gate(threshold: number) { this.node?.port.postMessage({ type: 'gate', threshold }); }
   /** The gated microphone track, kept open on Standby for the next connection. */
   get microphone() { return this.microphoneDestination?.stream; }
-  /** On Standby: hold the microphone, keeping its last seconds; waking: keep all of it; connected: replay it. */
+  /** On Standby: hold the microphone, keeping its last seconds (and go on recording it for the audit wherever there is sound); waking: keep all of it; connected: replay it. */
   hold() { this.node?.port.postMessage({ type: 'hold' }); }
   wakeHold() { this.node?.port.postMessage({ type: 'wake' }); }
   replay() { this.node?.port.postMessage({ type: 'replay' }); }

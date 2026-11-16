@@ -205,7 +205,7 @@ async function reachability(): Promise<'reachable' | 'refused' | 'unreachable'> 
 }
 // Audit samples and levels measured by the worklet.
 function measured(data: WorkletMessage) {
-  if (data.type === 'playback' && bridge.open) {
+  if ((data.type === 'playback' || data.type === 'standby') && bridge.open) {
     // Voice matters more than its audit: a backlogged connection drops audit audio
     // until it drains (the bridge records the gap), and never ends voice.
     if (bridge.bufferedAmount > (auditPaused ? 32000 : 128000)) {
@@ -214,9 +214,10 @@ function measured(data: WorkletMessage) {
       return;
     }
     if (auditPaused) { auditPaused = false; bridge.send({ type: 'audit_resumed', dropped: auditDropped }); auditDropped = 0; }
-    bridge.send({ type: 'playback_audio', voiceSessionId: data.sessionId, offsetSamples: data.offsetSamples,
-      at: audio.audioEpoch + data.startTime * 1000, pcm: btoa(String.fromCharCode(...new Uint8Array(data.pcm))),
-      microphone: data.microphone ? btoa(String.fromCharCode(...new Uint8Array(data.microphone))) : undefined });
+    const base64 = (pcm: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(pcm))), at = audio.audioEpoch + data.startTime * 1000;
+    // On Standby there is no playback: the microphone alone, where there was sound (audio-worklet.ts).
+    if (data.type === 'standby') bridge.send({ type: 'standby_audio', voiceSessionId: data.sessionId, offsetSamples: data.offsetSamples, at, microphone: base64(data.microphone) });
+    else bridge.send({ type: 'playback_audio', voiceSessionId: data.sessionId, offsetSamples: data.offsetSamples, at, pcm: base64(data.pcm), microphone: data.microphone ? base64(data.microphone) : undefined });
   }
   // Woken: the held words have all gone out (or GPT Live is already answering).
   if (data.type === 'replayed' || data.type === 'level' && loading && data.outputRms > .003) loaded(data.type === 'replayed');
