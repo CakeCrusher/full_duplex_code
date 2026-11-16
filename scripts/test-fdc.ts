@@ -26,8 +26,9 @@ const AGENTS: Record<string, Agent> = {
   pi: { args: [], resume: () => ['--continue'], quit: t => keys(t, '\x04', '\x03', '\x03') },
 };
 if (!Object.hasOwn(AGENTS, agent)) { console.error(`Usage: npm run test:fdc -- <${Object.keys(AGENTS).join('|')}>`); process.exit(2); }
-const fdc = spawnSync('sh', ['-c', 'command -v fdc'], { encoding: 'utf8' }).stdout.trim();
-if (!fdc) { console.error('fdc is not on the PATH: run npm link first.'); process.exit(2); }
+// This checkout's own fdc, as its installed command runs it: the one on the PATH may be another checkout's (a worktree
+// beside the linked one would test the linked one's code).
+const fdc = path.join(root, 'src/cli.ts');
 
 const label = `fdc-${agent}-${Date.now()}`, testDir = path.join(root, '.runs', label), cwd = path.join(testDir, 'project');
 fs.mkdirSync(cwd, { recursive: true }); spawnSync('git', ['init', '--quiet'], { cwd });
@@ -35,7 +36,9 @@ const evidence: Record<string, any> = { agent, fdc, passed: false };
 const work = 'Create five files one at a time, in this order: a.txt, b.txt, c.txt, d.txt, e.txt. Each contains just its letter. Before each file, run the shell command `sleep 15`. Write one short sentence before each file saying which file is next. When all are done, say DONE.';
 const request = synthesize('fdc-request', 'Please also create one more file, named voice dot txt, containing the word voice.');
 // Words that change the work under way and name no file: a transcript that drops a word must not leave the agent asking which one.
-const pressing = synthesize('fdc-pressing', 'Wait, this cannot wait: from now on use sleep five instead of sleep fifteen.');
+// Said twice over, what matters first: heard as "From now, instead of sleep fifteen" (twice, Nov 15 and 16), the agent
+// stopped to ask what was meant, and the check waited six minutes of voice for work that never came.
+const pressing = synthesize('fdc-pressing-2', 'Wait, this cannot wait: use sleep five. From now on sleep five seconds, not fifteen.');
 const question = synthesize('fdc-question', 'Which files have been created so far?');
 // Words that say themselves they can wait: held while the agent works, they must reach it when its turn ends.
 const waiting = synthesize('fdc-waiting', 'No rush on this one. Once you have finished what you are doing, create a file named later dot txt containing the word later.');
@@ -118,20 +121,27 @@ try {
   await voice.speak(request);
   // The request is on its way: steered into the running turn, or (with Jev) held until the turn ends when it can wait.
   const task = await until(() => run!.events().find(e => e.type === 'task' && ['held', 'sent'].includes(e.state)), { label: 'the request went, or is held for the end of the turn', timeout: 60000 });
-  // Words that can't wait reach the agent mid-turn, and bring a held request in before them.
+  // Words that can't wait reach the agent mid-turn. A request still held goes with them, as one request (they join it,
+  // outbox.ts); one already steered in is followed by them as a request of their own.
   await delay(1500); await voice.quiet();
   assert.equal((await run.status()).agent, 'working', `${agent} is still working when the pressing words are spoken`);
   await voice.speak(pressing);
-  const urgent = await until(() => run!.events().find(e => e.type === 'task' && e.id !== task.id && e.state === 'sent'), { label: 'the words that cannot wait were sent', timeout: 60000 });
+  const urgent = await until(() => run!.events().find(e => e.type === 'task' && e.state === 'sent' && (e.id !== task.id || e.joined?.length)), { label: 'the words that cannot wait were sent', timeout: 60000 });
   const arrival = (id: string) => until(() => run!.events().find(e => e.type === 'agent.input' && String(e.text).includes(id)), { label: `${agent} received request ${id.slice(0, 8)}`, timeout: 120000 });
   const received = await arrival(task.id), pressed = await arrival(urgent.id);
   const idles = () => run!.events().filter(e => e.type === 'agent.status' && e.state === 'idle' && e.at >= typedAt);
-  await until(() => fs.existsSync(path.join(cwd, 'voice.txt')) && files().length >= 6, { label: 'the work and the request done', timeout: 360000 });
+  await until(() => {
+    if (fs.existsSync(path.join(cwd, 'voice.txt')) && files().length >= 6) return true;
+    // The agent stopped with work left (it asked what was meant): nothing more comes, and voice is billed while this waits.
+    const idle = idles().at(-1);
+    if (idle && Date.now() - idle.at > 30000 && !run!.events().some(e => e.type === 'agent.status' && e.state === 'working' && e.at > idle.at)) throw new Error(`${agent} stopped before the work was done: ${String(run!.events().findLast(e => e.type === 'agent.text')?.text ?? '').slice(-200)}`);
+    return false;
+  }, { label: 'the work and the request done', timeout: 360000 });
   await waitFor(async () => (await run!.status()).agent === 'idle', `${agent} idle`, 120000);
   const firstIdle = idles()[0];
   assert.ok(pressed.at < firstIdle.at, 'the words that cannot wait arrived mid-turn, before the agent first finished');
   assert.ok(received.at <= pressed.at, 'the first request arrived before them: steered in itself, or brought in by them');
-  evidence.firstRequest = task.state === 'held' ? 'held for the end of the turn, then brought in by words that could not wait' : 'steered into the turn';
+  evidence.firstRequest = task.state !== 'held' ? 'steered into the turn' : urgent.id === task.id ? 'held for the end of the turn, then taken along by words that could not wait, as one request' : 'held, and delivered when the turn ended';
   evidence.shorterSleepUsed = run.events().some(e => e.type === 'agent.hook' && e.at > pressed.at && /sleep 5\b/.test(JSON.stringify(e.tool_input ?? '')));
   assert.match(fs.readFileSync(path.join(cwd, 'voice.txt'), 'utf8'), /voice/i);
   await delay(4000); await voice.quiet();
