@@ -8,7 +8,7 @@ import path from 'node:path';
 import { claude } from '../src/adapters/claude/index.ts';
 import { HISTORY_BYTES, Jev } from '../src/core/jev.ts';
 import { beginPerceived, perceive, perceivedText } from '../src/core/perceived.ts';
-import { liveInstructions } from '../src/core/prompts.ts';
+import { agentsOwn, catchUp, liveInstructions } from '../src/core/prompts.ts';
 import { DEFAULT_FEATURES, featuresFrom } from '../src/core/features.ts';
 import { ResumeStore, type ResumeRecord } from '../src/core/voice-resume.ts';
 import { fakeJev, harness, learn, page, settle, turn } from './live-fake.ts';
@@ -71,6 +71,30 @@ test('a fork of the last voice session continues what GPT Live perceived; a new 
   const fresh = await read();
   assert.doesNotMatch(fresh, /soft shapes|reopened/, 'a new session perceives none of it');
   assert.match(fresh, /^\[sent by fdc at the start of the voice connection, \d+ s earlier\]\nYou are attached to Claude Code/);
+});
+
+test("a request to the agent leaves out the agent's own work, which the voice was sent too; Jev still reads all of it", async t => {
+  const { h, lives, sessionId } = await harness(t);
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  const live = lives[0], mediator = h.voiceSessions.mediator!, record = h.voiceSessions.run!.record;
+  h.observer.hook({ session_id: sessionId, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_response: { stdout: 'ok' } }); mediator.feed.flush();
+  await settle();
+  // A voice connection that continues an earlier one starts with the agent's work since: the agent's own, too.
+  perceive(record, { at: Date.now(), kind: 'thinking', text: `${catchUp(claude, '/repo', 'working')}Recorded Claude context only. This is not a new user request:\nClaude Code observation (history):\nran the linter` });
+  perceive(record, { at: Date.now(), kind: 'thinking', text: 'The operator moved the page themselves; they are looking at the chart.' });
+  live.say('intermediary', 'Tests are running.', 1000);
+  await settle(5);
+  live.say('operator', 'Then commit it.', 5000);
+  await settle(5);
+  mediator.send('commit', [], null);
+  const request = h.outbox.get('commit')!.content;
+  assert.match(request, /your own events, which it was sent too, are left out/);
+  assert.doesNotMatch(request, /Claude hooks|npm test|ran the linter|continues an earlier one/, "none of the agent's own work comes back to it");
+  assert.match(request, /\[sent by fdc as silent context[^\]]*\]\nThe operator moved the page themselves; they are looking at the chart\.\n[\s\S]*voice assistant: Tests are running\.\n[\s\S]*user: Then commit it\./, 'what the voice tool told the voice, and the conversation, in order');
+  const all = perceivedText(record, mediator.history.spoken(), Date.now(), HISTORY_BYTES);
+  assert.match(all, /\[Claude hooks; part 1\/1\]\n.*npm test/s); assert.match(all, /ran the linter/);
+  const own = agentsOwn(claude);
+  assert.deepEqual([own('[Claude hooks; part 2/3]\n{"id":4}'), own('[Codex events; part 1/1]\n{}'), own('The request has been delivered to Claude Code.'), own('<fork started> A fork is open.')], [true, false, false, false]);
 });
 
 test('each thing fdc sent says how long before the latest words it was sent: Jev has no other sense of time', () => {

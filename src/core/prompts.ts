@@ -72,8 +72,9 @@ export const standbyWake = ({ profile: { name } }: Agent, operatorSpoke: boolean
 export const standbyNews = ({ profile: { name } }: Agent) =>
   `Tell the operator now, in a sentence or two, what ${name} has done since: what is ready, or what they need to decide. Don't greet them first.`;
 // A fork keeps its source's startup input; this brings it up to date.
+const CONTINUES = 'This voice connection continues an earlier one.';
 export const catchUp = ({ profile: { name, product } }: Agent, cwd: string, state: string) =>
-  `This voice connection continues an earlier one. You are attached to ${product} in ${cwd}; its current state is ${state}. ${name}'s work since the earlier connection follows, if any. Those requests were already submitted; do not resend them or narrate this history.\n`;
+  `${CONTINUES} You are attached to ${product} in ${cwd}; its current state is ${state}. ${name}'s work since the earlier connection follows, if any. Those requests were already submitted; do not resend them or narrate this history.\n`;
 
 // Startup input for a new voice connection.
 export const attachment = ({ profile: { product } }: Agent, cwd: string, state: string) =>
@@ -85,6 +86,13 @@ export const historyOmitted = ({ profile: { name } }: Agent, omitted: number) =>
 
 // Labels on context appends.
 export const feedLabel = ({ profile: { name, eventsWord } }: Agent) => `${name} ${eventsWord}`;
+/**
+ * Whether something fdc sent the voice is the agent's own work: a batch of its events (the feed's label leads each part,
+ * context-queue.ts) or the catch-up a continued voice connection starts with. A request to the agent, the main session or
+ * a fork, leaves these out of the conversation record it carries (perceived.ts): the agent has them already, most of a
+ * request's bytes went to them, and the record is cut to its latest bytes, so they pushed the conversation out.
+ */
+export const agentsOwn = (agent: Agent) => { const feed = `[${feedLabel(agent)}; part `; return (text: string) => text.startsWith(feed) || text.startsWith(CONTINUES); };
 // A burst of tool work, summed up in one line (calls are counted by tool when the adapter names them).
 export const toolWorkLine = ({ profile: { name } }: Agent, work: string) => `[${name} made ${work}; their details are omitted]`;
 
@@ -166,8 +174,8 @@ export const heldWords = ({ profile: { name, product } }: Agent, said?: string) 
   `The operator's words are held for ${product} until ${name} finishes the turn it is in; ${name} doesn't have them yet${said?.trim() ? `: "${wordsEnd(said)}"` : '.'}`;
 // The same request as the agent reads it once it arrives: why it comes when it does.
 const span = (seconds: number) => seconds < 2 ? 'a moment' : seconds < 90 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
-export const heldForTurnEnd = (seconds: number) => `The user said this ${span(seconds)} ago, while you were working; the voice tool judged that it could wait and held it until your turn ended.`;
-export const heldThenPressed = (seconds: number) => `The user said this ${span(seconds)} ago; the voice tool was holding it until your turn ended, and delivers it now because what they said next can't wait: that is the request that follows this one.`;
+export const heldForTurnEnd = (seconds: number, more = false) => `The user said this ${more ? `while you were working, the first of it ${span(seconds)} ago` : `${span(seconds)} ago, while you were working`}; the voice tool judged that it could wait and held it until your turn ended.`;
+export const heldThenPressed = (seconds: number) => `The user said the first of this ${span(seconds)} ago; the voice tool was holding it until your turn ended, and delivers all of it now because what they said last can't wait.`;
 /** A note added to a request already written: after its opening note, before the conversation. */
 export const withNote = (request: string, note: string) => request.includes('\n\n') ? request.replace('\n\n', ` ${note}\n\n`) : `${request} ${note}`;
 
@@ -177,11 +185,24 @@ const SPEAKERS: Record<Utterance['role'], string> = { operator: 'user', intermed
 /** One utterance as everything fdc writes the conversation down: the speaker, then the words. */
 export const spokenLine = ({ role, text }: Pick<Utterance, 'role' | 'text'>) => `${SPEAKERS[role]}: ${text.replace(/\s+/g, ' ').trim()}`;
 const transcript = (utterances: readonly Pick<Utterance, 'role' | 'text'>[]) => utterances.map(spokenLine).join('\n');
-export const voiceRequest = (utterances: readonly Pick<Utterance, 'role' | 'text'>[], notes: readonly string[] = []) =>
-  `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.${notesText(notes)}\n\n${transcript(utterances)}`;
+const SPOKEN_REQUEST = `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.`;
+export const voiceRequest = (utterances: readonly Pick<Utterance, 'role' | 'text'>[], notes: readonly string[] = []) => `${SPOKEN_REQUEST}${notesText(notes)}\n\n${transcript(utterances)}`;
 /** A request cut from the conversation record (perceived.ts): the same lines the voice was given and Jev reads, since the session's previous request. */
-export const recordRequest = (conversation: string, notes: readonly string[] = []) =>
-  `User request (transcribed speech): the conversation record since your previous voice request, as the voice assistant that passes requests on to you got it: the user's speech and the assistant's, one utterance per line, and what the voice tool told the assistant meanwhile (the bracketed lines, each followed by its text). The request is in the "user:" lines; the rest is context. A "<fork started>" line marks where the user moved a tangent to a fork of this session, opened in a window of its own; "<fork ended>" where they came back: what lies between went to the fork.${notesText(notes)}\n\n${conversation}`;
+export const recordRequest = (conversation: string, notes: readonly string[] = []) => `${RECORD_REQUEST}${notesText(notes)}\n\n${conversation}`;
+const RECORD_REQUEST =
+  `User request (transcribed speech): the conversation record since your previous voice request, as the voice assistant that passes requests on to you got it: the user's speech and the assistant's, one utterance per line, and what the voice tool told the assistant meanwhile (the bracketed lines, each followed by its text; your own events, which it was sent too, are left out). The request is in the "user:" lines; the rest is context. A "<fork started>" line marks where the user moved a tangent to a fork of this session, opened in a window of its own; "<fork ended>" where they came back: what lies between went to the fork.`;
+/**
+ * A request joining one that still waits (outbox.ts): one request, as if cut once from where the first began to the
+ * latest words. The first stays as written; the second's own notes follow its, and its conversation the first's.
+ */
+export function joinRequests(first: string, second: string) {
+  const parts = (text: string) => { const at = text.indexOf('\n\n'); return at < 0 ? [text, ''] : [text.slice(0, at), text.slice(at + 2)]; };
+  const [head, body] = parts(first), [head2, body2] = parts(second), opening = [RECORD_REQUEST, SPOKEN_REQUEST].find(text => head2.startsWith(text));
+  // Not a request of either form (speech handed over as voice ended): it follows whole.
+  if (opening === undefined) return `${first}\n\n${second}`;
+  const notes = head2.slice(opening.length).trim();
+  return `${head}${notes && !head.includes(notes) ? ` ${notes}` : ''}\n\n${body}\n${body2}`;
+}
 // Why speech an earlier request took is in this one: it never reached the agent.
 const notesText = (notes: readonly string[]) => notes.length ? ` ${notes.join(' ')}` : '';
 const HANDLED = { sessions: 'about turning voice sessions on or off', companion: 'about how the voice assistant itself should behave' };

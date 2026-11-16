@@ -2,7 +2,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
 import type { Harness } from './bridge.ts';
-import type { OutboxEntry } from './outbox.ts';
+import { requestIds, type OutboxEntry } from './outbox.ts';
 import type { Page } from './pages.ts';
 import { LiveSession, type CloseResult } from './live-session.ts';
 import { Mediator } from './mediator.ts';
@@ -10,7 +10,7 @@ import { jobTurn, passingOn, routeActions } from './turn.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { recentHistory } from './recent-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
-import { attachment, catchUp, disregardInstruction, goalState, greeting, heldWords, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, sentWords, standbyNews, standbyWake, uncertainWords, viewerMoved, walkOn } from './prompts.ts';
+import { agentsOwn, attachment, catchUp, disregardInstruction, goalState, greeting, heldWords, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, sentWords, standbyNews, standbyWake, uncertainWords, viewerMoved, walkOn } from './prompts.ts';
 import { focusLine, placeOf, Stage, type StageCommand, type StageHere, type StageView } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
@@ -494,7 +494,7 @@ export class VoiceSessions {
       read: bridge.jev ? (trigger, spoken, record) => bridge.read({ trigger, spoken, ...record }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0, replays: Boolean(wake?.operator),
       // Requests are cut from the record Jev reads and the voice was given, from the session's own place in it.
-      conversation: { text: (from, until) => perceivedText(record, mediator.history.spoken(), until, HISTORY_BYTES, from), cursor: () => bridge.forks.cursors[bridge.forks.focus],
+      conversation: { text: (from, until) => perceivedText(record, mediator.history.spoken(), until, HISTORY_BYTES, from, agentsOwn(agent)), cursor: () => bridge.forks.cursors[bridge.forks.focus],
         move: (at, back) => { const { cursors, focus } = bridge.forks; cursors[focus] = back ? Math.min(cursors[focus], at) : at; } } });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake, perceivedInput };
     // A fork knows the page state its source was told, and how full its context is; a new session, the page it starts with.
@@ -816,12 +816,12 @@ export class VoiceSessions {
   }
   /** A request may not have reached the agent: its speech goes with that session's next request, and the voice, told it went, hears so. */
   uncertainDelivery(task: OutboxEntry) {
-    this.senders.get(task.id)?.undelivered(task.id);
+    for (const id of requestIds(task)) this.senders.get(id)?.undelivered(id);
     const live = this.live;
     if (task.confirmationSent && live?.state === 'active') live.append('thinking', uncertainWords(this.bridge.agent, task.said), null).catch(() => {});
   }
   /** A request reached the agent: its speech counts as delegated. */
-  confirmDelivery(task: OutboxEntry) { this.senders.get(task.id)?.delivered(task.id); this.senders.delete(task.id); }
+  confirmDelivery(task: OutboxEntry) { for (const id of requestIds(task)) { this.senders.get(id)?.delivered(id); this.senders.delete(id); } }
   /**
    * A request is handed to the agent now: the voice is told which words went, at once and before anything else is read,
    * so Jev, which reads what the voice was sent, knows it too and doesn't send them again. Told when delivery was

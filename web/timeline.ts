@@ -43,8 +43,12 @@ export class TimelineView {
     }
   }
   pan(delta: number) { this.follow = false; this.viewStart += delta; this.render(); }
+  /** A request still waiting to go grows until it does. */
+  waiting(item: Item) { return item.track === 'requests' && (item.state === 'held' || item.state === 'queued'); }
   timing(item: Item) {
     const start = elapsed(item.start - this.origin, true);
+    if (this.waiting(item)) return `decided ${start} · not sent yet · ${((Date.now() - item.start) / 1000).toFixed(1)}s so far`;
+    if (item.track === 'requests' && item.waitedMs >= 1000) return `decided ${start} · sent ${elapsed(item.start + item.waitedMs - this.origin, true)} · waited ${(item.waitedMs / 1000).toFixed(1)}s`;
     return item.end > item.start ? `${start} – ${elapsed(item.end - this.origin, true)} · ${((item.end - item.start) / 1000).toFixed(2)}s` : `${start} · instant event`;
   }
   detailText(item: Item) {
@@ -81,7 +85,8 @@ export class TimelineView {
     const extras: string[] = [];
     if (item?.index !== undefined) extras.push(`Batch ${item.index + 1}${item.final ? ' · final' : ''}`);
     if (item?.state && item.track === 'context') extras.push(item.state === 'sent' ? 'Sent to Live; waiting for acknowledgment' : 'Acknowledged by Live');
-    else if (item?.state) extras.push(({ queued: 'Queued', held: 'Held until the turn ends', dispatching: 'Sending', sent: `Delivered to ${transport}`, observed: `Received by ${name}`, uncertain: 'Delivery uncertain' } as Record<string, string>)[item.state] ?? item.state);
+    else if (item?.state) extras.push(({ queued: `Waiting for ${name} to be ready`, held: `Waiting for ${name}'s turn to end; it goes sooner if the operator says something that can't wait`, dispatching: 'Sending', sent: `Delivered to ${transport}`, observed: `Received by ${name}`, uncertain: 'Delivery uncertain' } as Record<string, string>)[item.state] ?? item.state);
+    if (item?.joined?.length) extras.push(`More was added while it waited, at ${item.joined.map((at: number) => elapsed(at - this.origin, true)).join(', ')}`);
     if (item?.receivedAt) extras.push(`Transcript received at ${elapsed(item.receivedAt - this.origin, true)}`);
     if (item?.peak) extras.push(`Peak level ${Math.round(item.peak * 100)}%`);
     if (item?.injectionStartMs !== undefined) extras.push(`API injection estimate: ${(item.injectionStartMs / 1000).toFixed(2)}–${(item.injectionEndMs / 1000).toFixed(2)}s into voice`);
@@ -102,6 +107,10 @@ export class TimelineView {
     if (item.track === 'transcript') return `${item.label}: ${item.text.trim()}`;
     if (item.track === 'agent') return item.label;
     if (item.track === 'notes') return `Voice note · ${Math.round((item.end - item.start) / 1000)} s`;
+    // A request not sent yet says what it waits for; one that waited says how long.
+    if (item.track === 'requests' && item.state === 'held') return `Waiting for ${name}'s turn to end`;
+    if (item.track === 'requests' && item.state === 'queued') return `Waiting for ${name}`;
+    if (item.track === 'requests' && item.waitedMs >= 1000) return `${item.label} · waited ${Math.round(item.waitedMs / 1000)} s`;
     return item.label;
   }
   showTooltip(item: Item, target: HTMLElement) {
@@ -171,18 +180,25 @@ export class TimelineView {
     const visible = new Set<string>(); const laneCounts: Record<string, number> = {};
     for (const item of this.items.values()) {
       if (item.track === 'standby') { this.band(item, now, end); continue; }
-      if (item.end < this.viewStart || item.start > end) continue;
+      // A request waiting to go runs to now, dashed; once sent its bar stops, and stays dashed for as long as it waited.
+      const waiting = this.waiting(item), stop = waiting ? Math.max(item.end, now) : item.end;
+      if (stop < this.viewStart || item.start > end) continue;
       visible.add(item.id); laneCounts[item.track] = (laneCounts[item.track] ?? 0) + 1;
       const button = this.nodes.get(item.id) ?? this.makeNode(item);
-      const point = item.end === item.start;
+      const point = stop === item.start;
       const left = clamp((item.start - this.viewStart) / this.windowMs * 100, 0, 100);
-      const right = clamp((item.end - this.viewStart) / this.windowMs * 100, 0, 100);
+      const right = clamp((stop - this.viewStart) / this.windowMs * 100, 0, 100);
       button.style.left = `${left}%`; button.style.width = point ? '8px' : `max(8px, ${right - left}%)`;
       button.classList.toggle('point', point); button.classList.toggle('selected', this.selected === item.id);
       button.classList.toggle('active', Boolean(item.active && now - item.end < 500));
       button.classList.toggle('operator-text', item.role === 'operator');
       button.classList.toggle('live-text', item.role === 'intermediary');
       button.classList.toggle('uncertain', item.state === 'uncertain');
+      button.classList.toggle('pending', waiting); button.classList.toggle('waited', !waiting && item.waitedMs >= 1000);
+      // Each moment more was added to it while it waited: a tick on the bar.
+      const joins: number[] = item.joined ?? [], ticks = button.querySelectorAll<HTMLElement>('i');
+      for (let i = ticks.length; i < joins.length; i++) button.append(document.createElement('i'));
+      button.querySelectorAll<HTMLElement>('i').forEach((tick, i) => { tick.style.left = `${clamp((joins[i] - item.start) / Math.max(1, stop - item.start) * 100, 0, 100)}%`; });
       button.classList.toggle('commentary', item.kind === 'commentary');
       button.classList.toggle('flagged', Boolean(item.flagged));
       button.dataset.role = item.role ?? ''; button.dataset.state = item.state ?? '';

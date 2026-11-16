@@ -51,6 +51,25 @@ test('a voice delivery and matching prompt hook update one request without inven
   assert.equal(timeline.items.size, 2);
 });
 
+test('a request that waits is one item from the moment fdc decided to send it until it went; what joins it marks the bar, and its checks attach', () => {
+  const timeline = new Timeline(0, claude);
+  timeline.add({ type: 'task', id: 'legend', queuedAt: 1000, at: 1000, state: 'held', text: 'Add a legend' });
+  // A check of words that join it arrives before the outbox says they joined.
+  timeline.add({ type: 'jev_check', requestId: 'title', at: 5100, kind: 'handoff', outcome: 'Jev passed it on', scores: { needsAgent: .9, handOff: 'passed' } });
+  timeline.add({ type: 'task', id: 'legend', queuedAt: 1000, at: 5000, state: 'held', text: 'Add a legend\nAnd a title', joined: [{ id: 'title', at: 5000 }] });
+  let item = timeline.snapshot().items[0];
+  assert.deepEqual([timeline.items.size, item.state, item.start, item.joined, item.waitedMs, item.checks.length], [1, 'held', 1000, [5000], undefined, 1]);
+  timeline.add({ type: 'task', id: 'legend', queuedAt: 1000, at: 9000, state: 'queued', text: 'Add a legend\nAnd a title', joined: [{ id: 'title', at: 5000 }] });
+  timeline.add({ type: 'task', id: 'legend', queuedAt: 1000, at: 9001, state: 'dispatching', joined: [{ id: 'title', at: 5000 }] });
+  timeline.add({ type: 'task', id: 'legend', queuedAt: 1000, at: 9200, state: 'sent', joined: [{ id: 'title', at: 5000 }] });
+  item = timeline.snapshot().items[0];
+  assert.deepEqual([timeline.items.size, item.state, item.waitedMs, item.sentAt, item.joined, item.text], [1, 'sent', 8001, 9200, [5000], 'Add a legend\nAnd a title'], 'it waited 8 s, and stops where it was sent');
+  // One that goes at once waited no time.
+  timeline.add({ type: 'task', id: 'now', queuedAt: 10000, at: 10000, state: 'queued', text: 'Stop' });
+  timeline.add({ type: 'task', id: 'now', queuedAt: 10000, at: 10002, state: 'dispatching' });
+  assert.equal(timeline.snapshot().items[1].waitedMs, 2);
+});
+
 test('every Claude observation is visible once; derived assistant text does not duplicate hooks', () => {
   const timeline = new Timeline(0, claude);
   for (let i = 0; i < 650; i++) timeline.add({ type: 'agent_observation', at: i, name: i % 2 ? 'MessageDisplay' : 'PostToolUse', text: `Hook ${i}` });

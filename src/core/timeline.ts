@@ -111,16 +111,25 @@ export class Timeline {
       let item = this.requests.get(event.id);
       if (!item) {
         item = this.item({ track: 'requests', requestId: event.id, start: event.queuedAt ?? at, end: at, label: 'Voice request',
-          text: event.text, state: event.state, source: 'Request delivery, not agent execution time',
+          text: event.text, state: event.state, source: 'From the moment fdc decided to send it until it went: a dashed bar is one that waited (for the turn to end, or for the agent to connect). Not agent execution time',
         });
         this.requests.set(event.id, item);
         for (const check of this.checks.get(event.id) ?? []) this.attach(item, check);
         this.checks.delete(event.id);
       }
+      // Requests that joined it while it waited (outbox.ts): each moment fdc decided to send more, and Jev's checks of their words.
+      for (const request of event.joined ?? []) {
+        if (this.requests.get(request.id) === item) continue;
+        this.requests.set(request.id, item); item.joined = [...item.joined ?? [], request.at];
+        for (const check of this.checks.get(request.id) ?? []) this.attach(item, check);
+        this.checks.delete(request.id);
+      }
       item.text = event.text ?? item.text;
       item.notification = event.notification ?? item.notification;
       if (item.observedContent !== undefined) item.contentMatches = item.observedContent === item.text;
       if (item.state !== 'observed') { item.state = event.state; item.end = Math.max(item.end, at); }
+      // From the decision to send it until it went: held for the turn's end, or waiting for the agent to connect.
+      if (event.state !== 'held' && event.state !== 'queued') item.waitedMs ??= at - item.start;
       if (event.state === 'sent') item.sentAt ??= at;
       changed.push(item);
     }

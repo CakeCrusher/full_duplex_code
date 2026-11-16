@@ -70,14 +70,16 @@ export function perceive(record: ResumeRecord, entry: PerceivedEntry) {
  * The latest of what GPT Live perceived by `until`, within `maxBytes`, oldest first: what fdc sent it, what was said
  * in this conversation's voice connections before this one (record.turns, since the session that started it), and what
  * was said in this one (`spoken`: the words before the latest, as the caller reads them). Whole entries, but for the oldest,
- * cut to its end when only part of it fits.
+ * cut to its end when only part of it fits. Jev reads all of it; a request to the agent is cut from `from` and leaves out
+ * the agent's own work (prompts.ts, agentsOwn).
  */
-export function perceivedText(record: ResumeRecord, spoken: readonly Spoken[], until: number, maxBytes: number, from = -Infinity): string {
+export function perceivedText(record: ResumeRecord, spoken: readonly Spoken[], until: number, maxBytes: number, from = -Infinity, leaveOut?: (text: string) => boolean): string {
   const since = record.perceivedSince ?? 0, thisConnection = spoken[0]?.at ?? Infinity;
   const earlier = record.turns.filter(turn => (turn.at ?? 0) >= since && (turn.at ?? 0) < thisConnection).map(turn => ({ ...turn, at: turn.at ?? 0 }));
   // Sent in the same millisecond as `until` (the latest words' first) counts as before it.
   // From `from` on (a request: since the session's last one, without the voice's startup input), or all of it (Jev).
-  const entries = [...(record.perceived ?? []).filter(e => e.at <= until && (from === -Infinity || !('kind' in e) || e.kind !== 'start')), ...earlier, ...spoken].filter(e => e.at > from)
+  // A request leaves out what fdc sent the voice of the agent's own work (`leaveOut`): the agent has it already.
+  const entries = [...(record.perceived ?? []).filter(e => e.at <= until && (from === -Infinity || !('kind' in e) || e.kind !== 'start') && !('kind' in e && leaveOut?.(e.text))), ...earlier, ...spoken].filter(e => e.at > from)
     .map((entry, order) => ({ entry, order })).sort((a, b) => a.entry.at - b.entry.at || a.order - b.order).map(({ entry }) => entry);
   const kept: string[] = [];
   let room = maxBytes;
