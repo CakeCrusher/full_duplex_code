@@ -1,7 +1,8 @@
 // The page follows what the voice says (presenter.ts): each sentence it says, bare acknowledgments aside, asks Jev which
 // command shows what it is talking about and whether another must follow; a part's own controls are offered once that
-// part is on screen. The operator's goal is kept apart from the page (voice-sessions.ts), and where they move the page
-// themselves reaches the voice (watchViewer).
+// part is on screen. What the operator asks for that a command does, the voice tool does as their turn ends, one command
+// after another (turn.ts). The operator's goal is kept apart from the page (voice-sessions.ts), and where they move the
+// page themselves reaches the voice (watchViewer).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { StageNothing, type StageView } from '../src/core/stage.ts';
@@ -35,13 +36,13 @@ function stageOf(h: any, { nothing = new Set<string>() } = {}) {
 }
 const thinking = (live: any) => live.appended.filter(([kind]: string[]) => kind === 'thinking').map(([, text]: string[]) => text);
 
-test("the page follows the voice's words, not only turning phrases: \"getting you there\" moves it; an acknowledgment asks nothing; the operator's words move nothing", async t => {
+test("the page follows the voice's words, not only turning phrases: \"getting you there\" moves it; an acknowledgment asks nothing; words of the operator's that Jev finds no command for move nothing", async t => {
   const { h, lives } = await harness(t);
   const runs = stageOf(h);
   const moments = fakeJev(h, m => m.trigger === 'cue' ? { page: /getting you there/.test(m.latest!.text) ? { command: 'goto_matrix', more: .1 } : {} } : m.trigger === 'job' ? { needsAgent: .1 } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   await turn(h, 'Take me to the projects by approaches.');
-  assert.deepEqual(runs, [], "the operator's words move nothing");
+  assert.deepEqual(runs, [], 'no command chosen for their words: nothing runs');
   h.presenter.heard(' Okay.'); h.presenter.heard(' One sec.');
   await settle(50);
   assert.ok(!moments.some(m => m.trigger === 'cue'), 'a bare acknowledgment shows nothing, so Jev is not asked');
@@ -66,7 +67,7 @@ test("a part's own control, offered once the part is on screen, runs as the next
   const step = moments.find(m => m.trigger === 'step')!;
   assert.deepEqual(step.done!.map(c => c.id), ['goto_waves']);
   assert.ok(step.page!.commands.some(c => c.id === 'page_split_campaigns'), 'read again after the first command: the part offers its own');
-  await until(() => thinking(lives[0]).some((text: string) => /^You moved the page; on screen now: FDC split into five rows.*\. Here its controls can: Split the FDC row into its campaigns$/.test(text)));
+  await until(() => thinking(lives[0]).some((text: string) => /^You moved the page; on screen now: FDC split into five rows.*\. Its controls can now also: Split the FDC row into its campaigns$/.test(text)));
   await settle(50);
   assert.equal(thinking(lives[0]).slice(before).filter((text: string) => text.startsWith('You moved the page')).length, 1, 'told once, what the last step shows');
   assert.equal(moments.filter(m => m.trigger === 'step').length, 1, 'no more asked once Jev wants none');
@@ -183,18 +184,44 @@ test('a walkthrough goes on while the operator listens, as long as the voice car
   assert.equal(cues().length, 2, "a question doesn't restart the walk by itself");
 });
 
-test('the first sentence of the reply to the operator is read even when it only acknowledges: "On it." takes the request on', async t => {
-  const { h } = await harness(t);
+test("what the operator asks for that a command of the page does, the voice tool does as their turn ends: one command after another, told to GPT Live once, and nothing for the agent", async t => {
+  const { h, lives } = await harness(t);
   const runs = stageOf(h);
-  const moments = fakeJev(h, m => m.trigger === 'cue' ? { page: /On it/.test(m.latest!.text) ? { command: 'goto_waves', more: .8 } : {} } : m.trigger === 'step' ? { page: m.page!.commands.some(c => c.id === 'page_split_campaigns') ? { command: 'page_split_campaigns', more: 0 } : {} } : {});
+  const moments = fakeJev(h, m => m.trigger === 'turn' ? { page: { command: 'goto_waves', more: .8, asked: .9 } }
+    : m.trigger === 'step' ? { page: m.page!.commands.some(c => c.id === 'page_split_campaigns') && !m.done!.some(c => c.id === 'page_split_campaigns') ? { command: 'page_split_campaigns', more: .9 } : {} }
+    : m.trigger === 'job' ? { needsAgent: .1, ready: .9 } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  const decided = await turn(h, 'Go to the waves and split the FDC row there.');
+  assert.deepEqual(runs, [{ ids: ['goto_waves'], fast: true }, { ids: ['page_split_campaigns'], fast: true }], 'the command for the first part, then the page read again and the next');
+  const steps = moments.filter(m => m.trigger === 'step');
+  assert.equal(steps.length, 2, 'asked again after each command, until Jev wants no more');
+  assert.equal(steps[0].latest!.role, 'operator', "the steps go on from the operator's own words");
+  assert.deepEqual(steps[1].done!.map(c => c.id), ['goto_waves', 'page_split_campaigns']);
+  assert.match(decided.actions!.did!.told, /^The voice tool did what the operator asked on the page \(Go to the section "FDC waves"; Split the FDC row into its campaigns\); on screen now: FDC split into five rows: before the loop, waves one to four\. \(FDC waves, section 3 of 3\)\. Its controls can now also: Split the FDC row into its campaigns$/);
+  assert.equal(decided.send, false);
+  assert.equal(decided.settled, true, 'done on the page: these words never go by themselves');
+  assert.deepEqual(moments.find(m => m.trigger === 'job')!.done!.map(c => c.id), ['goto_waves', 'page_split_campaigns'], 'the job delegation reads what was done: whether anything is left for the agent');
+  // The voice then confirms: its words don't run the same command again, and a bare acknowledgment asks nothing.
   h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: 'Go to the waves and split the FDC row there.', start_ms: 0, end_ms: 900 });
   h.presenter.heard(' On it.');
-  await until(() => runs.length === 2);
-  assert.deepEqual(runs.map(r => r.ids[0]), ['goto_waves', 'page_split_campaigns']);
-  h.presenter.heard(' Okay.');
   await settle(50);
-  assert.equal(moments.filter(m => m.trigger === 'cue').length, 1, 'later acknowledgments in the reply ask nothing');
+  assert.ok(!moments.some(m => m.trigger === 'cue'), 'a bare acknowledgment is not read: the request was');
+  fakeJev(h, m => m.trigger === 'cue' ? { page: { command: 'page_split_campaigns', more: 0 } } : {});
+  h.presenter.heard(' I have split the FDC row into its campaigns.');
+  await settle(100);
+  assert.equal(runs.length, 2, 'what the voice tool just did for the request, the voice saying so does not do again');
+  assert.ok(!thinking(lives[0]).some((text: string) => text.startsWith('You moved the page')), 'and it is not told it moved the page');
+});
+
+test("only what they ask for: a remark about the page, a question, or \"walk me through it\" runs nothing, whatever command Jev would choose", async t => {
+  const { h } = await harness(t);
+  const runs = stageOf(h);
+  fakeJev(h, m => m.trigger === 'turn' ? { page: { command: 'goto_matrix', more: .2, asked: .3 } } : { needsAgent: .1 });
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  const decided = await turn(h, 'The projects by approaches part was the interesting one.');
+  assert.deepEqual(runs, []);
+  assert.equal(decided.actions!.did, undefined);
+  assert.equal(decided.settled, undefined);
 });
 
 test("for a while after the agent puts a page in front, the voice's words don't switch to another tab", async t => {

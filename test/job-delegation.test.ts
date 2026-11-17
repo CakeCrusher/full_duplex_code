@@ -24,7 +24,9 @@ test("two calls over the same state that ask different questions: the job delega
   assert.match(bodies[0].state.why, /the voice companion has replied/);
   assert.ok(!('needs_agent' in bodies[1].questions), "the voice tool's own reading never asks whether the words go to the agent");
   assert.ok('companion_only' in bodies[1].questions && !('standby' in bodies[1].questions), 'Standby is read later, once the conversation has gone quiet');
-  assert.ok(!('page_command' in bodies[1].questions), "the operator's words never move the page: only the voice's do");
+  assert.match(bodies[1].questions.page_command.instructions, /does what the operator asks for in the latest words/, 'with a page open, what they ask of it: its commands do that without the agent');
+  assert.match(bodies[1].questions.page_asked.instructions, /ask for something to be done or shown on the page right now/, 'only what they ask for: a remark or a question runs nothing');
+  assert.ok(!('withheld' in bodies[1].questions), 'no instructions in force, nothing for them to keep from the agent');
   assert.equal(bodies[1].state.voice_reply, undefined);
   assert.deepEqual([job.needsAgent, job.ready, own.needsAgent], [.8, .6, null]);
   const silent = await jev.read({ trigger: 'job', latest });
@@ -34,6 +36,12 @@ test("two calls over the same state that ask different questions: the job delega
   await jev.read({ trigger: 'turn', latest });
   assert.deepEqual(Object.keys(bodies[3].questions), ['goal'], "without the learner or the tuner, nothing acts on words about the companion's behavior, so they aren't asked about");
   assert.equal(bodies[3].state.goal, '(none)', 'the goal in force, which new words may replace or end');
+  const kept = await jev.read({ trigger: 'delegation', latest, instructions: ["I1: Don't delegate everything to Claude; make adjustments yourself when you can."] });
+  assert.match(bodies[4].questions.withheld.instructions, /keep the latest words from the coding agent/, "with instructions in force, whether they keep these words from the agent");
+  assert.equal(kept.withheld, 0, 'as Jev answered');
+  const done = await jev.read({ trigger: 'job', latest, page: view, done: [{ id: 'goto_options', say: 'Go to the section "Options"', shown: 'Options: three ways forward.' }] });
+  assert.equal(bodies[5].state.page_done, '1. Go to the section "Options" → Options: three ways forward.', 'what the voice tool did on the page for these words, for reading whether anything is left for the agent');
+  assert.equal(done.needsAgent, .8);
 });
 
 test("the job delegation waits past the voice's acknowledgments for what it makes of the words, or until it stops", async t => {
@@ -125,7 +133,7 @@ test('moments after a request reached the agent, Jev is asked whether the next w
   assert.equal(jobs()[3].sent, undefined, 'only moments after a request');
 });
 
-test("with a page open, the job delegation knows what its controls can do, and the agent hears what the user was looking at; the page itself doesn't move", async t => {
+test("with a page open, the job delegation knows what its controls can do, and the agent hears what the user was looking at; a request none of its commands does moves nothing", async t => {
   const { h } = await harness(t);
   stage(h);
   const runs: string[][] = []; h.stage.run = async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; };
@@ -134,13 +142,69 @@ test("with a page open, the job delegation knows what its controls can do, and t
   assert.equal(decided.send, true);
   assert.match(decided.note!, /^When they said it, the user was looking at "Briefing" \(http:\/\/localhost\/b\.html\) in the browser, at: section "Intro"\.$/);
   assert.equal(moments.find(m => m.trigger === 'job')!.page, view, "the job delegation reads the page's commands: what they can't do goes to the agent, to add");
-  assert.equal(moments.find(m => m.trigger === 'turn')!.page, undefined);
-  assert.deepEqual(runs, []);
+  assert.equal(moments.find(m => m.trigger === 'turn')!.page, view, "the voice tool's own reading has the page too: what they ask for that a command does, it does there");
+  assert.deepEqual(runs, [], 'Jev chose no command: nothing runs');
+});
+
+test("GPT Live asking to pass on words the voice tool carried out on the page doesn't send them: Jev's reading of its reply decides, and they don't go when voice ends", async t => {
+  const { h, lives } = await harness(t);
+  stage(h);
+  const runs: string[][] = []; h.stage.run = async (ids: string[]) => { runs.push(ids); return { done: ids.map(id => view.commands.find(c => c.id === id)!), onScreen: 'Options: three ways forward.' }; };
+  const moments = fakeJev(h, m => m.trigger === 'delegation' ? { page: { command: 'goto_options', more: .1, asked: .9 } } : m.trigger === 'job' ? { needsAgent: .1, ready: .9 } : {});
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); };
+  const live = h.voiceSessions.live!;
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Take me to the options.', start_ms: 0, end_ms: 900 });
+  live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' }, offset_ms: 1000 });
+  await until(() => moments.some(m => m.trigger === 'job'));
+  await settle(50);
+  assert.deepEqual(runs, [['goto_options']], 'what they asked for, done on the page');
+  assert.deepEqual(moments.find(m => m.trigger === 'job')!.done!.map(c => c.id), ['goto_options'], 'the job delegation reads what was done');
+  assert.deepEqual(delivered, [], "GPT Live's ask alone no longer sends them, and Jev finds nothing left for the agent");
+  const thinking = lives[0].appended.filter(([kind]) => kind === 'thinking').map(([, text]) => text);
+  assert.ok(thinking.some(text => text.startsWith('The voice tool did what the operator asked on the page (Go to the section "Options"); on screen now: Options: three ways forward.')), 'GPT Live hears what was done');
+  assert.ok(!thinking.some(text => text.startsWith('Nothing was sent')), 'and nothing else about its ask');
+  h.voiceSessions.mediator!.handOff('operator ended voice');
+  await settle(50);
+  assert.deepEqual(delivered, [], 'done on the page: nothing to hand over when voice ends');
+});
+
+test("while the operator's instructions keep words from the agent, GPT Live asking to pass them on doesn't send them: Jev's reading decides, GPT Live hears why nothing went, and what they ask of the agent by name goes", async t => {
+  const { h, lives } = await harness(t);
+  const moments = fakeJev(h, m => m.trigger === 'delegation' ? { withheld: /tell Claude/i.test(m.latest!.text) ? .1 : .9 } : m.trigger === 'job' ? { needsAgent: /histograms/.test(m.latest!.text) ? .8 : .2, ready: .9 } : {});
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); h.voiceSessions.mediator!.delivered(request.id); };
+  const live = h.voiceSessions.live!, jobs = () => moments.filter(m => m.trigger === 'job');
+  const thinking = () => lives[0].appended.filter(([kind]) => kind === 'thinking').map(([, text]) => text);
+  // An order the operator has told the companion to take itself: GPT Live asks, Jev reads, nothing goes.
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'I want it with vanilla and decaf.', start_ms: 0, end_ms: 900 });
+  live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' }, offset_ms: 1000 });
+  await until(() => jobs().length === 1);
+  await until(() => thinking().some(text => text === "Nothing was sent to Claude Code: the operator's instructions keep this from Claude. It goes only when they ask for Claude themselves."));
+  assert.equal(delivered.length, 0);
+  // Work only the agent can do: Jev's own reading sends it, as ever.
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ' I need two histograms of the scores.', start_ms: 5000, end_ms: 5900 });
+  live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd2', target: 'client' }, offset_ms: 6000 });
+  await until(() => delivered.length === 1);
+  assert.match(delivered[0].said, /^I need two histograms of the scores\.$/, 'the order before it was settled: it goes along as context, not as a request');
+  // The operator asks for the agent themselves: it goes on GPT Live's ask, as before.
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ' Tell Claude to add a caramel option.', start_ms: 10000, end_ms: 10900 });
+  live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd3', target: 'client' }, offset_ms: 11000 });
+  await until(() => delivered.length === 2);
+  assert.equal(jobs().length, 2, "no reading of whether it needs the agent: GPT Live's ask sends it");
+});
+
+test("words that are only about how the companion behaves don't go to the agent on Jev's own reading either", async t => {
+  const { h } = await harness(t);
+  fakeJev(h, m => m.trigger === 'turn' ? { companionOnly: .9 } : { needsAgent: .5, ready: .9 });
+  const decided = await turn(h, "I want you to be in full control. I don't want you delegating to Claude Code.");
+  assert.equal(decided.send, false);
+  assert.match(decided.told!, /^The operator told you how you should behave/);
 });
 
 test("the voice answers what it can with moderate confidence, asks when in doubt, and leaves to the agent only what it can't do: the same account in its instructions and in Jev's", () => {
   const text = liveInstructions(claude, { jev: true }), shared = roles(claude, new Set(DEFAULT_FEATURES));
-  assert.match(shared, /It answers whatever it can with moderate confidence, from what it knows and what it was told \(this conversation, Claude's work, the page\); when in doubt about what the operator means, it asks; .* Only a request that is fully stated and that the voice companion can't do itself is Claude's\./);
+  assert.match(shared, /It answers whatever it can with moderate confidence, from what it knows and what it was told \(this conversation, Claude's work, the page\); when in doubt about what the operator means, it asks; .* the voice tool reads their words, does what the page's controls can do, and sends Claude whatever needs it; .* Only a request that is fully stated and that neither the companion nor the page can do is Claude's\./);
   assert.ok(text.includes(shared), "in the voice companion's instructions");
   assert.ok(new Jev({ apiKey: 'k', log: () => {}, agent: claude }).setting.includes(shared), "and in what Jev reads: written apart, Jev's account had drifted");
   assert.doesNotMatch(text, /never guess|would have to check|What you can answer/, 'no script for not knowing: it leaned on the agent');
@@ -151,6 +215,17 @@ test("the page follows what the voice says and leans toward showing; how is its 
   const state = pageState({ title: 'Briefing', names: ['Intro', 'Options'], others: [], parts: [], where: 'section "Intro"', controls: ['Show the error bars', 'Switch to the table view'] });
   assert.match(state, /Its parts, by name: Intro, Options\. Besides showing its parts, its controls can: Show the error bars; Switch to the table view\./);
   assert.doesNotMatch(pageState({ title: 'Briefing', names: ['Intro'], others: [], parts: [], where: '' }), /controls/);
+  // An app's controls, all of them, and the page in its own words: an order page's 50 were cut to 12 and 600 characters
+  // (Nov 17), so the voice never knew it could remove a drink or place the order.
+  const controls = [...Array.from({ length: 48 }, (_, i) => `Add drink number ${i + 1} of the menu to the order ticket`), 'Remove the Mocha from the order ticket', 'Place the order: send the ticket to the bar'];
+  const parts = [{ name: 'Menu', text: 'x'.repeat(5000) }];
+  const app = pageState({ title: 'Order board', about: 'Café order board that the barista runs', names: ['Menu'], others: [], parts, where: 'Menu', controls });
+  assert.match(app, /^The page open beside the operator now \(this replaces any page you were told about before\): "Order board" \(Café order board that the barista runs\)\./);
+  assert.ok(controls.every(say => app.includes(say)), 'every control, in its own words');
+  const plain = pageState({ title: 'Order board', about: 'Café order board that the barista runs', names: ['Menu'], others: [], parts, where: 'Menu' });
+  assert.ok(app.length - plain.length > 2000 && plain.length <= 4000, "on top of the page's own allowance: its parts keep theirs");
+  const many = Array.from({ length: 200 }, (_, i) => `Do thing number ${i + 1} on the page, which takes a sentence to say`);
+  assert.ok(pageState({ title: 'T', names: [], others: [], parts: [], where: '', controls: many }).length < 6300, 'within its own allowance, whole controls only');
   for (const text of [liveInstructions(claude, { jev: true }), liveInstructions(claude)]) {
     assert.match(text, /Lean toward showing: whenever the conversation touches something the page covers, present it there, naming the part first so the page is on it as you explain\./);
     assert.match(text, /You know a part only in short until you go there; then you are told what it says and what lies under it\. When an answer should be on the page, go where it should be before answering; if it isn't there, say so/);

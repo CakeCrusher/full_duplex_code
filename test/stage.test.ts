@@ -76,7 +76,7 @@ test('the stage runs the script and its commands in the stage tab, in order', as
   await assert.rejects(stage.run(['back']), (error: any) => error instanceof StageNothing && error.failed.id === 'back', 'nothing to do is not done');
 });
 
-test("Jev is asked which page command shows what the voice is talking about and whether another must follow; unlikely or unknown picks run nothing, and the operator's own words get no page question", async () => {
+test("Jev is asked which page command shows what the voice is talking about and whether another must follow; unlikely or unknown picks run nothing; the operator's own words are read for what they ask of the page", async () => {
   let answers: Record<string, unknown> = {}, sent: any;
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers }) }; } });
   const moment = { history: 'user: What are my choices?\n', latest: { role: 'intermediary', text: "Let's look at the choices you have." } as Line };
@@ -103,10 +103,26 @@ test("Jev is asked which page command shows what the voice is talking about and 
   answers = { page_command: choice('made_up') };
   assert.equal((await jev.read({ trigger: 'cue', ...moment, page: view })).page!.command, undefined, 'not a command of the page');
   answers = { needs_agent: { noul: .9 } };
+  // The operator's own words, as their turn ends: what they ask of the page, and whether they ask anything of it at all.
+  answers = { page_command: choice('goto_options', .9), page_more: { noul: .2 }, page_asked: { noul: .9 } };
   for (const trigger of ['turn', 'delegation'] as const) {
-    assert.equal((await jev.read({ trigger, latest: { role: 'operator', text: 'Go to the options.' }, page: view })).page, undefined, `${trigger}: no page question`);
-    assert.equal(sent.questions.page_command, undefined);
+    const asked = (await jev.read({ trigger, latest: { role: 'operator', text: 'Go to the options.' }, page: view })).page!;
+    assert.deepEqual([asked.command, asked.more, asked.asked], ['goto_options', .2, .9], trigger);
+    assert.match(sent.questions.page_command.instructions, /does what the operator asks for in the latest words, or the first part of it/);
+    assert.match(sent.questions.page_command.criteria.none, /No listed command does what they ask: it is for the coding agent/);
+    assert.ok(!('gave_up' in sent.questions), "that is asked of the voice's words");
   }
+  // A request for several things splits Jev's choice between the commands that do them: the likeliest runs when it is likelier than none.
+  answers = { page_command: { type: 'choice', choice: 'goto_options', confidence: .42, probabilities: { goto_options: .42, none: .33, next_section: .12 } }, page_more: { noul: .8 }, page_asked: { noul: .9 } };
+  assert.equal((await jev.read({ trigger: 'turn', latest: { role: 'operator', text: 'Go to the options, and then on to the next section.' }, page: view })).page!.command, 'goto_options', 'the first of them, below what a sentence of the voice would need');
+  assert.equal((await jev.read({ trigger: 'cue', latest: { role: 'intermediary', text: 'The options, and then the next section.' }, page: view })).page!.command, undefined, "the voice's own words need Jev surer: nothing says they ask anything of the page");
+  answers = { ...answers, page_command: { type: 'choice', choice: 'none', confidence: .5, probabilities: { goto_options: .4, none: .5 } } };
+  assert.equal((await jev.read({ trigger: 'turn', latest: { role: 'operator', text: 'The options, maybe.' }, page: view })).page!.command, undefined, 'none likelier: nothing runs');
+  // The steps that follow their request: only what their words ask for, never what usually comes next.
+  await jev.read({ trigger: 'step', latest: { role: 'operator', text: 'Make it large and add it.' }, page: view, done: [{ id: 'goto_options', say: 'Go to the section "Options"', shown: 'Options.' }] });
+  assert.match(sent.state.why, /Page commands just ran for what the operator asks for/);
+  assert.match(sent.questions.page_command.instructions, /What usually comes next \(adding it, placing or sending it, the next step or part\) is not asked for until they say so/);
+  assert.ok(!('page_asked' in sent.questions), 'asked once, with the request');
 });
 
 test("commands that do the same count as one choice, even below none: the page's own runs", () => {
@@ -147,7 +163,7 @@ test("commands that do the same count as one choice, even below none: the page's
   assert.equal(chosenCommand(step({ goto_2025_results: .32, goto_results: .3, none: .38 }), steps), undefined, 'a year is part of the name');
 });
 
-test("the operator's turn never moves the page; with a page open, their words go to the agent noting what they were looking at", async t => {
+test("words of the operator's that Jev finds no page command for move nothing; with a page open, they go to the agent noting what they were looking at", async t => {
   const { h } = await harness(t);
   const runs: string[][] = [];
   h.stage = { describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; }, view, observe() {}, close() {} } as any;
@@ -155,7 +171,7 @@ test("the operator's turn never moves the page; with a page open, their words go
   const passed = await turn(h, 'take me to the options and make this title bigger');
   assert.equal(passed.send, true);
   assert.match(passed.note!, /^When they said it, the user was looking at "Briefing" \(http:\/\/localhost\/b\.html\) in the browser, at: section "Intro"\.$/);
-  assert.deepEqual(runs, [], 'the voice moves the page, with its own words');
+  assert.deepEqual(runs, [], 'no command chosen for them: nothing runs');
 });
 
 test('the mediator tells GPT Live what the voice tool did and sends the harness the note with the words', async t => {

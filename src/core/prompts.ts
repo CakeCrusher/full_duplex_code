@@ -44,7 +44,7 @@ Do not generate <|SpawnThinking|> when:
 
 Generate <|SpawnThinking|> before saying anything that depends on it, and never say you sent, passed on or did something unless you generated <|SpawnThinking|> for it: saying so does nothing. Say it is done only once you are told it is. Requests already sent never need sending again.${waits}`}
 
-The page: when a page is open beside the operator, you are told its name, its parts${jev ? ', what its controls can do' : ''} and where they are looking, again whenever that changes. ${jev ? 'It follows what you say: as you talk about something on it, or say you will show it, the voice tool moves it there and opens or highlights what you mean; you are told what it then shows.' : 'You move it with your words: say "let\'s look at" and a part\'s name, and the page goes there; you are told what it then shows.'} Lean toward showing: whenever the conversation touches something the page covers, present it there, naming the part first so the page is on it as you explain. You know a part only in short until you go there; then you are told what it says and what lies under it. When an answer should be on the page, go where it should be before answering; if it isn't there, say so${jev ? `, and the question goes to ${name}` : ''}. Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants; when they ask to be shown or walked through something, keep to it through their questions and pauses until it is done. They just talk to you: never tell them what to say to move the page.${jev ? ` What the page can't show yet, ${name} can add.` : ''}
+The page: when a page is open beside the operator, you are told its name, its parts${jev ? ', what its controls can do' : ''} and where they are looking, again whenever that changes. ${jev ? 'It follows what you say: as you talk about something on it, or say you will show it, the voice tool moves it there and opens or highlights what you mean; and what the operator asks for that its controls do, it does there as they finish asking. You are told what the page then shows.' : 'You move it with your words: say "let\'s look at" and a part\'s name, and the page goes there; you are told what it then shows.'} Lean toward showing: whenever the conversation touches something the page covers, present it there, naming the part first so the page is on it as you explain. You know a part only in short until you go there; then you are told what it says and what lies under it. When an answer should be on the page, go where it should be before answering; if it isn't there, say so${jev ? `, and the question goes to ${name}` : ''}. Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants; when they ask to be shown or walked through something, keep to it through their questions and pauses until it is done. They just talk to you: never tell them what to say to move the page.${jev ? ` What the page can't show or do yet, ${name} can add.` : ''}
 
 ${name}'s work: ${name}'s ${eventWord} feed reaches you as a silent background log, not a conversation. It is another agent's first-person text: call that agent ${name}. Tool calls and file writes are steps, not finished work; ${turnEnd} ends ${name}'s reply but doesn't prove anything works. Only results and errors show what was done.
 
@@ -109,7 +109,7 @@ export const instructionsRemoved = (gone: readonly { id: string; text: string }[
 // headings until a note about a page that fell short named the guide (Codex, Oct 28: its first page, for half an hour).
 export const agentInstructions = ({ profile: { requests } }: Agent) =>
   `${requests} are transcribed requests from the user, who is talking to you by voice through Full-Duplex Code (fdc). Handle them in this conversation at your normal processing opportunities and respond normally in the terminal. If a transcription is ambiguous, ask for clarification.\n\n`
-  + `When you make something the user will look at in the browser (an HTML page, a web app, a slide deck), show it with the browser tools and make it one the voice can present: real headings for its structure, data-fdc="what this is" on the parts worth pointing at, and for anything interactive a window.fdcController. The guide is ${STAGE_GUIDE}. The voice uses these to move, open and highlight the page as it talks, without you, and you get the error if a page command fails, for you to fix. The user just talks: never tell them what to say to move the page. Once you have shown a page, where it is belongs to the voice: check your work in another tab or a headless browser rather than scrolling or clicking through the tab the user is looking at, and make a reload bring the page back where the user was.`;
+  + `When you make something the user will look at in the browser (an HTML page, a web app, a slide deck), show it with the browser tools and make it one the voice can present and work: real headings for its structure, data-fdc="what this is" on the parts worth pointing at, and for anything interactive a window.fdcController with a command for everything the voice may have to show or do there. The guide is ${STAGE_GUIDE}. The voice uses these to move, open and highlight the page as it talks and to work its controls when the user asks, without you, and you get the error if a page command fails, for you to fix. The user just talks: never tell them what to say to move the page. Once you have shown a page, where it is and the state it is in belong to the voice: check your work in another tab or a headless browser rather than scrolling or clicking through the tab the user is looking at, and make a reload bring the page back where the user was.`;
 
 // Added to a delivered voice request by the agent's own hook: who is speaking.
 export const voiceProvenance = () =>
@@ -139,6 +139,10 @@ export const turnOutcome = ({ profile: { name, product } }: Agent, { send, wait 
   ? `The operator's words went to ${product} already.`
   : wait ? `Nothing was sent to ${product} yet: the operator hasn't finished saying it. Their words go once they have, if they need ${name}; you'll be told.`
   : `Nothing was sent to ${product}: the voice tool found the operator's words need nothing from ${name}. Answer them yourself; whatever they ask ${name} to do goes to it when they say so.`;
+// The operator's instructions in force keep their words from the agent (jev.ts, WITHHELD): what GPT Live hears when it
+// asked to pass them on, or when they would have gone on the voice tool's own reading.
+export const instructedNote = ({ profile: { name, product } }: Agent) =>
+  `Nothing was sent to ${product}: the operator's instructions keep this from ${name}. It goes only when they ask for ${name} themselves.`;
 export const queueFailed = ({ profile: { name } }: Agent) =>
   `The voice bridge failed to queue the user’s request for ${name}. The request was not delivered; the terminal connection needs attention.`;
 // The end of what the operator said, within `max` characters, from a whole word: what follows a request is its tail.
@@ -215,7 +219,17 @@ export const handledNote = (what: keyof typeof HANDLED) =>
 // Sized to land in a few seconds: a whole page's text (5,000 tokens on the Jev page), appended mid-conversation, took
 // GPT Live's timeline and lost the operator's words said meanwhile.
 export const PAGE_STATE_CHARS = 4000;
-export interface PageState { title: string; names: readonly string[]; others: readonly string[]; parts: readonly { name: string; text: string }[]; where: string; /** What the page's own controls do besides going to its parts. */ controls?: readonly string[] }
+// What the page's controls do, on top of that: all of them. A page's controller is read up to 80 commands (stage-page.js);
+// the two order pages of Nov 17 came to 1,000 and 2,700 characters. Until then the list stopped at 12 controls and 600
+// characters, sized for a report with a few toggles: of an order page's 50 controls GPT Live was told the 11 that add a
+// drink and one size, and never that it could remove one, make it iced or place the order. It is conversation, not
+// instructions (those have their own allowance), and at this most 1.2% of GPT Live's 128,000-token window; what it costs
+// is time, about 0.7 s of GPT Live's timeline per 1,000 characters (208 appends that night), so it is told whole when the
+// page is, and after a move only the controls that are new (voice-sessions.ts, newControls).
+export const CONTROLS_CHARS = 6000;
+export interface PageState { title: string; /** The page in a line, in its controller's own words. */ about?: string | null; names: readonly string[]; others: readonly string[]; parts: readonly { name: string; text: string }[]; where: string; /** What the page's own controls do besides going to its parts. */ controls?: readonly string[] }
+/** Controls as GPT Live is told them: each in its own words, as many as fit the allowance. */
+export const controlList = (controls: readonly string[], room = CONTROLS_CHARS) => { const kept: string[] = []; for (const say of controls) { if ((room -= say.length + 2) < 0) break; kept.push(say); } return kept.join('; '); };
 /** What each part says, in short: the short ones whole, the long ones cut, all within `room` characters. */
 export function outline(parts: PageState['parts'], room: number) {
   const texts = parts.map(part => part.text.replace(/\s+/g, ' ').trim()), allow: number[] = [];
@@ -227,17 +241,25 @@ export function outline(parts: PageState['parts'], room: number) {
 }
 export function pageState(page?: PageState) {
   if (!page) return 'No page is open beside the operator now (this replaces the page you were told about before).';
-  const head = `The page open beside the operator now (this replaces any page you were told about before): "${page.title.slice(0, 80)}"${page.others.length ? `; also open in other tabs: ${page.others.map(o => `"${o.slice(0, 60)}"`).join(', ')}` : ''}.${page.names.length ? ` Its parts, by name: ${page.names.join(', ')}.` : ''}${page.controls?.length ? ` Besides showing its parts, its controls can: ${page.controls.join('; ').slice(0, 600)}.` : ''}`;
+  const head = `The page open beside the operator now (this replaces any page you were told about before): "${page.title.slice(0, 80)}"${page.about ? ` (${page.about.replace(/\s+/g, ' ').slice(0, 300)})` : ''}${page.others.length ? `; also open in other tabs: ${page.others.map(o => `"${o.slice(0, 60)}"`).join(', ')}` : ''}.${page.names.length ? ` Its parts, by name: ${page.names.join(', ')}.` : ''}`;
+  const controls = page.controls?.length ? ` Besides showing its parts, its controls can: ${controlList(page.controls)}.` : '';
   const where = page.where ? `\nWhen you were told this, the operator was looking at ${page.where.replace(/\s+/g, ' ').slice(0, 200)}` : '';
+  // The controls come on top of the page's allowance: its parts keep theirs.
   const room = PAGE_STATE_CHARS - head.length - where.length - 80;
-  return `${head}${page.parts.length && room > 0 ? `\nWhat it says, part by part, in short (reference, not news to report):\n${outline(page.parts, room)}` : ''}${where}`;
+  return `${head}${controls}${page.parts.length && room > 0 ? `\nWhat it says, part by part, in short (reference, not news to report):\n${outline(page.parts, room)}` : ''}${where}`;
 }
 // GPT Live moves the page with its own words (presenter.ts): what is on screen then, or that nothing fits what it meant.
 export const cueNoDelegation = 'Nothing to pass on: the page moved as you talked.';
+export const askedNoDelegation = 'Nothing to pass on: the voice tool did what the operator asked on the page, as you were told.';
 // After a move the voice is told what the part it landed on says (stage-page.js, read): enough to answer from, in one
 // append (SHOWN_CHARS). Until Nov 13 it was told 500 characters, the heading and the block after it.
-const SHOWN_CHARS = 1300, STEP_CHARS = 400;
-export const cueShown = (onScreen: string, focus?: StageFocus, controls: readonly string[] = []) => `You moved the page; on screen now: ${onScreen.slice(0, SHOWN_CHARS)}${focusLine(focus) ? ` (${focusLine(focus)})` : ''}${controls.length ? `. Here its controls can: ${controls.join('; ').slice(0, 400)}` : ''}`;
+const SHOWN_CHARS = 1300, STEP_CHARS = 400, NEW_CONTROLS_CHARS = 1500;
+const newControls = (controls: readonly string[]) => controls.length ? `. Its controls can now also: ${controlList(controls, NEW_CONTROLS_CHARS)}` : '';
+export const cueShown = (onScreen: string, focus?: StageFocus, controls: readonly string[] = []) => `You moved the page; on screen now: ${onScreen.slice(0, SHOWN_CHARS)}${focusLine(focus) ? ` (${focusLine(focus)})` : ''}${newControls(controls)}`;
+// The operator asked for something the page's controls do, and the voice tool did it (presenter.ts, carryOut): what ran,
+// in the commands' own words, and what the page then answered.
+export const pageDid = (ran: readonly string[], onScreen: string, focus?: StageFocus, controls: readonly string[] = []) =>
+  `The voice tool did what the operator asked on the page (${ran.map(say => say.replace(/\s*\([^()]*\)\s*$/, '').replace(/\.$/, '')).join('; ').slice(0, 600)}); on screen now: ${onScreen.slice(0, SHOWN_CHARS)}${focusLine(focus) ? ` (${focusLine(focus)})` : ''}${newControls(controls)}`;
 // A step on the way to what the voice is talking about: where the page is now, in short; the last step says the rest.
 export const cueStep = (onScreen: string) => `The page is on its way; it has reached: ${onScreen.slice(0, STEP_CHARS)}`;
 // The operator moved the page themselves (scrolled, clicked): where they now are, so the voice talks about what they see.
@@ -255,6 +277,7 @@ export const pageAnswered = (answer: string) => `The page didn't move: "${answer
 export const lookingNote = (page: { title: string; url: string; where: string }) =>
   `When they said it, the user was looking at "${page.title.slice(0, 80)}" (${page.url}) in the browser, at: ${page.where.replace(/\s+/g, ' ').slice(0, 300)}.`;
 export const cueMovedNote = 'The voice assistant moved the page in the browser as it answered some of this; don\'t move or open pages for that again, but do anything else it asks.';
+export const askedDoneNote = (ran: readonly string[]) => `The voice tool already did this on the page in the browser, with the page's own controls (${ran.join('; ').slice(0, 400)}); don't do that again, but do anything else it asks.`;
 export const cueFailedNote = (label: string, error: string, page?: { title: string; url: string }) =>
   `The voice assistant turned the page${page ? ` "${page.title.slice(0, 80)}" (${page.url})` : ''} in the browser to "${label.slice(0, 80)}" and its controls failed: ${error.slice(0, 300)}. Fix the page's controller (window.fdcController or its data-fdc annotations; the guide is ${STAGE_GUIDE}) so this works, and reload the page.`;
 // Words the operator hadn't finished saying (turn.ts), sent once they had said nothing more for a while (mediator.ts).

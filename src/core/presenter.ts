@@ -1,28 +1,34 @@
-// The presenter: fdc showing the operator the page the coding agent made, moved by what GPT Live says as it talks, while
-// the agent goes on producing. The operator never has to know how the page is moved; they talk, and the voice presents:
-// - A part's name after a turning phrase ("let's look at" the results, speech-cues.ts) moves the page at once.
+// The presenter: fdc working the page the coding agent made, for the operator, while the agent goes on producing. The
+// operator never has to know how the page is worked; they talk, and it is done:
+// - What the operator asks for that a command of the page does (choose this, set that, add it, place it, show me the
+//   other one), the voice tool does as their turn ends, from its own reading of their words (turn.ts): one command, then
+//   the page is read again and the next, until Jev wants no more. GPT Live is told what was done.
+// - A part's name after a turning phrase GPT Live says ("let's look at" the results, speech-cues.ts) moves the page at once.
 // - Every other sentence it says, bare acknowledgments aside, asks Jev which of the page's commands shows what it is
-//   talking about, if any, and whether another must follow it. The first sentence of its reply to the operator is asked
-//   about even when it only acknowledges them: "On it." to "show likes per post there" is the voice taking it on. A
-//   part's own controls (its rows, columns, toggles, steps) are offered only once that part is on screen
-//   (stage-page.js), so the page moves one command at a time, read again after each, until Jev wants no more. Sentences
-//   said meanwhile are judged together once that is done.
+//   talking about, if any, and whether another must follow it. A part's own controls (its rows, columns, toggles, steps)
+//   are offered only once that part is on screen (stage-page.js), so the page moves one command at a time, read again
+//   after each. Sentences said meanwhile are judged together once that is done.
 // - While it presents, a ring follows what its sentences are about.
 // GPT Live is told what is on screen after each move. The page itself, and how fdc reaches it, is the stage (stage.ts).
 // Before Oct 31 only turning words were judged: the voice said "getting you there" or "switching over now" and the page
-// never moved (video-editing, Oct 31: ten misses in ten minutes, then the voice taught the operator the phrase).
+// never moved (video-editing, Oct 31: ten misses in ten minutes, then the voice taught the operator the phrase). From
+// then until Nov 17 the operator's request reached the page only through the first sentence of the voice's reply, read
+// even when it only acknowledged them; "Sure." and "Got it." to an order of two or five settings ran nothing, and the
+// agent made the changes itself (jev.ts, pageQuestions).
 import type { Harness } from './bridge.ts';
 import { CueMatcher, unglue, type SpeechCue } from './speech-cues.ts';
 import { StageError, StageNothing, type StageCommand, type StageRun, type StageView } from './stage.ts';
-import type { PageCause } from './page-audit.ts';
+import type { PageActor, PageCause } from './page-audit.ts';
 import { chosenCommand, GAVE_UP, PAGE_MORE, type Reading } from './jev.ts';
 import type { Spoken } from './voice-history.ts';
-import { cueFailedNote, cueMovedNote, cueShown, cueStep, pageAnswered, pageMissed } from './prompts.ts';
+import { askedDoneNote, cueFailedNote, cueMovedNote, cueShown, cueStep, pageAnswered, pageDid, pageMissed } from './prompts.ts';
 
 /** The most commands run for one stretch of the voice's words: a section, a part's own control in it, a highlight there. */
 export const MOST_STEPS = 4;
-/** How soon after the operator's words the voice's first sentence is their reply (read even if it only acknowledges them). */
-const REPLY_MS = 8000;
+/** The most commands run for one request of the operator's: a drink, its size, its milk, its sweetness, and into the order. */
+export const MOST_ASKED = 8;
+/** How long after a command ran for the operator's request the voice's own words about it don't run it again ("Adding a mocha" after the mocha was added). */
+const JUST_DONE_MS = 15000;
 // For a while after the agent puts a page in front, the voice's words don't switch to another tab: remarking on the change
 // ("I see Outreach Report again, not the map reference") switched straight back to the page it replaced (Oct 31, live run).
 export const AGENT_SHOWN_MS = 20000;
@@ -45,8 +51,10 @@ export class Presenter {
   cuedInSentence = false;
   /** The voice's sentences waiting for Jev's reading (said while one was under way), and whether one is. */
   queued: string[] = []; judging = false;
-  /** The operator's words (when they last spoke) whose reply's first sentence was read. */
-  repliedTo = 0;
+  /** The page is worked one stretch of words at a time, the operator's requests and the voice's sentences in the order they came. */
+  busy: Promise<unknown> = Promise.resolve();
+  /** The commands last run for a request of the operator's, and when. */
+  asked?: { at: number; ids: string[] };
   /** The command that last put the page where it is: when, on which page, and when the voice last spoke of that place. */
   landed?: { id: string; at: number; seen: number; page: string };
   constructor(bridge: Harness) { this.bridge = bridge; }
@@ -77,10 +85,8 @@ export class Presenter {
     if (!ends) return;
     const sentence = unglue(this.sentence.trim()), cued = this.cuedInSentence;
     this.sentence = ''; this.cuedInSentence = false;
-    const spoke = bridge.mediator?.history.lastInputAt ?? 0, replying = spoke > this.repliedTo && Date.now() - spoke < REPLY_MS;
-    if (replying) this.repliedTo = spoke;
     if (cued) return;
-    if (bridge.jev && bridge.stage.tabId && (saysSomething(sentence) || replying)) { this.queued.push(sentence); void this.judge(); }
+    if (bridge.jev && bridge.stage.tabId && saysSomething(sentence)) { this.queued.push(sentence); void this.judge(); }
     else this.follow(sentence);
   }
   /** While presenting, the ring moves to what the sentence is about, among what is on screen. */
@@ -98,77 +104,126 @@ export class Presenter {
       this.shown(run, run.done.length ? run.done : [{ id: cue.run, say: cue.label, name: cue.label }]);
     }).catch(error => this.failed(cue.label, error as Error));
   }
-  /** Reads the sentences waiting, one stretch at a time. */
+  /** Reads the sentences waiting, one stretch at a time, after any request of the operator's under way. */
   async judge() {
     if (this.judging) return;
     this.judging = true;
-    try { while (this.queued.length) await this.show(this.queued.splice(0).join(' ')); }
-    finally { this.judging = false; }
+    const drained = this.busy.then(async () => { while (this.queued.length) await this.show(this.queued.splice(0).join(' ')); }).finally(() => { this.judging = false; })
+      .catch(error => { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); });
+    this.busy = drained;
+    return drained;
   }
   /**
-   * The page shows what the voice is talking about (`said`): Jev chooses a command for its words, if any; while it finds
-   * another needed, the page is read again and it chooses the next, up to MOST_STEPS. Steps on the way only land; the last
-   * one settles. GPT Live hears what is on screen at the end.
+   * The page shows what the voice is talking about (`said`): Jev chooses a command for its words, if any, and the steps
+   * that follow it. GPT Live hears what is on screen at the end.
    */
   async show(said: string) {
     const bridge = this.bridge, started = Date.now();
-    let view = await bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; });
+    const view = await bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; });
     if (!view) return;
     const spoken: Spoken[] = [...bridge.mediator?.history.spoken() ?? [], { role: 'intermediary', text: said, at: Date.now() }];
-    // Each command run for these words, with what the page answered: Jev reads it before choosing the next (page_done).
-    const done: (StageCommand & { shown?: string })[] = [];
-    let last: StageRun | undefined;
-    try {
-      for (let step = 0; step < MOST_STEPS && view; step++) {
-        const reading = await bridge.read({ trigger: step ? 'step' : 'cue', spoken, page: view, done: [...done] }).catch(error => { bridge.log({ type: 'jev.error', message: (error as Error).message }); return undefined; });
-        if (!reading) break;
-        // The voice says it can't answer or find what the operator asked: their words that stayed with it are read again,
-        // with what it has said since, and go to the agent if they need it (mediator.ts).
-        if (!step && (reading.page?.gaveUp ?? 0) >= GAVE_UP) { bridge.log({ type: 'voice.gave_up', said: said.slice(-160), p: reading.page!.gaveUp }); bridge.mediator?.reconsider(); }
-        let command = reading.page?.command;
-        // One command runs once for the same words, a step included: "Next is the X" ran "next term" four times, Jev finding
-        // another move needed after each, and landed three terms past (Nov 4, twice in five minutes; the operator's
-        // instruction "move the page only one step at a time" didn't stop it, since the voice doesn't decide this).
-        if (command && done.some(c => c.id === command)) command = undefined;
-        if (command && !step && this.there(command, view)) {
-          bridge.log({ type: 'stage.already_there', command, said: said.slice(-120) });
-          bridge.jevAudit?.decided(reading.id, { command: null, step, already: command }, true);
-          this.landed!.seen = Date.now();
-          return this.follow(said);
-        }
-        if (command?.startsWith('tab_') && Date.now() - bridge.stage.shownAt < AGENT_SHOWN_MS) { bridge.log({ type: 'stage.kept_page', instead: command }); command = undefined; }
-        const more = (reading.page?.more ?? 0) >= PAGE_MORE && step + 1 < MOST_STEPS;
-        if (!command) { bridge.jevAudit?.decided(reading.id, { command: null, step }, true); break; }
-        let ran: { run: StageRun; command: string; instead?: string };
-        try { ran = await this.run(command, view, reading, more, { said, jevCall: reading.id, step }); }
-        catch (error) { bridge.jevAudit?.decided(reading.id, { command, step, error: (error as Error).message }, true); throw error; }
-        bridge.jevAudit?.decided(reading.id, { command: ran.command, step, more, ...ran.instead && { instead: ran.instead } }, true);
-        last = ran.run; done.push(...ran.run.done.map(c => ({ ...c, shown: ran.run.onScreen })));
-        if (!more) break;
-        // A step on the way: the voice hears where the page has got to, as Jev does with its next reading.
-        this.tell(cueStep(ran.run.onScreen), ran.run.action);
-        view = await bridge.stage.describe(0).catch(() => undefined);
-      }
-    } catch (error) {
-      if (last) this.moved(said, done, last, started);
-      this.failed(said, error as Error);
-      return;
-    }
-    if (last) return this.moved(said, done, last, started);
+    const first = await bridge.read({ trigger: 'cue', spoken, page: view }).catch(error => { bridge.log({ type: 'jev.error', message: (error as Error).message }); return undefined; });
+    if (!first) return;
+    // The voice says it can't answer or find what the operator asked: their words that stayed with it are read again,
+    // with what it has said since, and go to the agent if they need it (mediator.ts).
+    if ((first.page?.gaveUp ?? 0) >= GAVE_UP) { bridge.log({ type: 'voice.gave_up', said: said.slice(-160), p: first.page!.gaveUp }); bridge.mediator?.reconsider(); }
+    // What the voice tool has just done for the operator's request, the voice's words about it don't do again.
+    const justDone = this.asked && Date.now() - this.asked.at < JUST_DONE_MS ? this.asked.ids : [];
+    const { done, last, error, there } = await this.steps(spoken, view, first, { said, most: MOST_STEPS, without: justDone });
+    if (there) return this.follow(said);
+    if (last) this.moved(said, done, last, started);
+    if (error) return this.failed(said, error);
+    if (last) return;
     bridge.log({ type: 'stage.judged_none', said: said.slice(-160) });
     // It said it was turning there: it hears the page has nothing for it, rather than talk about what isn't shown.
     const meant = TURNING.exec(said)?.[1];
     if (meant) this.tell(pageMissed(meant));
     else this.follow(said);
   }
+  /**
+   * The operator asked for something a command of the page does (`first`, the voice tool's reading of their turn, chose
+   * it; turn.ts): it runs, and the steps that follow it. Resolves to the commands that ran, with what the page answered,
+   * and what GPT Live is to be told of it, once; or to nothing when no command ran (it had nothing to do, or the page's
+   * controller failed: the agent hears of that with their words).
+   */
+  carryOut(first: Reading, view: StageView, spoken: Spoken[]): Promise<{ told: string; done: (StageCommand & { shown?: string })[] } | undefined> {
+    const said = spoken.at(-1)?.text ?? '';
+    const run = this.busy.then(async () => {
+      const bridge = this.bridge, started = Date.now();
+      // Read again if a sentence of the voice's moved the page meanwhile.
+      const now = await bridge.stage.describe().catch(() => undefined) ?? view;
+      const { done, last, error } = await this.steps(spoken, now, first, { said, most: MOST_ASKED, asked: true });
+      if (error) this.failed(said, error);
+      // Nothing ran, or a control is broken: their words go by the usual rules, and the agent hears of the failure with them.
+      if (!last || (error && !(error instanceof StageNothing))) return undefined;
+      this.asked = { at: Date.now(), ids: done.map(c => c.id) };
+      this.land(done.at(-1)!.id, last.here?.url);
+      // The agent hears of it with their words, should they still go to it, and doesn't do it again.
+      const history = bridge.mediator?.history;
+      if (history && Date.now() - history.lastInputAt < 15000) history.cueLatest(askedDoneNote(done.map(c => c.say)));
+      if (bridge.mediator) bridge.mediator.cueAt = Date.now();
+      bridge.log({ type: 'stage.asked', run: done.at(-1)?.id, steps: done.map(c => c.id), said: said.slice(-120), ms: Date.now() - started });
+      bridge.publish({ type: 'stage', done: done.map(c => c.name ?? c.say), onScreen: last.onScreen, asked: true });
+      bridge.voiceSessions.shown(last.here, done);
+      const told = pageDid(done.map(c => c.say), last.onScreen, last.here?.focus, await this.newControls());
+      bridge.pageAudit.told(told, last.action);
+      return { told, done };
+    });
+    this.busy = run.catch(() => {});
+    return run.catch(error => { this.bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; });
+  }
+  /**
+   * Runs page commands for some words, one at a time: the first as `first` chose it, then, while Jev finds another needed,
+   * the page is read again and it chooses the next, up to `most`. Steps on the way only land; the last one settles.
+   * Resolves to the commands that ran with what the page answered, the last run, and the error that stopped them, if any.
+   */
+  async steps(spoken: Spoken[], view: StageView | undefined, first: Reading, { said, most, asked = false, without = [] }: { said: string; most: number; asked?: boolean; without?: string[] }) {
+    const bridge = this.bridge;
+    // Each command run for these words, with what the page answered: Jev reads it before choosing the next (page_done).
+    const done: (StageCommand & { shown?: string })[] = [];
+    let last: StageRun | undefined;
+    try {
+      for (let step = 0; step < most && view; step++) {
+        const reading: Reading | undefined = step ? await bridge.read({ trigger: 'step', spoken, page: view, done: [...done] }).catch(error => { bridge.log({ type: 'jev.error', message: (error as Error).message }); return undefined; }) : first;
+        if (!reading) break;
+        let command = reading.page?.command;
+        // One command runs once for the same words, a step included: "Next is the X" ran "next term" four times, Jev finding
+        // another move needed after each, and landed three terms past (Nov 4, twice in five minutes; the operator's
+        // instruction "move the page only one step at a time" didn't stop it, since the voice doesn't decide this).
+        if (command && (done.some(c => c.id === command) || without.includes(command))) command = undefined;
+        if (command && !step && this.there(command, view)) {
+          bridge.log({ type: 'stage.already_there', command, said: said.slice(-120) });
+          bridge.jevAudit?.decided(reading.id, { command: null, step, already: command }, !asked);
+          this.landed!.seen = Date.now();
+          return { done, last, there: true };
+        }
+        if (command?.startsWith('tab_') && Date.now() - bridge.stage.shownAt < AGENT_SHOWN_MS) { bridge.log({ type: 'stage.kept_page', instead: command }); command = undefined; }
+        const more = (reading.page?.more ?? 0) >= PAGE_MORE && step + 1 < most;
+        // The voice tool's own reading of the turn (the first, for a request) is completed where it was made (turn.ts).
+        const settles = !asked || step > 0;
+        if (!command) { bridge.jevAudit?.decided(reading.id, { command: null, step }, settles); break; }
+        let ran: { run: StageRun; command: string; instead?: string };
+        try { ran = await this.run(command, view, reading, more, { said, jevCall: reading.id, step }, asked ? 'asked' : 'jev'); }
+        catch (error) { bridge.jevAudit?.decided(reading.id, { command, step, error: (error as Error).message }, settles); throw error; }
+        bridge.jevAudit?.decided(reading.id, { command: ran.command, step, more, ...ran.instead && { instead: ran.instead } }, settles);
+        last = ran.run; done.push(...ran.run.done.map(c => ({ ...c, shown: ran.run.onScreen })));
+        if (!more) break;
+        // A step on the way: the voice hears where the page has got to, as Jev does with its next reading. Not for a
+        // request: it hears once what was done.
+        if (!asked) this.tell(cueStep(ran.run.onScreen), ran.run.action);
+        view = await bridge.stage.describe(0).catch(() => undefined);
+      }
+    } catch (error) { return { done, last, error: error as Error }; }
+    return { done, last };
+  }
   /** Runs the command Jev chose; one that has nothing to do (no earlier place to go back to) gives way to the next likeliest. */
-  async run(command: string, view: StageView, reading: Reading, fast: boolean, because: PageCause): Promise<{ run: StageRun; command: string; instead?: string }> {
-    try { return { run: await this.bridge.stage.run([command], { fast, by: 'jev', because }), command }; }
+  async run(command: string, view: StageView, reading: Reading, fast: boolean, because: PageCause, by: PageActor = 'jev'): Promise<{ run: StageRun; command: string; instead?: string }> {
+    try { return { run: await this.bridge.stage.run([command], { fast, by, because }), command }; }
     catch (error) {
       const next = error instanceof StageNothing && reading.page?.likely ? chosenCommand({ probabilities: reading.page.likely }, view, [command]) : undefined;
       if (!next) throw error;
       this.bridge.log({ type: 'stage.cue_instead', tried: command, answer: error instanceof StageNothing ? error.message : '', next });
-      return { run: await this.bridge.stage.run([next], { fast, by: 'jev', because }), command: next, instead: command };
+      return { run: await this.bridge.stage.run([next], { fast, by, because }), command: next, instead: command };
     }
   }
   /** The voice's words moved the page: GPT Live hears what is on screen, once, after the last step. */
@@ -194,9 +249,12 @@ export class Presenter {
     const bridge = this.bridge;
     bridge.publish({ type: 'stage', done: done.map(c => c.name ?? c.say), onScreen: run.onScreen, cue: true });
     bridge.voiceSessions.shown(run.here, done);
-    const view = await bridge.stage.describe(0).catch(() => undefined);
-    const controls = view?.commands.filter(c => c.part).map(c => c.say.replace(/\s*\([^()]*\)\s*$/, '').replace(/\.$/, '')).slice(0, 8) ?? [];
-    this.tell(cueShown(run.onScreen, run.here?.focus, controls), run.action);
+    this.tell(cueShown(run.onScreen, run.here?.focus, await this.newControls()), run.action);
+  }
+  /** The page's controls GPT Live hasn't been told of yet (those of the part now on screen, or that the last command brought), as it is now. */
+  async newControls() {
+    const view = await this.bridge.stage.describe(0).catch(() => undefined);
+    return view ? this.bridge.voiceSessions.newControls(view) : [];
   }
   /** What GPT Live hears about the page at once, recorded as it is sent, with the action it is about (page-audit.ts). */
   tell(text: string, action?: string) {

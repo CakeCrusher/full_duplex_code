@@ -78,7 +78,7 @@ test("the voice tool's own reading records what came of it: the instruction lear
   assert.deepEqual(turnCall.decision, { companionOnly: true, learned: 'always', settings: [{ name: 'wakeThreshold', from: 50, to: 100 }] });
   assert.deepEqual(turnCall.config.features, ['instructions', 'configuration']);
   assert.ok('earlier_sessions' in turnCall.state && 'current_settings' in turnCall.state, "the tuner's state, as sent");
-  assert.deepEqual(calls().find(c => c.trigger === 'job')!.decision, { outcome: 'keep', needed: false, finished: true });
+  assert.deepEqual(calls().find(c => c.trigger === 'job')!.decision, { outcome: 'keep', needed: false, companionOnly: true, finished: true }, "only about how the companion behaves: not the agent's, whatever the job delegation reads");
 });
 
 test("the page command Jev chose for the voice's words is recorded, and so is none", async t => {

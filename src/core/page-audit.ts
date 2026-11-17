@@ -1,7 +1,7 @@
 // The page audit: everything that changes the page on the stage or is seen on it, one line each in the run's page.jsonl,
-// owner-only, beside events.jsonl and jev.jsonl. A line says who acted (Jev reading the voice's sentence, a phrase the
-// voice said, the ring following its words, a switch of tabs, the coding agent's own browser tools, the operator's own
-// move), why (the words, and the Jev call when there is one), each command with what the page answered, where the page
+// owner-only, beside events.jsonl and jev.jsonl. A line says who acted (Jev reading the voice's sentence, or the
+// operator's request; a phrase the voice said, the ring following its words, a switch of tabs, the coding agent's own
+// browser tools, the operator's own move), why (the words, and the Jev call when there is one), each command with what the page answered, where the page
 // and the ring were before and after, and then, on lines of their own, what GPT Live was told about it, word for word.
 // Nothing here changes what is sent or run: it only records, in the one place every page action passes (stage.ts).
 // Before, a move had to be pieced together from several events, and where it landed was in none of them.
@@ -12,8 +12,8 @@ import { randomUUID } from 'node:crypto';
 export interface PagePlace { url?: string; where?: string; focus?: unknown; ring?: { on: boolean; at: string | null } }
 /** One command sent to the page, and what came back from it. */
 export interface PageCommand { id: string; say?: string; outcome: 'ran' | 'nothing to do' | 'failed' | 'not reached'; answer?: string }
-/** Who caused a page action. */
-export type PageActor = 'jev' | 'phrase' | 'ring' | 'tab' | 'agent' | 'operator';
+/** Who caused a page action: `asked` is the voice tool doing what the operator asked for (Jev's reading of their turn); `operator` their own scroll or click. */
+export type PageActor = 'jev' | 'asked' | 'phrase' | 'ring' | 'tab' | 'agent' | 'operator';
 /** Why: the voice's words read for the page, the Jev call that chose the command and its step, or the agent's tool. */
 export interface PageCause { said?: string; jevCall?: string; step?: number; tool?: string; input?: unknown }
 export interface PageAction {

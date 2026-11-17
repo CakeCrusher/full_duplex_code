@@ -40,6 +40,11 @@ const BILLED_AT_LEAST_MS = 15000;
 const address = (url: string) => url.replace(/[?#].*$/, '');
 /** What GPT Live was told when no page is on the stage. */
 const NO_PAGE = '[]';
+/** The page's own commands, each as GPT Live is told it: by its name when it has one (told with the page's parts), else by what it does; no plain next or back. */
+const ownOf = (view: StageView) => view.commands.filter(c => (c.id.startsWith('page_') || c.part) && !/(^|_)(next|previous|prev|back|forward)(_|$)/.test(c.id))
+  .map(c => ({ named: Boolean(c.name), told: c.name ?? c.say.replace(/\s*\([^()]*\)\s*$/, '').replace(/\.$/, '') }));
+/** What the page's own controls do besides going to its named parts. */
+const controlsOf = (view: StageView) => ownOf(view).filter(c => !c.named).map(c => c.told);
 // A page's text changes a little as it is used (a deck's "12 / 30" counter): up to this many characters, it's the same page.
 const PAGE_CHANGED_CHARS = 8;
 /** How many characters differ between two texts, from their first difference to their last. */
@@ -66,8 +71,8 @@ const saved = ({ id, text, learned, learnedIn }: Instruction | SavedInstruction)
 interface Run {
   live: LiveSession; plan: ResumePlan; page?: Page; automatic: boolean; mediator: Mediator;
   record: ResumeRecord; recordId?: string;
-  /** The page state GPT Live was last told (pageFor's signature). */
-  briefed?: string;
+  /** The page state GPT Live was last told (pageFor's signature), and the controls of the page it has been told of (newControls). */
+  briefed?: string; controls?: Set<string>;
   /** How full GPT Live's context is (its last report). */
   context?: number;
   /** The instructions it started with, those a fork inherited from its source, and those in force in it now (given and not countermanded). */
@@ -503,7 +508,7 @@ export class VoiceSessions {
         move: (at, back) => { const { cursors, focus } = bridge.forks; cursors[focus] = back ? Math.min(cursors[focus], at) : at; } } });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake, perceivedInput };
     // A fork knows the page state its source was told, and how full its context is; a new session, the page it starts with.
-    Object.assign(run, plan === 'fork' ? { briefed: record.briefed, context: record.context } : { briefed: seen?.signature ?? NO_PAGE });
+    Object.assign(run, plan === 'fork' ? { briefed: record.briefed, context: record.context } : { briefed: seen?.signature ?? NO_PAGE, controls: new Set(view ? ownOf(view).map(c => c.told) : []) });
     if (seen) this.bridge.presenter.speechCues.set(seen.cues);
     // A dropped or moved session's unsent speech: this session takes it if it starts; meanwhile it isn't handed off.
     // The copies are now the ones to carry or hand off: if this connection fails to start, they go on from here.
@@ -645,22 +650,35 @@ export class VoiceSessions {
     if (live.state !== 'active') return;
     const seen = view && this.pageFor(view);
     if (seen) this.bridge.presenter.speechCues.set(seen.cues);
-    if (!again && sameStage(run.briefed, seen?.signature ?? NO_PAGE)) return;
+    // A fork was told the page by its source: the controls it knows are the page's as it stands.
+    if (!again && sameStage(run.briefed, seen?.signature ?? NO_PAGE)) { run.controls ??= new Set(view ? ownOf(view).map(c => c.told) : []); return; }
     run.briefed = seen?.signature ?? NO_PAGE;
+    run.controls = new Set(view ? ownOf(view).map(c => c.told) : []);
     this.bridge.log({ type: 'stage.briefed', url: view?.url ?? null, names: seen?.cues.filter(c => c.listed).map(c => c.label) ?? [], parts: view?.parts.length ?? 0, again: again || undefined });
     run.toldWhere = view?.where;
     // Through the same queue as the agent's work: it waits while the operator talks.
     run.mediator.context.add('thinking', seen?.state ?? pageState());
     this.bridge.pageAudit.told(seen?.state ?? pageState());
   }
+  /**
+   * The page's controls GPT Live hasn't been told of yet, as the page is now: after a move it hears those the move brought
+   * (a part's own, on screen now; a drink's settings, once one is chosen), not the whole list again. Told whole with the page.
+   */
+  newControls(view: StageView, run = this.run) {
+    if (!run || !this.bridge.jev) return [];
+    const told = run.controls ??= new Set<string>(), fresh = ownOf(view).map(c => c.told).filter(text => !told.has(text));
+    for (const text of fresh) told.add(text);
+    return fresh;
+  }
   /** What GPT Live is told of the page on the stage (pageState), the words that move it (speech cues), and what it was told, to compare. */
   pageFor(view: StageView) {
     // Every part the voice can name, up to the stage script's own cap on a page's commands (80).
     const cues = Stage.cues(view), names = cues.filter(c => c.listed).map(c => c.label).slice(0, 80);
     const others = [...this.bridge.stage.pages].filter(([tabId]) => tabId !== view.tabId).map(([, page]) => page.title);
-    // The page's own controls that go to no part ("show the error bars"): with Jev, GPT Live says what the page can't do.
-    const controls = this.bridge.jev ? view.commands.filter(c => c.id.startsWith('page_') && !c.name && !/(^|_)(next|previous|prev|back|forward)(_|$)/.test(c.id)).map(c => c.say.replace(/\s*\([^()]*\)\s*$/, '').replace(/\.$/, '')).slice(0, 12) : [];
-    const state = pageState({ title: view.title, names, others, parts: view.parts, where: view.where, controls });
+    // The page's own controls that go to no part ("show the error bars", "add a latte to the order"): with Jev, GPT Live
+    // knows what the page can do for the operator, and says what it can't.
+    const controls = this.bridge.jev ? controlsOf(view) : [];
+    const state = pageState({ title: view.title, about: view.about, names, others, parts: view.parts, where: view.where, controls });
     // Where the operator is changes with every move, and they hear of each move: it's no change to the page.
     return { cues, state, signature: JSON.stringify([address(view.url), names, others, state.replace(/\nWhen you were told this, [^]*$/, '')]) };
   }

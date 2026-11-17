@@ -1,11 +1,13 @@
-# Making a page the voice can present
+# Making a page the voice can present and work
 
 fdc's voice companion presents the page the user is looking at, and the page follows what it says:
 as it talks about something on the page, or says it will show it, fdc moves the page there and
-opens or highlights what it means, in about a second, without you. The user just talks to it; they
-never steer the page themselves, so never tell them what to say to move it, or that it has
-commands. fdc reads the page's structure and runs commands in it through the browser tools.
-Everything below is optional and additive: the more of it a page has, the more the voice can show.
+opens or highlights what it means, in about a second, without you. When the user asks for something
+the page's controls do (choose this, make it large, add it, place the order), fdc does it there as
+they finish asking, also without you. The user just talks; they never have to learn how the page is
+moved, so never tell them what to say to move it, or that it has commands. fdc reads the page's
+structure and runs commands in it through the browser tools. Everything below is optional and
+additive: the more of it a page has, the more the voice can show and do.
 
 Show the page with the browser tools (navigate a tab, or open one): the tab you show is the one
 the voice presents. Once it is shown, where it is belongs to the voice: check your work in another
@@ -46,11 +48,13 @@ How fdc uses it, so you can write it to be used well:
   `about` and where the user is (`where()`), and the command that shows what the voice is talking
   about runs. Nothing else of your controller is read: a command that can't be told apart from
   another by its `say` is one that can't be chosen.
+- When the user asks for something, their words are read beside the same commands, and the one that
+  does what they ask runs: "make it large, with oat milk" is the size, then the milk.
 - After a command runs, the page is read again, and the next command can run straight away: the
   commands of a part (`part`, below) are offered once that part is on screen, so "the FDC row in
   the waves grid" is the section first, then the grid's own highlight. Up to four steps follow one
-  sentence.
-- What `run()` returns is what the voice is told is now on screen.
+  sentence of the voice's, and up to eight one request of the user's.
+- What `run()` returns is what the voice is told is now on screen, or was done.
 
 ```js
 window.fdcController = {
@@ -87,8 +91,9 @@ version. The voice and fdc's judge read these instead of guessing from your word
 them, "Stage 3 of 5" in your text still counts as a step. Without `where()`, fdc describes the
 element in view, which can't tell which slide, step or tab is showing.
 
-The controller only moves the page. What the voice knows of the page comes from the page's own text, hidden slides and
-tabs included, and it gets that text in two sizes:
+The controller only moves and works the page. What the voice knows of the page comes from the page's own text, hidden
+slides and tabs included, from `about`, and from what your commands say they do (it is told all of them, up to 6,000
+characters). It gets the text in two sizes:
 
 - **Before it goes anywhere, each part in short.** All the parts together share about 4,000 characters, so on a long
   page a part is a line or two, without its sub-headings.
@@ -123,6 +128,14 @@ Rules that make it work well:
   or view switch its own command that says what it shows ("Split the FDC row into its campaigns",
   "Show likes per post"): the voice draws the user's eye to a row or a peak as it explains it, and
   flips a view as it talks about it.
+- **An app the voice runs.** When the user will ask the voice to do things on the page (take an order,
+  fill a form, play a game), give every action its own command: one per choice and per value
+  (`set_size_large`, `set_milk_oat`), one to add or remove each thing, one to submit. Say what each does
+  in the words the user would ask for it ("Make the mocha large"), offer only what applies in the page's
+  state now, make a command safe to run again (set a value rather than toggle it), and return the state
+  that results ("Mocha: size large. Selected: large hot mocha, oat milk. One drink in the order."): the
+  voice tells the user what happened from that. Keep the state in the page, not in your terminal: the
+  voice can't run your scripts, and the user shouldn't have to wait for you to press a button.
 - **Show what you do.** Your commands show their own result (the slide, a lit stage, a highlighted
   row): fdc's ring steps aside when one of your commands runs, so one highlight shows.
 - **Hidden things are yours to show.** Annotations on slides or tabs that aren't on screen can't be

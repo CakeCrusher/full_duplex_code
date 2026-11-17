@@ -155,7 +155,8 @@ await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
 const docsBase = `http://127.0.0.1:${(server.address() as any).port}`;
 
 // --- The browser: fdc's page with a virtual microphone; the documents in their own context ----------------------------
-const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
+// Muted: the voice is checked by its transcript, and a check shouldn't speak from the operator's speakers.
+const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
 const pages = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 /** The stage's browser tools, over Playwright tabs instead of Open Claude in Chrome (the same calls Stage makes). */
 class TestBrowser {
@@ -252,7 +253,8 @@ async function say(scenario: number, text: string, expect?: { what: string; chec
   await quiet(wait, 2500, at);
   const all = events().slice(mark), text_ = (type: string) => all.filter(e => e.type === type).map(e => e.delta ?? '').join('').replace(/\s+/g, ' ').trim();
   const voiceSentences = (text_('session.output_transcript.delta').match(/[^.!?]+[.!?]+/g) ?? []).map(s => s.trim());
-  const moves = all.filter(e => e.type === 'stage.cue').map(e => ({ at: e.at - at, run: e.run, steps: e.steps, label: e.label, judged: !!e.judged, ms: e.ms }));
+  // What moved the page: the voice's own words (stage.cue), or the voice tool doing what the operator asked for (stage.asked).
+  const moves = all.filter(e => e.type === 'stage.cue' || e.type === 'stage.asked').map(e => ({ at: e.at - at, run: e.run, steps: e.steps, label: e.label ?? e.said, judged: !!e.judged, asked: e.type === 'stage.asked', ms: e.ms }));
   const step: Step = { scenario, said: text, heard: text_('session.input_transcript.delta'), voice: text_('session.output_transcript.delta'), moves,
     judged: all.filter(e => e.type === 'page.judged').map(e => ({ trigger: e.trigger, said: e.said, command: e.command, more: e.more })),
     announced: voiceSentences.filter(s => ANNOUNCES.test(s)), ms: Date.now() - at,
@@ -263,7 +265,7 @@ async function say(scenario: number, text: string, expect?: { what: string; chec
   if (tab) { await tab.screenshot({ path: path.join(out, file) }).catch(() => {}); step.screenshot = file; }
   if (expect) { step.expect = expect.what; step.passed = expect.check(step); }
   steps.push(step);
-  console.log(`\n[${scenario}] "${text}"\n  heard: ${step.heard}\n  voice: ${step.voice?.slice(0, 300)}\n  moves: ${moves.map(m => `${m.steps?.join('>') ?? m.run}${m.judged ? '' : ' (named)'} ${m.ms}ms`).join(', ') || '(none)'}\n  where: ${step.where}${step.expect ? `\n  ${step.passed ? 'PASS' : 'FAIL'}: ${step.expect}` : ''}`);
+  console.log(`\n[${scenario}] "${text}"\n  heard: ${step.heard}\n  voice: ${step.voice?.slice(0, 300)}\n  moves: ${moves.map(m => `${m.steps?.join('>') ?? m.run}${m.asked ? ' (asked)' : m.judged ? '' : ' (named)'} ${m.ms}ms`).join(', ') || '(none)'}\n  where: ${step.where}${step.expect ? `\n  ${step.passed ? 'PASS' : 'FAIL'}: ${step.expect}` : ''}`);
 }
 const ran = (step: Step, ...ids: string[]) => step.moves.some(m => ids.some(id => (m.steps ?? [m.run]).some((s: string) => s === id || s?.startsWith(id))));
 const mark = (scenario: number, note: string, passed: boolean) => { steps.push({ scenario, said: `(${note})`, moves: [], judged: [], expect: note, passed, ms: 0 }); console.log(`\n[${scenario}] ${passed ? 'PASS' : 'FAIL'}: ${note}`); };
@@ -306,7 +308,8 @@ try {
     const view = await harness.stage.describe(0);
     mark(4, 'the new section and the renamed command are offered after the reload', !!view?.commands.some(c => c.id === 'page_go_follows'));
     await say(4, 'What does the new follows section say?', { what: 'the new section is shown', check: s => ran(s, 'page_go_follows') });
-    await say(4, 'Go back to the grid and show likes per post there.', { what: 'the renamed command runs (after the grid)', check: s => ran(s, 'page_show_likes_per_post') });
+    // The grid may still be on likes per post from scenario 1: then going back to it is all there is to do.
+    await say(4, 'Go back to the grid and show likes per post there.', { what: 'back on the grid, showing likes per post (the renamed command runs unless it already does)', check: s => ran(s, 'page_show_likes_per_post') || (ran(s, 'page_go_grid_section', 'goto_grid') && /likes per post/.test(s.where ?? '')) });
   }
 
   // 5. fdc restarted on the same agent session: the page remembered, voice resumed.
