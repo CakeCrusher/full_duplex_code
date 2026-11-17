@@ -33,7 +33,7 @@ test("Jev's history is what GPT Live was sent and heard, word for word and in or
   const before = live.appended.length;
   hook('git commit'); mediator.feed.flush();
   await settle();
-  await h.read({ trigger: 'job', spoken: mediator.history.spoken() });
+  await h.read({ trigger: 'turn', made: 'replied', spoken: mediator.history.spoken() });
   const { history, latest } = moments.at(-1)!;
   assert.equal(latest!.text, 'Then commit it.');
   const startup = live.options.input.map((item: any) => `[sent by fdc at the start of the voice connection]\n${item.content[0].text}`);
@@ -48,7 +48,7 @@ test("Jev's history is what GPT Live was sent and heard, word for word and in or
 test('a fork of the last voice session continues what GPT Live perceived; a new session starts it again from its own startup input', async t => {
   const { h, lives } = await harness(t);
   const moments = fakeJev(h);
-  const read = async () => { await h.read({ trigger: 'job', spoken: h.voiceSessions.mediator!.history.spoken() }); return moments.at(-1)!.history!; };
+  const read = async () => { await h.read({ trigger: 'turn', made: 'replied', spoken: h.voiceSessions.mediator!.history.spoken() }); return moments.at(-1)!.history!; };
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   h.voiceSessions.mediator!.operatorQuietMs = 60000;
   lives[0].say('operator', 'Keep the soft shapes one in mind for later.', 0);
@@ -139,12 +139,12 @@ test("every reading of Jev has the operator's instructions to the companion in f
   const moments = fakeJev(h);
   await h.voiceSessions.appendInstruction("Don't pass on questions you can answer yourself.");
   await learn(h, 'Talk me through the results yourself.');
-  await h.read({ trigger: 'job', spoken: [{ role: 'operator', text: 'Explain the chart.', at: Date.now() }] });
+  await h.read({ trigger: 'turn', made: 'replied', spoken: [{ role: 'operator', text: 'Explain the chart.', at: Date.now() }] });
   assert.deepEqual(moments.at(-1)!.instructions, ["Don't pass on questions you can answer yourself.", 'I1: Talk me through the results yourself.']);
   assert.ok(h.voiceSessions.instructions().includes("Additional operator instructions:\nDon't pass on questions you can answer yourself.\n\nI1: Talk me through the results yourself."), "GPT Live's");
   let sent: any;
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers: {} }) }; } });
-  await jev.read({ trigger: 'job', latest: { role: 'operator', text: 'Explain the chart.' }, instructions: ['I1: Talk me through the results yourself.'] });
+  await jev.read({ trigger: 'turn', made: 'replied', latest: { role: 'operator', text: 'Explain the chart.' }, instructions: ['I1: Talk me through the results yourself.'] });
   assert.equal(sent.state.operator_instructions, 'I1: Talk me through the results yourself.');
   assert.equal(sent.state.current_settings, undefined);
   assert.match(sent.state.setting, /`operator_instructions` are the operator's instructions to the companion in force now; they hold for your reading too/);
@@ -161,10 +161,10 @@ test("with orchestration off (the default), Jev isn't asked about sessions, none
   const { h } = await harness(t);
   let listed = 0;
   h.sessionSwitch.sessions = async () => { listed++; return []; };
-  const moments = fakeJev(h, m => m.trigger === 'job' ? { needsAgent: .1, ready: .9 } : {});
+  const moments = fakeJev(h, m => m.made === 'replied' ? { needsAgent: .1, ready: .9 } : {});
   await turn(h, 'Turn off this session.');
   assert.equal(listed, 0);
-  assert.equal(moments.find(m => m.trigger === 'turn')!.sessions, undefined);
+  assert.equal(moments.find(m => m.made === 'ended')!.sessions, undefined);
   assert.doesNotMatch(liveInstructions(claude, { jev: true, features: h.features }), /voice sessions on or off/);
   assert.doesNotMatch(new Jev({ apiKey: 'k', log: () => {}, agent: claude, features: h.features }).setting, /voice sessions on or off/);
   assert.match(liveInstructions(claude, { jev: true, features: new Set(['orchestration']) }), /it also turns voice sessions on or off and pauses the companion/);

@@ -70,23 +70,21 @@ test("the fork's window runs the agent by its full path, in the project, with fd
   }
 });
 
-test('Jev is asked whether the words are a question asked aside where they are sent from the main session, and, with a fork in focus, also whether the operator has left its matter', async () => {
+test("the turn's request asks whether the words are a question asked aside while a fork can open or one is in focus, and, with one in focus, also whether the operator has left its matter", async () => {
   const bodies: any[] = [];
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url: string, init: any) => { bodies.push(JSON.parse(String(init.body))); return { ok: true, status: 200, json: async () => ({ answers: { standby: { noul: .1 }, needs_agent: { noul: .9 }, tangent: { noul: .9 }, settled: { noul: .2 } } }) }; } } as any);
-  const asked = () => Object.keys(bodies.at(-1).questions).filter(name => name === 'tangent' || name === 'settled');
+  const asked = () => Object.keys(bodies.at(-1).questions).filter(name => name === 'tangent' || name === 'settled').sort();
   const latest = { role: 'operator' as const, text: 'By the way, what does CNS mean?' };
-  // The main session in focus and at work: asked by the reading that sends the words.
-  assert.equal((await jev.read({ trigger: 'job', latest, working: 5000, fork: 'main' })).tangent, .9);
-  assert.deepEqual(asked(), ['tangent'], "the job delegation's reading");
-  await jev.read({ trigger: 'turn', latest, fork: 'main' });
-  assert.deepEqual(asked(), [], "not at the turn's end: nothing is sent by that reading");
-  // A fork in focus: every reading of the turn.
+  // The main session in focus and at work: a fork opens as the words are sent (turn.ts), and the request is the same both times.
+  assert.equal((await jev.read({ trigger: 'turn', made: 'replied', latest, working: 5000, fork: 'main' })).tangent, .9);
+  assert.deepEqual(asked(), ['tangent']);
+  await jev.read({ trigger: 'turn', made: 'ended', latest, working: 5000, fork: 'main' });
+  assert.deepEqual(asked(), ['tangent'], 'as the turn ends too: the same request');
+  // A fork in focus: also whether the operator has left its matter.
   const inFork = await jev.read({ trigger: 'turn', latest: { role: 'operator', text: 'Okay, got it.' }, fork: 'fork' });
   assert.deepEqual(asked(), ['settled', 'tangent']);
   assert.deepEqual([inFork.settled, inFork.tangent], [.2, .9]);
-  await jev.read({ trigger: 'job', latest, fork: 'fork' });
-  assert.deepEqual(asked(), ['tangent']);
-  await jev.read({ trigger: 'job', latest });
+  await jev.read({ trigger: 'turn', made: 'replied', latest });
   assert.deepEqual(asked(), [], 'no fork can open (the agent is between turns, or can\'t fork): neither');
 });
 
@@ -231,10 +229,10 @@ test('with a fork in focus, words that are no question move the focus back: once
   // Words that moved the focus back don't open a new fork in the same turn.
   await open(); h.forks.answered = Date.now() + 10;
   answers = { settled: .9, tangent: .2, needsAgent: .9 };
-  const moments = fakeJev(h, moment => ({ needsAgent: .9, ready: .9, settled: .9, tangent: moment.trigger === 'job' ? .9 : .2 }));
+  const moments = fakeJev(h, moment => ({ needsAgent: .9, ready: .9, settled: .9, tangent: moment.made === 'replied' ? .9 : .2 }));
   await turn(h, 'Thanks. What does the main session say?');
   assert.equal(h.forks.focus, 'main');
-  assert.equal(moments.find(m => m.trigger === 'job')!.fork, undefined);
+  assert.equal(moments.find(m => m.made === 'replied')!.fork, undefined);
   // The conversation goes quiet (Standby begins): a fork that has answered gives the focus back, one still answering keeps it.
   await open(); h.forks.asked = Date.now() + 20;
   h.forks.quiet();
@@ -254,7 +252,7 @@ test('a fork takes only words Jev read; waiting work follows the same rules, and
   // The operator goes on speaking while Jev reads the question: what they add is unread and would go with it, so no fork.
   let during = () => {};
   let answers: Record<string, number> = { tangent: .9, needsAgent: .9, ready: .9 };
-  fakeJev(h, moment => { if (moment.trigger === 'job') during(); return answers; });
+  fakeJev(h, moment => { if (moment.made === 'replied') during(); return answers; });
   during = () => history.add({ type: 'session.input_transcript.delta', delta: 'and also add a legend', start_ms: 0, end_ms: 900 });
   assert.equal((await turn(h, 'What does CNS mean?')).send, true);
   assert.deepEqual([opened.length, h.forks.focus], [0, 'main']);

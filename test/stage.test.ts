@@ -165,7 +165,7 @@ test("words of the operator's that Jev finds no page command for move nothing; w
   const { h } = await harness(t);
   const runs: string[][] = [];
   h.stage = { describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; }, view, observe() {}, close() {} } as any;
-  fakeJev(h, moment => moment.trigger === 'job' ? { needsAgent: .9, ready: .9 } : { sessions: { asked: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 });
+  fakeJev(h, moment => moment.made === 'replied' ? { needsAgent: .9, ready: .9 } : { sessions: { asked: 0, unlisted: 0, turnOn: [], turnOff: [] }, companionOnly: 0 });
   const passed = await turn(h, 'take me to the options and make this title bigger');
   assert.equal(passed.send, true);
   assert.match(passed.note!, /^When they said it, the user was looking at "Briefing" \(http:\/\/localhost\/b\.html\) in the browser, at: section "Intro"\.$/);

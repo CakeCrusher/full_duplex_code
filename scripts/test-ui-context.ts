@@ -63,7 +63,7 @@ publish({type:'context_ack',at:base+33000,id:'thinking-one',startMs:32100,endMs:
 publish({ type: 'agent_input', at: base + 35000, text: 'Also let the toggle follow the system theme.' });
 let browser;
 try {
-  browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
+  browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1150 }, reducedMotion: 'reduce' });
   // Exercise the real audio worklet with a virtual microphone, without Claude
   // or OpenAI: two actual WebRTC peers, with synthesized audio in both directions.

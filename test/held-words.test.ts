@@ -9,13 +9,13 @@ import type { VoiceRequest } from '../src/core/adapter.ts';
 import { settle, until } from './live-fake.ts';
 import { forgetScript, phantom } from '../src/core/voice-history.ts';
 
-// A mediator whose job delegation decides by `decide`, given the latest words it reads and what waited before them; quick timers.
+// A mediator whose job delegation decides by `decide`, given the latest words it reads and what waited before them (in `saying`, whole); quick timers.
 function fixture(t: TestContext, decide: (latest: string, waiting: Waiting, call: number) => Decision) {
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.close = () => { live.state = 'closed'; }; live.append = async () => {};
-  const jobs: ({ latest: string } & Waiting)[] = [], deliveries: VoiceRequest[] = [], turns: string[] = [];
+  const jobs: ({ latest: string } & Waiting)[] = [], deliveries: VoiceRequest[] = [], turns: string[] = [], said: (string | undefined)[] = [];
   const route: Route = {
-    actions: async (_request, spoken) => { turns.push(spoken.at(-1)?.text ?? ''); return {}; },
+    actions: async (_request, spoken, waiting = {}) => { turns.push(spoken.at(-1)?.text ?? ''); said.push(waiting.saying); return {}; },
     job: async (_request, spoken, _reply, _actions, waiting = {}) => { const latest = spoken.at(-1)?.text ?? ''; jobs.push({ latest, ...waiting }); return decide(latest, waiting, jobs.length); },
   };
   const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, route });
@@ -23,7 +23,7 @@ function fixture(t: TestContext, decide: (latest: string, waiting: Waiting, call
   t.after(() => { m.stop(); observer.close(); });
   let at = 0;
   const say = (text: string) => { live.emit('event', { type: 'session.input_transcript.delta', delta: text, start_ms: at, end_ms: at + 500 }); at += 3000; };
-  return { m, live, jobs, deliveries, turns, say };
+  return { m, live, jobs, deliveries, turns, said, say };
 }
 const wait: Decision = { send: false, wait: true, needed: true };
 
@@ -36,8 +36,10 @@ test('words the operator has not finished wait undecided; the next reading takes
   assert.ok(f.m.undecided());
   f.say('blue, and the footer too.');
   await until(() => f.deliveries.length === 1);
-  assert.match(f.jobs[1].latest, /^Make the header ?blue, and the footer too\.$/, "the job delegation's latest words are all of them since its last decision");
-  assert.equal(f.turns[1], 'blue, and the footer too.', "the voice tool's own reading takes only the new words: a page command never runs twice for the same words");
+  assert.match(f.jobs[1].saying!, /^Make the header ?blue, and the footer too\.$/, 'what they are saying is all of it since the last decision: the questions about sending read it whole');
+  assert.equal(f.jobs[1].latest, 'blue, and the footer too.', 'the latest words are the new ones: a page command never runs twice for the same words');
+  assert.deepEqual([f.turns[1], f.said[1]], [f.jobs[1].latest, f.jobs[1].saying], "the same in the turn's first request as in its second");
+  assert.equal(f.jobs[0].saying, undefined, 'nothing waited before the first words');
   assert.match(f.deliveries[0].content, /Make the header.*blue, and the footer too\./s);
   assert.equal(f.m.undecided(), false);
 });
@@ -73,7 +75,7 @@ test('speaking again before the decision sends nothing yet: the reading knows th
   f.say('rim is a bit too pronounced, so give me three variants.');
   await until(() => f.deliveries.length === 1);
   assert.deepEqual(f.jobs.map(j => Boolean(j.continued)), [true, false]);
-  assert.match(f.jobs[1].latest, /soft shapes one, the ?rim is a bit too pronounced/);
+  assert.match(f.jobs[1].saying!, /soft shapes one, the ?rim is a bit too pronounced/);
 });
 
 test('a reading that found the waiting words need the agent is remembered for the next one; words that never did stop waiting when they need nothing', async t => {
@@ -116,7 +118,7 @@ test('words that have waited too long are read as overdue even while the operato
 
 test("the job delegation's rule: sent once needed and finished; waits while unfinished or still being said; once needed, never dropped", async () => {
   const decide = async (needsAgent: number, ready: number, waiting: Waiting = {}) => {
-    const bridge: any = { agent: claude, forks: { possible: false }, agentWorking: () => undefined, read: async () => ({ trigger: 'job', said: '', transcript: '', needsAgent, ready }), log: () => {} };
+    const bridge: any = { agent: claude, forks: { possible: false }, agentWorking: () => undefined, read: async () => ({ trigger: 'turn', made: 'replied', said: '', transcript: '', needsAgent, ready }), log: () => {} };
     const { send, wait, needed } = await jobTurn(bridge, { utterances: [], through: 0, seqs: [0], fresh: 'x' }, [], undefined, {}, waiting);
     return { send, wait, needed };
   };
@@ -133,7 +135,7 @@ test("while the agent is in the middle of a turn, a request is steered in unless
   const decide = async (working: number | undefined, now: number, waiting: Waiting = {}) => {
     const asked: any[] = [];
     const bridge: any = { agent: claude, forks: { possible: false }, agentWorking: () => working, log: () => {},
-      read: async (moment: any) => { asked.push(moment); return { trigger: 'job', said: '', transcript: '', needsAgent: .9, ready: .9, ...moment.working !== undefined && { now } }; } };
+      read: async (moment: any) => { asked.push(moment); return { trigger: 'turn', made: 'replied', said: '', transcript: '', needsAgent: .9, ready: .9, ...moment.working !== undefined && { now } }; } };
     const { send, later } = await jobTurn(bridge, { utterances: [], through: 0, seqs: [0], fresh: 'x' }, [], undefined, {}, waiting);
     return { send, later, asked: asked[0].working };
   };
@@ -212,7 +214,7 @@ test("moments after a request was held for the turn's end, an acknowledgment sta
   const decide = async (adds: number, now: number, state: 'held' | 'sent' | 'uncertain') => {
     const asked: any[] = [];
     const bridge: any = { agent: claude, forks: { possible: false }, agentWorking: () => 95000, log: () => {}, outbox: new Map([['legend', { state }]]),
-      read: async (moment: any) => { asked.push(moment); return { trigger: 'job', said: '', transcript: '', needsAgent: .7, ready: .9, ...moment.sent && { adds }, now }; } };
+      read: async (moment: any) => { asked.push(moment); return { trigger: 'turn', made: 'replied', said: '', transcript: '', needsAgent: .7, ready: .9, ...moment.sent && { adds }, now }; } };
     const { send, later } = await jobTurn(bridge, { utterances: [], through: 0, seqs: [0], fresh: 'x' }, [], undefined, {}, { sent: { ago: 4000, said: 'Add a legend when you are done.', id: 'legend' } });
     return { send, later, held: asked[0].sent?.held };
   };

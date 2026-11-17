@@ -127,8 +127,8 @@ export const voiceEcho = ({ profile: { name } }: Agent, id: string) =>
 
 // Session orchestration: what GPT Live is told when fdc turns sessions' voices on or off itself.
 export const sessionsOutcome = (outcome: string) => `Voice sessions: ${outcome}`;
-// With Jev, the voice tool's own actions come before the job delegation reads the words: GPT Live hears what it does, not
-// whether the words also go to the agent.
+// With Jev, the voice tool's own actions come before it is decided whether the words go to the agent (turn.ts): GPT Live
+// hears what it does, not whether the words also go.
 export const sessionsChanging = (plan: string) => `The voice tool is changing voice sessions as the operator asked: ${plan} The outcome follows when known.`;
 // Asked only while the voice tool keeps instructions or adjusts settings (features.ts): what it does with these words.
 export function companionNoted({ profile: { name } }: Agent, features: Features) {

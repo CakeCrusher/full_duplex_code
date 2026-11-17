@@ -19,8 +19,8 @@ test('Jev is asked whether the operator wants one of the instructions it learned
   assert.match(bodies[0].questions.remove.criteria.I2, /^They ask to drop I2 \("Keep answers under two sentences\."\)/);
   assert.deepEqual(reading.remove, { id: 'I2', p: .85 });
   await jev.read({ trigger: 'turn', latest, learn: true, removable: [] });
-  await jev.read({ trigger: 'job', latest, learn: true, removable });
-  assert.ok(!('remove' in bodies[1].questions) && !('remove' in bodies[2].questions), 'nothing to remove, or not the voice tool\'s own reading: not asked');
+  await jev.read({ trigger: 'unsent', latest, learn: true, removable });
+  assert.ok(!('remove' in bodies[1].questions) && !('remove' in bodies[2].questions), 'nothing to remove, or words that went to the agent without the turn\'s request: not asked');
 });
 
 test('asked by voice to drop an instruction, the harness that writes instructions removes it, the voice says so, and nothing is learned from those words', async t => {

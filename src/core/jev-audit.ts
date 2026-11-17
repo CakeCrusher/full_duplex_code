@@ -9,6 +9,8 @@ import fs from 'node:fs';
 /** One call to Jev, as recorded. */
 export interface JevCall {
   id: string; at: number; trigger: string;
+  /** Which of a turn's two requests (trigger turn): the one made as the operator's turn ended, or the one made once the voice companion's reply was in. */
+  made?: string;
   /** The request the operator's words go to the agent by (events.jsonl, delegation-audit.jsonl), when read for one; for words already sent (trigger unsent), how they went. */
   requestId?: string; handOff?: string;
   config: { url: string; model: string; timeoutMs: number; features: string[]; thresholds: Record<string, number> };

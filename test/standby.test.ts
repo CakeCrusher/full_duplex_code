@@ -566,7 +566,7 @@ test("Standby on Jev's word never begins with a request on its way to the agent,
 test("words the job delegation put off because the operator hadn't finished go to the agent when Standby comes, rather than at the next wake", async t => {
   const { fakeJev } = await import('./live-fake.ts');
   const f = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10 } });
-  fakeJev(f.h, m => m.trigger === 'job' ? { needsAgent: .9, ready: .05 } : {});
+  fakeJev(f.h, m => m.made === 'replied' ? { needsAgent: .9, ready: .05 } : {});
   const voicePage = page('voice-page');
   Object.assign(voicePage.ws, { terminate() {}, close() {}, on() {} });
   f.h.pages.all.set(voicePage.ws, voicePage);

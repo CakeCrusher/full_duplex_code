@@ -500,7 +500,7 @@ export class VoiceSessions {
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator: Mediator = this.mediator = new Mediator({ live, observer: bridge.forks.observer(), agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
-      audit: bridge.handOffAudit, route: bridge.jev ? { actions: (request, spoken) => routeActions(bridge, request, spoken), job: (request, spoken, reply, actions, waiting) => jobTurn(bridge, request, spoken, reply, actions, waiting) } : undefined,
+      audit: bridge.handOffAudit, route: bridge.jev ? { actions: (request, spoken, waiting) => routeActions(bridge, request, spoken, waiting), job: (request, spoken, reply, actions, waiting) => jobTurn(bridge, request, spoken, reply, actions, waiting) } : undefined,
       read: bridge.jev ? (trigger, spoken, record) => bridge.read({ trigger, spoken, ...record }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0, replays: Boolean(wake?.operator),
       // Requests are cut from the record Jev reads and the voice was given, from the session's own place in it.

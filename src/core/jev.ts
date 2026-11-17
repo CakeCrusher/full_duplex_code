@@ -1,23 +1,25 @@
-// Jev (TypeSafe System One, a calibrated judge) reads the conversation whenever the voice tool has to act on it, over one
-// state, in two kinds of call that ask different questions. Optional: on when TYPESAFE_API_KEY is set.
-// - Job delegation (trigger job, turn.ts): once the operator has stopped speaking and the voice companion has replied,
-//   whether their words need the coding agent; nothing else. GPT Live passes nothing on.
-// - The voice tool's own actions on the operator's turn (trigger turn, turn.ts): whether they turn voice sessions on or
-//   off (sessions.ts), are about how the companion behaves, or end the conversation for now (Standby); never whether
-//   anything goes to the agent. The same call whichever signal ended the turn, GPT Live's asking to pass the words on
-//   included (mediator.ts).
-// - The page on the stage, read at two moments: as the voice companion talks, which command shows what it is talking
-//   about; and as the operator's turn ends, which command does what they ask for (the page's own controls: choosing,
-//   setting, adding, placing). Either way, whether another must follow (a part's own control, listed once that part is
-//   on screen): the page moves one command at a time until none is needed (presenter.ts).
-// - The operator's goal (bridge.ts): whether their words set what they want shown, taught or walked through, or end it.
-// - The learner: whether they give the companion a standing instruction (instruction-learner.ts).
-// - The tuner: the level of each setting that fits the operator's instructions (jev-tuner.ts).
-// The learner, the tuner and session orchestration are optional features (features.ts). Jev gets the latest words, what
-// the voice companion had perceived before them, word for word as it got it (perceived.ts), the operator's instructions to
-// the companion in force, and why it is asked now; it judges from these, with no rule about which words each question may
-// use. Who does what is the same account the companion is given (roles.ts). Every call is recorded with what fdc did
-// with it (jev-audit.ts).
+// Jev (TypeSafe System One, a calibrated judge) reads the conversation whenever the voice tool has to act on it.
+// Optional: on when TYPESAFE_API_KEY is set.
+// - The operator's turn (trigger turn, turn.ts): one request that asks everything the voice tool decides about their
+//   words, over one state: whether they need the coding agent and whether they have finished saying them (the job
+//   delegation; GPT Live passes nothing on); which command of the page on the stage does what they ask for; their goal
+//   (what they want shown, taught or walked through); what their instructions keep from the agent; and, with those
+//   features on (features.ts), a standing instruction to learn (instruction-learner.ts), the settings that fit
+//   (jev-tuner.ts) and voice sessions to turn on or off (sessions.ts). The same request is made as their turn ends
+//   (GPT Live asks to pass their words on, starts answering, or they have been quiet a moment) and again once the
+//   voice companion's reply is in (mediator.ts): the operator's rule of Nov 17, "one request… both identical, with the
+//   same information… the questions being asked are the same". Until then the two moments asked different questions
+//   (the voice tool's own actions, then the job delegation), over states that differed.
+// - The page, apart (the operator: "quite distinct because it's only focused on the controller commands"): as the
+//   voice companion talks, which command shows what it is talking about (trigger cue); and once a command has run,
+//   whether another must follow (trigger step; a part's own control is listed once that part is on screen): the page
+//   moves one command at a time until none is needed (presenter.ts).
+// - The quiet after the companion has spoken (trigger quiet): Standby. The settings alone, when the operator's
+//   instructions change or voice starts (trigger settings). Words that reached the agent without a reading (unsent).
+// Jev gets the latest words, what the voice companion had perceived before them, word for word as it got it
+// (perceived.ts), the operator's instructions to the companion in force, and why it is asked now; it judges from these,
+// with no rule about which words each question may use. Who does what is the same account the companion is given
+// (roles.ts). Every call is recorded with what fdc did with it (jev-audit.ts).
 import { randomUUID } from 'node:crypto';
 import type { AgentProfile } from './adapter.ts';
 import type { HandOff } from './delegation-audit.ts';
@@ -33,10 +35,10 @@ type Fetch = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: 
 const URL = 'https://api.typesafe.ai/v1/systemone', MODEL = 'jev-latest';
 
 /** Why Jev is asked now: its provenance, part of what it reads. */
-export type Trigger = 'turn' | 'job' | 'unsent' | 'cue' | 'step' | 'quiet' | 'settings';
+export type Trigger = 'turn' | 'unsent' | 'cue' | 'step' | 'quiet' | 'settings';
 const WHY: Record<Trigger, string> = {
-  turn: 'The operator has just stopped speaking.',
-  job: 'The operator has just stopped speaking and the voice companion has replied to them (`voice_reply`, what it has said so far).',
+  // The job delegation's own line, when it had a request to itself (until Nov 17): its answers are the ones that send.
+  turn: 'The operator has just stopped speaking and the voice companion has replied to them (`voice_reply`, what it has said so far).',
   unsent: 'The operator\'s latest words are going to the coding agent although the voice companion never passed them on (voice ended, or the voice tool sends them itself).',
   cue: 'The voice companion has just said the latest words, with a page open beside the operator.',
   step: 'Page commands just ran for the voice companion\'s latest words (`page_done`, in order), and the page is now where `page` says.',
@@ -62,7 +64,7 @@ export const COMPANION_ONLY = .85;
 // The operator's instructions in force keep words like these from the agent ("don't delegate", "take the order
 // yourself"). From this likelihood, such words the job delegation keeps are settled: they never go by themselves, at
 // the voice's end either (other kept words go then), and GPT Live, if it asked to pass them on, hears why nothing went
-// (turn.ts). Not a bar to sending, which is the job delegation's reading alone: in a run where "keep Claude out of it
+// (turn.ts). Not a bar to sending, which is the job delegation's alone: in a run where "keep Claude out of it
 // for now" stayed in force for two days (Nov 9 to 11) the operator went on asking for work, and Jev sent 56 of its 138
 // requests there at .4 to .6. Of the 29 turns under such an instruction in the two sessions of Nov 17, the 25 orders,
 // questions and remarks scored .80 to .97, and the four that asked for the agent by name .03 to .35. In 13 other runs
@@ -107,8 +109,13 @@ export const REMOVE = .7;
 // knowledge and says when it doesn't know (prompts.ts), so its reply shows what it can't handle. On the 56 validation
 // sessions of the labeled set (fdc-ref-c41d07; replies simulated for that companion, decided 3 s after the turn): 106
 // of 176 moments right against 90 for GPT Live delegating itself and 94 for the question alone (.5, ready .2): 50 of 79
-// stretches of talk kept from the agent (GPT Live 29), 4 requests lost (5), 20 late (11).
-export const NEEDS_AGENT = .4, READY = .2;
+// stretches of talk kept from the agent (GPT Live 29), 4 requests lost (5), 20 late (11). That was at .4, when the
+// question was asked with one other. In the turn's one request (Nov 17), beside the page's, the learner's and the
+// tuner's questions, Jev's answer to it runs lower: by .03 on average on 200 recorded turns of Nov 6 to 17 put to it
+// both ways (95 at or over .4 before, 76 after; the tuner's questions account for half of the drop). From .35 as many
+// are over the line as before (95), and what is sent, kept or left waiting differs for 8 of the 200, five toward the
+// agent and three away; at .4 it differed for 15, eleven of them away. Asked the same way twice, it differs for 3 of 300.
+export const NEEDS_AGENT = .35, READY = .2;
 // Right after a request has reached the agent (within RECENT_MS), the operator's next words go to it only if they add to
 // it (ADDS): its tail, a repeat, an acknowledgment or noise stays with the voice. Jev used to send them as a second
 // request seconds later (prompts.ts, sentWords). When that request is held for the end of the agent's turn, words that
@@ -118,7 +125,7 @@ export const ADDS = .4, RECENT_MS = 10000, PRESS = .5;
 // fdc holds it until the turn ends (outbox.ts). Steering is the default: a correction made to wait costs the operator more
 // than an interruption that could have waited.
 export const NOW = .3;
-// Forks (the questions and what they were measured on are below, FORK): a question asked aside opens a fork from the
+// Forks (the questions and what they were measured on are below, forking): a question asked aside opens a fork from the
 // setting forkFrom (tuning.ts); with a fork open, words stay with it from STAYS (from forkFrom, set lower: what opens
 // a fork stays in one), and the focus moves back to the main session from SETTLED.
 export const STAYS = .5, SETTLED = .5;
@@ -157,7 +164,7 @@ export interface Reading {
   id?: string;
   /** The latest words it judged, and what it read them in (their history, then the words, marked). */
   said: string; transcript: string;
-  /** Whether those words must reach the coding agent, and whether the operator has finished saying them (trigger job); null when Jev couldn't be asked. */
+  /** Whether those words must reach the coding agent, and whether the operator has finished saying them (trigger turn); null when Jev couldn't be asked. */
   needsAgent: number | null; ready?: number;
   /** Whether they add to the request the agent got moments before (asked only then). */
   adds?: number;
@@ -183,18 +190,25 @@ export interface Moment {
   trigger: Trigger;
   /** The latest words; what the voice companion perceived before them, oldest first (perceived.ts). */
   latest?: Line; history?: string;
+  /**
+   * All the operator has said that no request has decided yet, ending with the latest words, when some of it was said
+   * before them: they had not finished at an earlier turn, and those words wait (mediator.ts). The questions about what
+   * goes to the agent then read all of it, while `latest` stays the new words, from which the voice tool's own actions
+   * are read (a page command never runs twice for the same words, an instruction is learned once).
+   */
+  saying?: string;
   /** The operator's instructions to the companion in force. */
   instructions?: readonly string[];
   sessions?: Session[]; page?: StageView;
-  /** The page commands already run for the latest words (trigger step; and trigger job, when the voice tool did what the operator asked), each with what the page answered. */
+  /** The page commands already run for the latest words (trigger step; and trigger turn, when the voice tool did what the operator asked), each with what the page answered. */
   done?: (StageCommand & { shown?: string })[];
   /** The operator's goal in force, as Jev reads it: what they asked to be shown or taught, when, and what was shown since. */
   goal?: string;
-  /** What the voice companion has said in reply to the latest words (trigger job). */
+  /** What the voice companion has said in reply to the latest words so far (trigger turn). */
   reply?: string;
-  /** The agent is in the middle of a turn, for this long (trigger job): Jev is asked whether the words must reach it now or can wait for the turn's end. */
+  /** The agent is in the middle of a turn, for this long (trigger turn): Jev is asked whether the words must reach it now or can wait for the turn's end. */
   working?: number;
-  /** The request that went to the agent moments before this reading, within RECENT_MS (trigger job): how long ago, the operator's words in it, and whether it is held until the agent's turn ends. The latest words may only be its tail. */
+  /** The request that went to the agent moments before this reading, within RECENT_MS (trigger turn): how long ago, the operator's words in it, and whether it is held until the agent's turn ends. The latest words may only be its tail. */
   sent?: { ago: number; said: string; held?: boolean };
   /** The conversation has gone quiet (trigger quiet) and the voice companion gave the operator's last words no answer. */
   unanswered?: boolean;
@@ -208,32 +222,42 @@ export interface Moment {
   tune?: { earlier: string[]; current: Tuning; pinned: (keyof Tuning)[] };
   /** For the record only (jev-audit.ts), not sent: the request the words go to the agent by, and how words already sent went (trigger unsent). */
   requestId?: string; handOff?: HandOff;
+  /** For the record only: which of the turn's two requests this is, the one made as the turn ended or the one made once the companion's reply was in (mediator.ts). */
+  made?: 'ended' | 'replied';
   /** For the record only: the thresholds that are settings (tuning.ts), as in force. */
   thresholds?: Record<string, number>;
 }
 
 
 const noul = (instructions: string, yes: string, no: string) => ({ type: 'noul', instructions, criteria: { true: yes, false: no } });
-// Job delegation (trigger job): read once the voice companion has replied, the only question of its call besides whether
-// the operator has finished. Its first form, read at every turn's end with "When in doubt, true", sent noise and narration
-// as requests (101 of 112 stretches that needed nothing, on 15 labeled sessions, Oct 28); without the exercise clause,
-// answers in a drill the agent ran stayed unsent. The companion's reply is evidence, not the verdict: work goes whatever it
-// said, and a request the page can't do (no command does it) goes to the agent to extend the page's controller.
-const JOB = {
-  needs_agent: noul('Do the latest words need the coding agent, now that the voice companion has replied (`voice_reply`)?',
-    "A request for work on the project: to make, change, fix, run, save, write or look into something; telling the agent something, or asking for words to be sent to it; a correction or decision about the agent's work, or input on it the agent should hear; asking the page for something none of its commands does (`page_commands`), or being unhappy with what the page did, which the agent fixes; a question the companion said it doesn't know, or that only the agent can answer from its work; agreeing to or answering what the agent proposed or asked; the operator's turn in an exercise or walkthrough the agent runs ('next question', 'task two'). The companion saying it doesn't know, can't do it, or that it is the agent's to do is strong evidence.",
-    "Words the companion handled itself: it answered them from what it was told or from general knowledge, or it asked the operator to clarify (their answer comes next); talk that asks nothing (narrating or presenting to an audience, thinking aloud, reacting, chatting); a side question to the companion while giving an instruction (to repeat or explain something); anything only about how the companion behaves or what it should pass on; turning voice sessions on or off; anything the page's commands do (`page_commands`: moving through it, showing a part, working its controls), which the voice tool does on the page itself (`page_done`, when it has just done so for these words); fragments."),
-  ready: noul('Have the operator finished saying what they want for now, so that a good listener would act on it at this moment, or are they still in the middle of saying it?',
-    "They have said a whole request or question, enough to act on, and stopped: even if it trails off into filler ('um', 'yeah', 'so', 'and yeah') or they might add more later. A short cue or command is whole as soon as it is said ('show them', 'take it from here', 'carry on', 'send it').",
-    "They broke off in the middle of a sentence or a list ('and the…', 'I want you to…', 'can you also'), or are still building up to what they want (setting context before the actual ask), so acting now would miss its point."),
-  // Asked only while the agent is in the middle of a turn: steered into it now, or held until it ends (issue 24).
-  now: noul('The coding agent is in the middle of a turn: its latest work is at the end of `history`. Must the latest words reach it now, in the middle of that turn, rather than when the turn ends?',
-    'They correct, stop, redirect or change the work under way; answer something the agent asked or is waiting on; give information without which the current work would come out wrong or be wasted; or the operator says it is urgent or wants it right away.',
-    "They can wait for the turn to end: a new, separate task; an addition that doesn't change what the agent is doing now; a question or remark about results the agent will produce anyway; anything where interrupting would only disturb work that should finish first."),
-  // Asked only when a request reached the agent moments before these words.
-  adds: noul('The operator\'s words went to the coding agent moments ago, or are held for it until its turn ends: the latest such line in `history` says which. Do the latest words give the agent anything it needs beyond that request?',
-    "They hold something that request didn't: an instruction, detail, constraint, correction, decision or question the agent needs; an addition to it, a change to it, or another request.",
-    'Nothing the agent needs beyond it: the tail end of the same sentence, filler, an acknowledgment or thanks, a repeat or rewording of what was sent, words meant only for the voice companion (to go on, repeat, wait or stop talking), or stray fragments and noise.'),
+// The job delegation: whether the operator's words go to the coding agent. Acted on once the voice companion has replied
+// (turn.ts): its reply is evidence, not the verdict; work goes whatever it said, and a request the page can't do (no
+// command does it) goes to the agent to extend the page's controller. Its first form, read at every turn's end with
+// "When in doubt, true", sent noise and narration as requests (101 of 112 stretches that needed nothing, on 15 labeled
+// sessions, Oct 28); without the exercise clause, answers in a drill the agent ran stayed unsent.
+// With words still waiting from an earlier turn (`saying`), these questions read all of them: read as fragments, "…send
+// it" then "over" was read as "over" and kept. On recorded turns with words waiting (Nov 1 to 17), against the request
+// that had all of them as its latest words: with the questions reading `saying`, needs_agent crossed its line on 6 of
+// 100 turns and what was sent, kept or left waiting differed on 3 (asked the same way twice: 6 and 3 of 150); with the
+// waiting words only in the history it crossed on 24 of 150, and in a field the questions did not name on 19.
+const sending = (whole: boolean) => {
+  const words = whole ? 'what the operator is saying (`saying`: all they have said that is not decided yet, ending with the latest words)' : 'the latest words';
+  return {
+    needs_agent: noul(`${whole ? 'Does' : 'Do'} ${words} need the coding agent, now that the voice companion has replied (\`voice_reply\`)?`,
+      "A request for work on the project: to make, change, fix, run, save, write or look into something; telling the agent something, or asking for words to be sent to it; a correction or decision about the agent's work, or input on it the agent should hear; asking the page for something none of its commands does (`page_commands`), or being unhappy with what the page did, which the agent fixes; a question the companion said it doesn't know, or that only the agent can answer from its work; agreeing to or answering what the agent proposed or asked; the operator's turn in an exercise or walkthrough the agent runs ('next question', 'task two'). The companion saying it doesn't know, can't do it, or that it is the agent's to do is strong evidence.",
+      "Words the companion handled itself: it answered them from what it was told or from general knowledge, or it asked the operator to clarify (their answer comes next); talk that asks nothing (narrating or presenting to an audience, thinking aloud, reacting, chatting); a side question to the companion while giving an instruction (to repeat or explain something); anything only about how the companion behaves or what it should pass on; turning voice sessions on or off; anything the page's commands do (`page_commands`: moving through it, showing a part, working its controls), which the voice tool does on the page itself (`page_done`, when it has just done so for these words); fragments."),
+    ready: noul(`Have the operator finished saying what they want for now${whole ? ' (`saying`: all they have said that is not decided yet, ending with the latest words)' : ''}, so that a good listener would act on it at this moment, or are they still in the middle of saying it?`,
+      "They have said a whole request or question, enough to act on, and stopped: even if it trails off into filler ('um', 'yeah', 'so', 'and yeah') or they might add more later. A short cue or command is whole as soon as it is said ('show them', 'take it from here', 'carry on', 'send it').",
+      "They broke off in the middle of a sentence or a list ('and the…', 'I want you to…', 'can you also'), or are still building up to what they want (setting context before the actual ask), so acting now would miss its point."),
+    // Asked only while the agent is in the middle of a turn: steered into it now, or held until it ends (issue 24).
+    now: noul(`The coding agent is in the middle of a turn: its latest work is at the end of \`history\`. Must ${whole ? 'what the operator is saying (`saying`)' : 'the latest words'} reach it now, in the middle of that turn, rather than when the turn ends?`,
+      'They correct, stop, redirect or change the work under way; answer something the agent asked or is waiting on; give information without which the current work would come out wrong or be wasted; or the operator says it is urgent or wants it right away.',
+      "They can wait for the turn to end: a new, separate task; an addition that doesn't change what the agent is doing now; a question or remark about results the agent will produce anyway; anything where interrupting would only disturb work that should finish first."),
+    // Asked only when a request reached the agent moments before these words.
+    adds: noul(`The operator's words went to the coding agent moments ago, or are held for it until its turn ends: the latest such line in \`history\` says which. ${whole ? 'Does what the operator is saying (`saying`) give' : 'Do the latest words give'} the agent anything it needs beyond that request?`,
+      "They hold something that request didn't: an instruction, detail, constraint, correction, decision or question the agent needs; an addition to it, a change to it, or another request.",
+      'Nothing the agent needs beyond it: the tail end of the same sentence, filler, an acknowledgment or thanks, a repeat or rewording of what was sent, words meant only for the voice companion (to go on, repeat, wait or stop talking), or stray fragments and noise.'),
+  };
 };
 // Standby on Jev's word (trigger quiet; voice-sessions.ts): once the conversation has gone quiet after the voice
 // companion has had its say, is a meaningful exchange about to begin? If Jev is sure enough that none is (the setting
@@ -260,36 +284,35 @@ const QUIET = {
 // be done or executed is main work, also on another topic or "in the background"; what should not have gone to the
 // agent at all is neither. A fork is thrown away on the way back, so work sent to one is the costly mistake; a question
 // sent to the main session goes as it did without forks.
-// - `tangent`: are the latest words such a question? With the main session in focus and in the middle of a turn, asked in
-//   the reading that sends the words (the job delegation's): from the setting forkFrom they go to a fork. On 278 recorded requests made while the agent worked, labeled by a
+// - `tangent`: are the operator's words such a question? With the main session in focus and in the middle of a turn, it
+//   decides as the words are sent: from the setting forkFrom they go to a fork. On 278 recorded requests made while the agent worked, labeled by a
 //   blind judge on the operator's rule (their 12 all matched; .scratch/round2/forks), it separates forks from main work
 //   at AUC .94 (the wording before it: .66). At the default .55, the operator's choice, it finds 30 of 34 forks and
 //   forks 28 of 186 main-work requests: about half are questions about the work under way, the others steer it or ask
 //   for something to be shown (at .8: 23 forks and 6 main-work requests, all six of them questions).
-// - `settled`: with a fork in focus, has the operator left its matter? Asked with `tangent` in the voice tool's own
-//   reading. No recorded session has a fork, so it was measured on 133 turns that followed requests a fork would have
+// - `settled`: with a fork in focus, has the operator left its matter? Read with `tangent`, as their turn ends. No recorded session has a fork, so it was measured on 133 turns that followed requests a fork would have
 //   opened for, with the fork's tag put in their history (.scratch/round2/forks/back): words that are no question
 //   (below STAYS) move the focus back when the operator has left the matter (from SETTLED) or when they are on their way
 //   to the agent, which moves back for 38 of 45 turns that should and leaves the fork in 8 of 39 that go on with it. The
 //   wording before it ("do the latest words settle the tangent?") was near chance there (AUC .59 against .83; both
 //   answers together .88).
-const FORK = {
-  tangent: noul('The coding agent is in the middle of its work. Do the latest words turn aside to ask something: a question the operator wants answered or explained for themselves now, with nothing asked to be done?',
+const forking = (whole: boolean) => ({
+  tangent: noul(`The coding agent is in the middle of its work. ${whole ? 'Does what the operator is saying (\`saying\`) turn' : 'Do the latest words turn'} aside to ask something: a question the operator wants answered or explained for themselves now, with nothing asked to be done?`,
     'A clarifying question or a request to explain: what something means, why something is so, what a number or a state currently is, how two things differ, to be walked through something. Answering may take looking something up, but nothing is to be built, changed, fixed, run, added or tried, and the work under way is not steered.',
     "A request for work, on any topic: to make, change, fix, run, add, try, explore, compare, measure or find something, even 'in the background' or 'as a subagent'; a correction, redirection, stop, decision, preference or added requirement for the work under way; an answer to what the agent asked; the next step of a process the agent runs; feedback on what the agent is building, including a question that is really a criticism of it or that needs new work to answer. Also words that are not for the agent: talk with or about the voice companion, a question the companion can answer from what it was told, thinking aloud, fragments."),
   settled: noul('A fork of the coding agent\'s session is open for a question the operator turned aside to ask (`<fork started>` in `history`), while the main session goes on with its work. Do the latest words leave it: the operator is done with that question, turns to the main work, or asks for something to be done?',
     "They accept or close the answer ('okay, got it', 'thanks, that answers it') and move on; they turn to the main work or ask how it is going; or they ask for something to be made, changed, fixed, run or tried, or steer the work: work belongs to the main session, also when it follows from the answer.",
     'They stay with it: a follow-up question, another thing they want explained, asking for the answer again or in more detail, or talk with the voice companion about it.'),
-};
-// The voice tool's own actions on the operator's turn (trigger turn): never whether anything goes to the agent.
+});
+// What the voice tool does itself with the operator's words (turn.ts).
 const GATE = {
   // Preferences and frustration about the companion itself: fdc adjusts its own settings from them (Jev's tuning).
   companion_only: noul('Are the latest words about how the voice companion itself should behave in this conversation: how much or when it talks, how fast it goes quiet or pauses, what wakes it, what it reports or passes on?',
     'A preference, complaint or frustration about the voice companion\'s own behavior, such as "stop waking up for every little thing", "don\'t pause so quickly" or "talk less".',
     'Anything else: what the operator asks, says or decides about the work, the page or the sessions; designing or discussing the voice tool\'s code. When in doubt, false.'),
 };
-// Asked while the operator's instructions are in force: with an instruction not to pass things on, GPT Live's asking
-// alone no longer sends their words (turn.ts); what they ask now comes before it ("tell Codex that…" goes).
+// Asked while the operator's instructions are in force: words they keep from the agent, once the job delegation keeps
+// them, are settled (turn.ts); what they ask now comes before a standing instruction ("tell Codex that…" goes).
 const INSTRUCTED = {
   withheld: noul('Do the operator\'s instructions in force (`operator_instructions`) keep the latest words from the coding agent?',
     'An instruction in force tells the companion not to pass on, send or delegate things like this, or to handle them itself, and the latest words do not ask for the coding agent or for something to be told or sent to it.',
@@ -465,46 +488,50 @@ export class Jev {
   /** What one call sends Jev about a moment: the state it reads and the questions asked of it (a recorded moment can be put to it again). */
   ask(moment: Moment): { state: Record<string, string>; questions: Record<string, unknown> } {
     const { trigger, latest, history = '', instructions, sessions, page, learn, tune, reply, removable } = moment;
-    const gate = trigger === 'turn', job = trigger === 'job' || trigger === 'unsent';
-    // The page is read for what the operator asks of it as their turn ends, and on through the steps that follow.
-    const asked = Boolean(page) && (gate || (trigger === 'step' && latest?.role === 'operator'));
+    // The operator's turn: one request, the same each time it is made; words that went to the agent without it are read for
+    // whether they needed it.
+    const turn = trigger === 'turn', sends = turn || trigger === 'unsent', whole = turn && Boolean(moment.saying);
+    const JOB = sending(whole), FORK = forking(whole);
+    // The page is read for what the operator asks of it in their turn, and on through the steps that follow.
+    const asked = Boolean(page) && (turn || (trigger === 'step' && latest?.role === 'operator'));
     // The latest words in their own field: marked inside the conversation instead, Jev read plain page moves as likelier
     // work for the agent (page_work up by .1 on average, Oct 21).
     const state: Record<string, string> = { setting: this.setting + (sessions ? SESSIONS_SETTING : '') + (page ? PAGE_SETTING : '') + (tune ? ` ${TUNER_SETTING}` : ''), why: trigger === 'quiet' && moment.unanswered ? QUIET_UNANSWERED : trigger === 'step' && asked ? STEP_ASKED : WHY[trigger], history: history.trim() || '(none)', latest: latest ? spokenLine(latest) : '(none)' };
+    // Words still waiting from an earlier turn, with the latest: what the operator is saying, whole.
+    if (whole) state.saying = spokenLine({ role: 'operator', text: moment.saying! });
     if (instructions) state.operator_instructions = instructions.join('\n') || '(none)';
-    if (trigger === 'job') state.voice_reply = reply?.trim() || '(the companion has not replied)';
+    if (turn) state.voice_reply = reply?.trim() || '(the companion has not replied)';
     if (sessions) state.sessions = sessionLines(sessions);
     if (page) state.page = pageLine(page);
-    // The commands already run for the latest words: between steps, and for the job delegation when the voice tool did what the operator asked on the page.
-    if (trigger === 'step' || (trigger === 'job' && moment.done?.length)) state.page_done = (moment.done ?? []).map((c, i) => `${i + 1}. ${c.say}${c.shown ? ` → ${c.shown.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`).join('\n') || '(none)';
-    if (gate || trigger === 'cue' || trigger === 'step' || trigger === 'job' || trigger === 'quiet') state.goal = moment.goal || '(none)';
+    // The commands already run for the latest words: between steps, and in their turn's request once the voice tool has done what the operator asked on the page.
+    if (trigger === 'step' || (turn && moment.done?.length)) state.page_done = (moment.done ?? []).map((c, i) => `${i + 1}. ${c.say}${c.shown ? ` → ${c.shown.replace(/\s+/g, ' ').slice(0, 300)}` : ''}`).join('\n') || '(none)';
+    if (turn || trigger === 'cue' || trigger === 'step' || trigger === 'quiet') state.goal = moment.goal || '(none)';
     // The job delegation knows what the page's controller can do: what it can't goes to the agent, to add it. All of
     // them: cut at 3,000 characters, a page of 81 commands lost the last third of its list (Nov 17).
-    if (page && job) state.page_commands = page.commands.map(c => `- ${c.say}`).join('\n') || '(none)';
+    if (page && sends) state.page_commands = page.commands.map(c => `- ${c.say}`).join('\n') || '(none)';
     if (tune) Object.assign(state, { earlier_sessions: tune.earlier.join('\n').slice(0, 4000) || '(none)', current_settings: JSON.stringify(tune.current) });
     const questions = {
-      ...job && { needs_agent: JOB.needs_agent }, ...trigger === 'job' && { ready: JOB.ready }, ...trigger === 'job' && moment.sent && { adds: JOB.adds }, ...trigger === 'job' && moment.working !== undefined && { now: JOB.now },
-      // Forks: whether the words are a question asked aside. With the main session in focus, asked where they are sent; with
-      // a fork in focus, at every reading of the turn, after whether the operator has left its matter (turn.ts).
-      ...moment.fork === 'main' && trigger === 'job' && { tangent: FORK.tangent },
-      // Words about how the companion behaves are for the learner and the tuner: asked only while either is on.
+      ...sends && { needs_agent: JOB.needs_agent }, ...turn && { ready: JOB.ready }, ...turn && moment.sent && { adds: JOB.adds }, ...turn && moment.working !== undefined && { now: JOB.now },
       ...trigger === 'quiet' && { standby: QUIET.standby },
-      ...gate && { ...(learn || tune) && { companion_only: GATE.companion_only }, ...instructions?.length && INSTRUCTED, ...GOAL_QUESTION, ...sessions && sessionQuestions(sessions), ...moment.fork === 'fork' && { settled: FORK.settled } },
-      ...moment.fork === 'fork' && (gate || trigger === 'job') && { tangent: FORK.tangent },
-      ...page && (gate || trigger === 'cue' || trigger === 'step') && pageQuestions(page, trigger, asked),
-      ...learn && LEARNER, ...learn && gate && removable?.length && removeQuestion(removable),
+      // Words about how the companion behaves are for the learner and the tuner: asked only while either is on.
+      ...turn && { ...(learn || tune) && { companion_only: GATE.companion_only }, ...instructions?.length && INSTRUCTED, ...GOAL_QUESTION, ...sessions && sessionQuestions(sessions) },
+      // Forks: whether the words are a question asked aside, while a fork can open (the main session in the middle of a
+      // turn) or one is in focus; and with one in focus, whether the operator has left its matter (turn.ts).
+      ...turn && moment.fork && { tangent: FORK.tangent, ...moment.fork === 'fork' && { settled: FORK.settled } },
+      ...page && (turn || trigger === 'cue' || trigger === 'step') && pageQuestions(page, trigger, asked),
+      ...learn && LEARNER, ...learn && turn && removable?.length && removeQuestion(removable),
       ...tune && tunerQuestions(tune.current, tune.pinned, trigger !== 'settings'),
     };
     return { state, questions };
   }
-  /** One call: everything the voice tool asks about this moment, of one kind (the job delegation, or its own actions). */
+  /** One call: everything the voice tool asks about this moment. */
   async read(moment: Moment, timeoutMs = 3000): Promise<Reading> {
-    const { trigger, latest, history = '', sessions, page, learn, tune, requestId, handOff } = moment, started = Date.now();
-    const said = latest?.text.replace(/\s+/g, ' ').trim() ?? '', gate = trigger === 'turn';
+    const { trigger, latest, history = '', sessions, page, learn, tune, requestId, handOff, made } = moment, started = Date.now();
+    const said = latest?.text.replace(/\s+/g, ' ').trim() ?? '', turn = trigger === 'turn';
     const { state, questions } = this.ask(moment);
     // The operator's own request, and the steps after it: whether they ask anything of the page is read apart (turn.ts).
     const request = 'page_asked' in questions || (trigger === 'step' && latest?.role === 'operator');
-    const call: JevCall = { id: randomUUID(), at: started, trigger, ...requestId && { requestId }, ...handOff && { handOff },
+    const call: JevCall = { id: randomUUID(), at: started, trigger, ...made && { made }, ...requestId && { requestId }, ...handOff && { handOff },
       config: { url: URL, model: MODEL, timeoutMs, features: this.features, thresholds: Object.fromEntries(Object.keys(questions).filter(name => name in THRESHOLDS).map(name => [name, moment.thresholds?.[name] ?? (name === 'page_command' && request ? PAGE_REQUEST : THRESHOLDS[name])])) },
       state, questions, ms: 0 };
     let answers: any;
@@ -524,18 +551,18 @@ export class Jev {
     const reading: Reading = { trigger, id: call.id, said, transcript: `${history}${latest ? `► ${spokenLine(latest)}` : ''}`, needsAgent: 'needs_agent' in questions ? p('needs_agent') : null, ...'ready' in questions && { ready: p('ready', 1) }, ...'adds' in questions && { adds: p('adds', 1) }, ...'now' in questions && { now: p('now', 1) } };
     if ('tangent' in questions) reading.tangent = p('tangent');
     if ('standby' in questions) reading.standby = p('standby');
-    if (gate) {
+    if (turn) {
       if ('companion_only' in questions) reading.companionOnly = p('companion_only');
       if ('withheld' in questions) reading.withheld = p('withheld');
       if ('settled' in questions) reading.settled = p('settled');
       const goal = answers?.goal, choice = goal?.choice;
       if (choice === 'keep' || choice === 'new' || choice === 'walk' || choice === 'done') reading.goal = { choice, p: Number(goal.probabilities?.[choice] ?? goal.confidence ?? 1) };
     }
-    if (gate && sessions) {
+    if (turn && sessions) {
       const chosen = (choice: string) => sessions.filter((_, index) => answers?.[`session_${index + 1}`]?.choice === choice).map(s => s.id);
       reading.sessions = { asked: p('sessions_asked'), unlisted: p('unlisted_session'), turnOn: chosen('turn_on'), turnOff: chosen('turn_off') };
     }
-    if (page && (gate || trigger === 'cue' || trigger === 'step')) {
+    if (page && (turn || trigger === 'cue' || trigger === 'step')) {
       const answer = answers?.page_command;
       reading.page = { command: chosenCommand(answer, page, [], request ? PAGE_REQUEST : PAGE_STEP), more: p('page_more'), ...answer?.probabilities && { likely: answer.probabilities }, ...'gave_up' in questions && { gaveUp: p('gave_up') }, ...'page_asked' in questions && { asked: p('page_asked') } };
       // The likeliest commands, for tuning the page question.
@@ -546,7 +573,7 @@ export class Jev {
     const drop = answers?.remove;
     if (drop?.choice && drop.choice !== 'none' && moment.removable?.some(item => item.id === drop.choice)) reading.remove = { id: drop.choice, p: Number(drop.probabilities?.[drop.choice] ?? drop.confidence ?? 1) };
     if (tune) reading.tuning = answers;
-    this.log({ type: 'jev.read', id: call.id, trigger, said: said.slice(-200), questions: Object.keys(questions).length, chars: JSON.stringify(state).length, ms: Date.now() - started, needsAgent: reading.needsAgent, ready: reading.ready, ...trigger === 'job' && { reply: state.voice_reply.slice(-200) }, companionOnly: reading.companionOnly, withheld: reading.withheld, standby: reading.standby, sessions: reading.sessions, instruction: reading.instruction });
+    this.log({ type: 'jev.read', id: call.id, trigger, ...made && { made }, said: said.slice(-200), questions: Object.keys(questions).length, chars: JSON.stringify(state).length, ms: Date.now() - started, needsAgent: reading.needsAgent, ready: reading.ready, ...turn && { reply: state.voice_reply.slice(-200) }, companionOnly: reading.companionOnly, withheld: reading.withheld, standby: reading.standby, sessions: reading.sessions, instruction: reading.instruction });
     return reading;
   }
 }

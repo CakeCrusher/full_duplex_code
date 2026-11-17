@@ -30,7 +30,7 @@ function judge(h: Harness, reading: (sessions: Session[]) => Partial<SessionsJud
   const seen: Session[][] = [];
   fakeJev(h, moment => {
     // The job delegation reads no sessions: only whether the words need the agent.
-    if (moment.trigger === 'job') return { needsAgent };
+    if (moment.made === 'replied') return { needsAgent };
     seen.push(moment.sessions!); return { sessions: { asked: .95, unlisted: 0, turnOn: [], turnOff: [], ...reading(moment.sessions!) } };
   });
   return seen;

@@ -38,7 +38,7 @@ const text = (page: BrowserPage, selector: string) => page.locator(selector).tex
 
 let browser;
 try {
-  browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
+  browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
   // Each device is its own browser context, with a quiet virtual microphone.
   const device = async () => {
     const page = await (await browser!.newContext({ permissions: ['microphone'] })).newPage();

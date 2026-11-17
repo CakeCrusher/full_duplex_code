@@ -34,7 +34,7 @@ async function waitFor(check: () => unknown | Promise<unknown>, label: string, t
 
 let browser;
 try {
-  browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
+  browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
   const page = await (await browser.newContext({ permissions: ['microphone'] })).newPage();
   // A virtual microphone whose loudness the test sets: quiet room noise below the gate, or speech. And the page's
   // sounds, as the notes it starts (the virtual microphone's own 330 Hz tone aside).

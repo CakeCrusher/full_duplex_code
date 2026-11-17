@@ -8,7 +8,7 @@ const fixture = synthesize('browser-greeting', 'Hello, are you ready to help me 
 const test = await startTestHarness('browser');
 let browser: import('playwright').Browser | undefined, page: import('playwright').Page | undefined;
 try {
-  browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
+  browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
   page = await browser.newPage({ viewport: { width: 1360, height: 1000 } });
   // An in-browser virtual audio cable: a WAV -> MediaStreamDestination replaces
   // only the unavailable physical microphone. The app's capture worklet, WebRTC

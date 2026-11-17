@@ -299,12 +299,14 @@ try {
 
   // 4. The controller edited and the page reloaded mid-session, as the agent would after an edit.
   if (!only || only.has(4)) {
+    // Where the page is before the reload: whichever scenario ran last left it there.
+    const before = await harness.stage.here().catch(() => undefined);
     write(2);
     await reportPage.reload(); await delay(1500);
     harness.stage.observe(undefined, true);
     await delay(3500);
     const restored = await harness.stage.here().catch(() => undefined);
-    mark(4, `after the reload the page is where it was (${restored?.where ?? 'unreadable'})`, /Hotspots/.test(restored?.where ?? ''));
+    mark(4, `after the reload the page is where it was (${restored?.where ?? 'unreadable'}; before: ${before?.where ?? 'unreadable'})`, Boolean(restored?.where) && restored?.where === before?.where);
     const view = await harness.stage.describe(0);
     mark(4, 'the new section and the renamed command are offered after the reload', !!view?.commands.some(c => c.id === 'page_go_follows'));
     await say(4, 'What does the new follows section say?', { what: 'the new section is shown', check: s => ran(s, 'page_go_follows') });

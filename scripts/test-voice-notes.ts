@@ -32,7 +32,7 @@ async function until(check: () => unknown, label: string, ms = 10000) {
 let browser;
 const errors: string[] = [];
 try {
-  browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
+  browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
   const page = await browser.newPage({ viewport: { width: 1300, height: 1000 } });
   // A loud steady tone as the microphone.
   await page.addInitScript(() => {

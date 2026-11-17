@@ -1,30 +1,37 @@
-// The operator's turn, read in two calls over the same state (jev.ts) that ask different questions:
-// - The voice tool's own actions, at once (routeActions): what they ask for that a command of the page does (choose,
-//   set, add, place, show), it does there, one command after another (presenter.ts); it keeps the goal they set (what
-//   they want shown, taught or walked through) apart from the page, and, with those features on (features.ts), turns
-//   voice sessions on or off (sessions.ts), leaves the companion's own behavior to the learner and the tuner (they take
-//   the reading), and finds what the operator's instructions keep from the agent. It never decides that their words go
-//   to the agent. Standby is read later, once the conversation has gone quiet after the companion's answer
-//   (voice-sessions.ts).
-// - The job delegation, once the voice companion has replied (jobTurn): whether their words need the coding agent,
-//   read with what the companion said and what the page's commands can do, and whether they have finished saying them.
-//   Words not finished wait for the next reading, which takes them with what the operator adds; never dropped. Keeping
-//   work from the agent is the costly mistake; GPT Live passes nothing on.
-// Both are the same whichever signal ended the turn (mediator.ts): GPT Live starting its answer, the operator's quiet, or
-// GPT Live asking to pass their words on, which sends nothing by itself (the operator's rule, Nov 17).
-// What each reading led to is added to its call's record (jev-audit.ts).
-// From Oct 30 to Nov 17 the operator's words ran nothing on the page (it followed only what the voice said): asked for
-// an order of several settings, the voice said "Sure.", passed it on, and the agent made the changes (jev.ts, pageQuestions).
+// The operator's turn, read by one request (jev.ts, trigger turn) that asks everything the voice tool decides about
+// their words. It is made twice, the same both times, with what is so at that moment (the operator's rule, Nov 17:
+// "one request… both identical, with the same information… they make all decisions"): as their turn ends, and once
+// the voice companion's reply is in (mediator.ts). Each decision is acted on once, from the first request that has what
+// it takes:
+// - What the voice tool does itself, as their turn ends (routeActions): what they ask for that a command of the page
+//   does (choose, set, add, place, show), it does there, one command after another (presenter.ts); it keeps the goal
+//   they set (what they want shown, taught or walked through) apart from the page, and, with those features on
+//   (features.ts), turns voice sessions on or off (sessions.ts), leaves the companion's own behavior to the learner
+//   and the tuner (they take the reading), and finds what the operator's instructions keep from the agent. Their words
+//   are enough for these, and the page must not wait for the companion to finish talking. Standby is read later, once
+//   the conversation has gone quiet after the companion's answer (voice-sessions.ts).
+// - Whether their words go to the coding agent, once the companion has replied (jobTurn): its reply shows what it could
+//   handle itself (mediator.ts, replyTo, has what the wait buys), and by then the request says what the voice tool did
+//   on the page. Words not finished wait for the next turn, which reads them with what the operator adds; never
+//   dropped. Keeping work from the agent is the costly mistake; GPT Live passes nothing on.
+// The same whichever signal ended the turn: GPT Live starting its answer, the operator's quiet, or GPT Live asking to
+// pass their words on, which sends nothing by itself.
+// What each request led to is added to its call's record (jev-audit.ts).
+// Until Nov 17 the two moments asked different questions. From Oct 30 to Nov 17 the operator's words ran nothing on the
+// page (it followed only what the voice said): asked for an order of several settings, the voice said "Sure.", passed
+// it on, and the agent made the changes (jev.ts, pageQuestions).
 import type { Harness } from './bridge.ts';
 import type { Decision } from './mediator.ts';
 import type { StageCommand, StageView } from './stage.ts';
 import type { Spoken, SpokenRequest } from './voice-history.ts';
-import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, NOW, PAGE_ASKED, PRESS, READY, RECENT_MS, SETTLED, STAYS, WITHHELD, type Reading } from './jev.ts';
+import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, NOW, PAGE_ASKED, PRESS, READY, RECENT_MS, SETTLED, STAYS, WITHHELD, type Reading, type Session } from './jev.ts';
 import { companionNoted, handledNote, lookingNote, sessionsChanging } from './prompts.ts';
 
 /** What the voice tool did itself for the operator's turn: for GPT Live at once (told), and for the agent with their words (note). */
 export interface Actions {
   reading?: Reading; view?: StageView;
+  /** The running companions as the turn's first request listed them (orchestration): its second lists the same. */
+  sessions?: Session[];
   told?: string;
   /** What it did on the page for them (presenter.ts, carryOut): the commands that ran, with what the page answered, and what GPT Live hears of it, without waiting. */
   did?: { told: string; done: (StageCommand & { shown?: string })[] };
@@ -38,13 +45,43 @@ export interface Actions {
   back?: boolean;
 }
 
-export async function routeActions(bridge: Harness, request: SpokenRequest, spoken: Spoken[]): Promise<Actions> {
-  // Read at every turn: a companion slower than 300 ms is listed as not answering. The page on stage is for the job
-  // delegation (what its controls can do) and for the agent (what the user was looking at).
+/**
+ * What the mediator knows of a turn when a request is made for it (mediator.ts): all the operator is saying when words
+ * of an earlier turn still wait undecided (they had not finished); whether they went on speaking before the decision,
+ * the words have waited too long, or an earlier reading of them found they need the agent; and the request that last
+ * went to the agent from this connection: how long ago, and the operator's words in it.
+ */
+export interface Waiting { saying?: string; continued?: boolean; overdue?: boolean; needed?: boolean; sent?: { ago: number; said: string; id: string } }
+
+/**
+ * Moments after a request reached the agent, Jev is also asked whether these words add to it: its tail, a repeat, an
+ * acknowledgment or noise stays with the voice (jev.ts, ADDS). Not for words already found to need the agent. Where
+ * that request is now is the outbox's to say: still held for the turn's end, or not known to have arrived (then a
+ * repeat of it must go).
+ */
+function recentRequest(bridge: Harness, { sent, needed }: Waiting) {
+  const state = sent && bridge.outbox.get(sent.id)?.state;
+  return sent && sent.ago <= RECENT_MS && !needed && state !== 'uncertain' ? { ago: sent.ago, said: sent.said, held: state === 'held' } : undefined;
+}
+/** The request for the operator's turn: the same each time it is made, with what is so then (the companion's reply so far, the page and what was done on it, the agent's state). */
+function readTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], made: 'ended' | 'replied', waiting: Waiting,
+  { reply, view, sessions, done, fork }: { reply?: string; view?: StageView; sessions?: Session[]; done?: (StageCommand & { shown?: string })[]; fork?: 'main' | 'fork' }) {
+  const recent = recentRequest(bridge, waiting);
+  // While the agent is in the middle of a turn it can be steered in, Jev is also asked whether these words must reach it
+  // now or can wait for the turn to end (jev.ts, NOW): fdc then holds them until it does (outbox.ts).
+  const working = bridge.agent.profile.canSteer ? bridge.agentWorking() : undefined;
+  return bridge.read({ trigger: 'turn', made, spoken, reply, sessions, page: view, ...done?.length && { done }, requestId: request.id, ...waiting.saying && { saying: waiting.saying },
+    ...recent && { sent: recent }, ...working !== undefined && { working }, ...fork && { fork } });
+}
+
+/** The turn's request as it ends, and what the voice tool does itself with their words. */
+export async function routeActions(bridge: Harness, request: SpokenRequest, spoken: Spoken[], waiting: Waiting & { reply?: string } = {}): Promise<Actions> {
+  // Read at every turn: a companion slower than 300 ms is listed as not answering. The page on stage is read for what the
+  // operator asks of it, for the job delegation (what its controls can do) and for the agent (what the user was looking at).
   const orchestration = bridge.features.has('orchestration');
   const [sessions, view] = await Promise.all([orchestration ? bridge.sessionSwitch.sessions(300) : undefined, bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
   const fork = forkMoment(bridge);
-  const reading = await bridge.read({ trigger: 'turn', spoken, sessions, page: view, requestId: request.id, ...fork && { fork } });
+  const reading = await readTurn(bridge, request, spoken, 'ended', waiting, { reply: waiting.reply, view, sessions, fork });
   bridge.log({ type: 'turn.read', said: request.fresh.slice(-200), companionOnly: reading.companionOnly, withheld: reading.withheld, sessions: reading.sessions });
   const asked = sessions && bridge.sessionSwitch.act(reading, sessions);
   const companion = (reading.companionOnly ?? 0) >= COMPANION_ONLY;
@@ -66,7 +103,7 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
     ? bridge.forks.back('the operator moved on') : undefined;
   if (returned) bridge.jevAudit?.decided(reading.id, { fork: 'back' });
   const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent, bridge.features), returned].filter(Boolean).join(' ') || undefined;
-  return { reading, view, told, ...did && { did }, ...withheld && { withheld }, note: view ? lookingNote(view) : undefined, keptNote: handled && handledNote(handled), ...handled === 'companion' && { mine: true }, ...returned && { back: true } };
+  return { reading, view, ...sessions && { sessions }, told, ...did && { did }, ...withheld && { withheld }, note: view ? lookingNote(view) : undefined, keptNote: handled && handledNote(handled), ...handled === 'companion' && { mine: true }, ...returned && { back: true } };
 }
 
 /** Where a fork decision stands (jev.ts): the main session in focus and in the middle of a turn (a question asked aside can go to a fork), or a fork in focus (the operator can move back). */
@@ -87,23 +124,13 @@ async function openFork(bridge: Harness, reading: Reading, since: number) {
   return told;
 }
 
-/** Words waiting undecided before this reading (mediator.ts): the operator went on speaking before the decision, the words have waited too long, or an earlier reading of them found they need the agent. */
-export interface Waiting { continued?: boolean; overdue?: boolean; needed?: boolean; /** The request that last went to the agent from this connection: how long ago, and the operator's words in it (mediator.ts). */ sent?: { ago: number; said: string; id: string } }
-
-export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions, { continued = false, overdue = false, needed: neededBefore = false, sent }: Waiting = {}): Promise<Decision> {
-  // Moments after a request reached the agent, Jev is also asked whether these words add to it: its tail, a repeat, an
-  // acknowledgment or noise stays with the voice (jev.ts, ADDS). Not for words already found to need the agent.
-  // Where that request is now is the outbox's to say: still held for the turn's end, or not known to have arrived (then a
-  // repeat of it must go).
-  const state = sent && bridge.outbox.get(sent.id)?.state;
-  const recent = sent && sent.ago <= RECENT_MS && !neededBefore && state !== 'uncertain' ? { ago: sent.ago, said: sent.said, held: state === 'held' } : undefined;
-  // While the agent is in the middle of a turn it can be steered in, Jev is also asked whether these words must reach it
-  // now or can wait for the turn to end (jev.ts, NOW): fdc then holds them until it does (outbox.ts).
-  const working = bridge.agent.profile.canSteer ? bridge.agentWorking() : undefined;
+/** The turn's request once the voice companion has replied, and whether their words go to the coding agent. */
+export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], reply: string | undefined, actions: Actions, waiting: Waiting = {}): Promise<Decision> {
+  const { continued = false, overdue = false, needed: neededBefore = false } = waiting, recent = recentRequest(bridge, waiting);
   const fork = actions.back ? undefined : forkMoment(bridge), since = heardAt(bridge);
   // The page as it is now: what the voice tool did on it for these words changed what its commands offer.
   const view = actions.did ? await bridge.stage.describe().catch(() => undefined) ?? actions.view : actions.view;
-  const reading = await bridge.read({ trigger: 'job', spoken, reply, page: view, ...actions.did && { done: actions.did.done }, requestId: request.id, ...recent && { sent: recent }, ...working !== undefined && { working }, ...fork && { fork } });
+  const reading = await readTurn(bridge, request, spoken, 'replied', waiting, { reply, view, sessions: actions.sessions, done: actions.did?.done, fork });
   // Words that add nothing to a request held for the turn's end still go when they press for it ("no, send it now"):
   // steered in, they bring the held request with them (outbox.ts).
   const adds = reading.adds === undefined || reading.adds >= ADDS || Boolean(recent?.held && (reading.now ?? 0) >= PRESS);
@@ -131,9 +158,9 @@ export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: S
     ...!send && !wait && (actions.did || actions.withheld) && { settled: true }, ...!send && actions.withheld && { withheld: true } };
 }
 
-/** Both calls in turn, without waiting for a reply: the turn as the tests (and a voice tool that heard none) read it. */
+/** Both requests in turn, without waiting for a reply: the turn as the tests (and a voice tool that heard none) read it. */
 export async function routeTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], reply?: string): Promise<Decision> {
-  const actions = await routeActions(bridge, request, spoken);
+  const actions = await routeActions(bridge, request, spoken, { reply });
   const job = await jobTurn(bridge, request, spoken, reply, actions);
   return { ...job, told: [actions.told, job.told].filter(Boolean).join(' ') || undefined, actions };
 }

@@ -304,13 +304,14 @@ export class Harness {
    * had perceived before them, word for word as GPT Live got it (perceived.ts: the same conversation however many Standby
    * wakes, resumes and restarts of fdc came between, as far as GPT Live has it), and the operator's instructions to the
    * companion in force, as GPT Live has them, and the operator's goal with what was shown for it. Of the operator's words
-   * the voice tool's own reading also asks, with those features on, whether they give a standing instruction (the learner)
-   * and which settings fit (the tuner).
+   * it also asks, with those features on, whether they give a standing instruction (the learner) and which settings fit
+   * (the tuner).
    */
   read({ spoken = [], ...moment }: Omit<Moment, 'latest' | 'history' | 'instructions' | 'learn' | 'tune'> & { spoken?: Spoken[] }, timeoutMs?: number): Promise<Reading> {
     if (!this.jev) return Promise.reject(new Error('Jev is not configured'));
     const words = ['turn', 'unsent'].includes(moment.trigger), tune = this.jevTuning && (words || moment.trigger === 'settings');
-    const ask = tune ? ++this.tuneAsks : 0, latest = spoken.at(-1), record = this.voiceSessions.run?.record ?? this.voiceSessions.current();
+    // The turn's second request asks the same questions, but its settings are not acted on (turn.ts): it doesn't supersede the first.
+    const ask = tune && moment.made !== 'replied' ? ++this.tuneAsks : 0, latest = spoken.at(-1), record = this.voiceSessions.run?.record ?? this.voiceSessions.current();
     // When the conversation has gone quiet (voice-sessions.ts), the history runs to now: what fdc sent since the last words is part of what Jev judges.
     return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(perceivedText(record, spoken.slice(0, -1), moment.trigger === 'quiet' ? Date.now() : latest.at, HISTORY_BYTES)) },
       goal: moment.goal ?? this.voiceSessions.goalLine(),
@@ -321,7 +322,7 @@ export class Harness {
   }
   /**
    * What Jev read in the operator's words, acted on once: a standing instruction to learn, and the settings that fit (only
-   * the latest ask's: an older answer arriving late would undo it). Done last with the voice tool's own reading (turn.ts),
+   * the latest ask's: an older answer arriving late would undo it). Done last with the turn's first request (turn.ts),
    * with the tuner's alone and with that of words already sent, so the reading's record is then complete (jev-audit.ts).
    */
   consider(reading: Reading & { tuneAsk?: number }, requestId?: string) {

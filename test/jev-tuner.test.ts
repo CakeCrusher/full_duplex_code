@@ -46,8 +46,7 @@ test("with the operator's words, Jev reads them in the same call and keeps the c
   assert.deepEqual(tuningFrom(reading.tuning, DEFAULT_TUNING).changes, [{ name: 'wakeThreshold', from: 50, to: 100 }]);
   assert.equal(sent.state.latest, 'user: Stop waking up for every little thing.');
   assert.match(sent.state.operator_instructions, /cut in/);
-  assert.ok(sent.questions.companion_only && sent.questions.standbyAfterMs, "the voice tool's own questions and the tuner's, in one call");
-  assert.ok(!sent.questions.needs_agent, "whether the words go to the agent is the job delegation's call");
+  assert.ok(sent.questions.companion_only && sent.questions.standbyAfterMs && sent.questions.needs_agent, "the tuner's questions with all the others of the turn, in its one request");
   assert.match(sent.questions.standbyAfterMs.instructions, /Keep the current level unless/);
   // The operator's own choices (the quiet window, and how sure Jev must be for Standby at once or for a fork) change only
   // when they ask for that setting itself; the others Jev fits to what their words call for.

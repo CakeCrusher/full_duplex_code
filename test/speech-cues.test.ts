@@ -73,7 +73,7 @@ test("the voice moves the page: a part's name at once, other turning words throu
   const { h, lives } = await harness(t);
   const runs: string[][] = [];
   h.stage = { tabId: 1, view, pages: new Map(), describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: `at ${ids[0]}` }; }, follow: async () => null, observe() {}, close() {} } as any;
-  const moments = fakeJev(h, m => m.trigger === 'cue' ? { page: pageReading({ command: 'page_next_slide' }) } : m.trigger === 'job' ? { needsAgent: .1 } : {});
+  const moments = fakeJev(h, m => m.trigger === 'cue' ? { page: pageReading({ command: 'page_next_slide' }) } : m.made === 'replied' ? { needsAgent: .1 } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   h.presenter.speechCues.set(Stage.cues(view));
   await turn(h, 'take me to the sessions');

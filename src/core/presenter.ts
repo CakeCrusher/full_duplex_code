@@ -1,8 +1,9 @@
 // The presenter: fdc working the page the coding agent made, for the operator, while the agent goes on producing. The
 // operator never has to know how the page is worked; they talk, and it is done:
 // - What the operator asks for that a command of the page does (choose this, set that, add it, place it, show me the
-//   other one), the voice tool does as their turn ends, from its own reading of their words (turn.ts): one command, then
-//   the page is read again and the next, until Jev wants no more. GPT Live is told what was done.
+//   other one), the voice tool does as their turn ends, from the turn's request (turn.ts): one command, then the page
+//   is read again and the next, until Jev wants no more (requests of their own, only about the page's commands). GPT
+//   Live is told what was done.
 // - A part's name after a turning phrase GPT Live says ("let's look at" the results, speech-cues.ts) moves the page at once.
 // - Every other sentence it says, bare acknowledgments aside, asks Jev which of the page's commands shows what it is
 //   talking about, if any, and whether another must follow it. A part's own controls (its rows, columns, toggles, steps)
@@ -199,7 +200,7 @@ export class Presenter {
         }
         if (command?.startsWith('tab_') && Date.now() - bridge.stage.shownAt < AGENT_SHOWN_MS) { bridge.log({ type: 'stage.kept_page', instead: command }); command = undefined; }
         const more = (reading.page?.more ?? 0) >= PAGE_MORE && step + 1 < most;
-        // The voice tool's own reading of the turn (the first, for a request) is completed where it was made (turn.ts).
+        // The turn's request (the first reading, for what the operator asked) is completed where it was made (turn.ts).
         const settles = !asked || step > 0;
         if (!command) { bridge.jevAudit?.decided(reading.id, { command: null, step }, settles); break; }
         let ran: { run: StageRun; command: string; instead?: string };
