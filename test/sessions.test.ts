@@ -60,7 +60,7 @@ test('Jev reads each session as the page lists it, so the operator can name one 
   let sent: any;
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers: {} }) }; } });
   const sessions = await a.h.sessionSwitch.sessions(), [alpha, beta] = sessions.map(s => s.sessionId);
-  await jev.read({ trigger: 'delegation', latest: { role: 'operator', text: `Turn off the ${beta!.slice(0, 3).split('').join(' ')} session.` }, sessions });
+  await jev.read({ trigger: 'turn', latest: { role: 'operator', text: `Turn off the ${beta!.slice(0, 3).split('').join(' ')} session.` }, sessions });
   assert.match(sent.state.sessions, new RegExp(`^session_1 \\(the one the operator is speaking to now\\): alpha · Claude Code · ${alpha} · [^\\n]+ \\(Claude Code [^\\n]+ · started [^\\n]+\\)\\nsession_2: beta · Claude Code · ${beta} · Ready \\(`));
   assert.match(sent.state.setting, /a session ID by its first characters/);
   assert.match(sent.questions.session_2.instructions, new RegExp(`session_2 \\(beta \\(${beta}\\)\\)`));
@@ -142,14 +142,14 @@ test('speech fdc handled itself is not sent: the next request carries it, noted,
   const say = (delta: string, start_ms: number, end_ms: number) => f.m.liveEvent({ type: 'session.input_transcript.delta', delta, start_ms, end_ms });
   // The fixture's first words stand for part A, unfinished; then a tangent fdc handles.
   say(' Oh, and stop waking up for every little thing.', 1000, 3000);
-  f.m.decide('turn'); await until(() => f.appends.length);
+  f.m.decide(); await until(() => f.appends.length);
   assert.equal(f.deliveries.length, 0);
   assert.equal(f.m.history.delegatedThrough, -1, 'nothing reached the agent');
   assert.deepEqual(f.recorded.map(r => [r.handOff, r.judged]), [['kept', .1]], 'what was kept is audited, where lost work would show');
-  f.m.decide('turn');
+  f.m.decide();
   assert.equal(asks, 1, 'the same words are read once');
   say('And show what it would cost.', 9000, 11000);
-  f.m.decide('turn'); await until(() => f.deliveries.length);
+  f.m.decide(); await until(() => f.deliveries.length);
   assert.equal(asks, 2, 'Jev judges only the new words the second time');
   assert.match(f.deliveries[0].content, /voice tool has done that part\. Act on the rest/);
   assert.match(f.deliveries[0].content, /user: Switch to beta\. Oh, and stop waking up for every little thing\.\nuser: And show what it would cost\.$/);
@@ -162,15 +162,15 @@ test('speech fdc handled itself is not sent: the next request carries it, noted,
 
 test('a request whose delivery was uncertain goes again with the next one, noted; one handled after voice ended goes at once', async t => {
   const f = mediator(t, async () => ({ reading: reading({ needsAgent: .9 }), send: true }));
-  f.m.decide('turn'); await until(() => f.deliveries.length);
+  f.m.decide(); await until(() => f.deliveries.length);
   f.m.undelivered(f.deliveries[0].id);
   f.m.liveEvent({ type: 'session.input_transcript.delta', delta: 'Then run the tests.', start_ms: 5000, end_ms: 6000 });
-  f.m.decide('turn'); await until(() => f.deliveries.length === 2);
+  f.m.decide(); await until(() => f.deliveries.length === 2);
   assert.match(f.deliveries[1].content, /may have reached you already/);
   assert.match(f.deliveries[1].content, /user: Switch to beta\.\nuser: Then run the tests\.$/);
   let answer!: (decision: Decision) => void;
   const late = mediator(t, () => new Promise(resolve => { answer = resolve; }));
-  late.m.decide('turn'); await until(() => answer);
+  late.m.decide(); await until(() => answer);
   late.m.handOff('operator ended voice');
   assert.equal(late.deliveries.length, 0, 'the words Jev is still reading are not handed off twice');
   answer(handled());
@@ -178,30 +178,31 @@ test('a request whose delivery was uncertain goes again with the next one, noted
   assert.match(late.deliveries[0].content, /^\[Voice session ended: operator ended voice\][^\n]*voice tool has done that part[^\n]*\n\nuser: Switch to beta\.$/);
 });
 
-test("the mediator: GPT Live asking to pass on handled words hears what was done; sent words carry Jev's judgment; Jev failing sends", async t => {
+test("the mediator: GPT Live asking to pass on handled words hears what was done; sent words carry Jev's judgment; its asking sends nothing Jev keeps; Jev failing sends", async t => {
   const f = mediator(t, async () => handled());
-  f.m.decide('delegation', 'd1'); await until(() => f.appends.length);
+  f.m.decide('d1'); await until(() => f.appends.length);
   assert.equal(f.deliveries.length, 0);
   assert.deepEqual(f.appends, [['thinking', 'Nothing was sent to Claude Code: …', 'd1']]);
   assert.match(f.m.history.request()!.notes!.join(' '), /voice tool has done that part/, 'its words are not delegated: they go with the next request, noted');
-  f.m.decide('delegation', 'd2'); await until(() => f.appends.length === 2);
+  f.m.decide('d2'); await until(() => f.appends.length === 2);
   assert.deepEqual(f.appends[1], ['thinking', 'Nothing was sent to Claude Code: …', 'd2'], 'asked again for words already read, it hears the same');
   const passed = mediator(t, async () => ({ reading: reading({ needsAgent: .8 }), send: true }));
-  passed.m.decide('turn');
+  passed.m.decide();
   await until(() => passed.recorded.length);
   assert.equal(passed.deliveries.length, 1);
   assert.deepEqual([passed.recorded[0].handOff, passed.recorded[0].judged], ['passed', .8], 'Jev is not asked a second time');
-  // GPT Live asking sends, though Jev would have kept them: either one asking sends. Jev keeping them is what the voice hears when it didn't ask.
+  // GPT Live asking sends nothing: words Jev keeps stay with the voice, and it hears so, whether its asking ended the turn or came afterwards.
+  const nothing = "Nothing was sent to Claude Code: the voice tool found the operator's words need nothing from Claude. Answer them yourself; whatever they ask Claude to do goes to it when they say so.";
   const asked = mediator(t, async () => ({ reading: reading({ needsAgent: .2 }), send: false }));
-  asked.m.decide('delegation', 'd3'); await until(() => asked.deliveries.length);
-  assert.equal(asked.deliveries[0].delegationId, 'd3');
+  asked.m.decide('d3'); await until(() => asked.appends.length);
+  assert.deepEqual([asked.deliveries.length, asked.appends], [0, [['thinking', nothing, 'd3']]]);
   const kept = mediator(t, async () => ({ reading: reading({ needsAgent: .2 }), send: false }));
-  kept.m.decide('turn'); await until(() => kept.recorded.length);
-  assert.equal(kept.deliveries.length, 0);
-  kept.m.decide('delegation', 'd4'); await until(() => kept.deliveries.length);
-  assert.equal(kept.deliveries[0].delegationId, 'd4', 'and asking afterwards for words Jev kept sends them');
+  kept.m.decide(); await until(() => kept.recorded.length);
+  assert.deepEqual([kept.deliveries.length, kept.appends.length], [0, 0], "kept at the turn's end, with nothing said to GPT Live, which didn't ask");
+  kept.m.decide('d4'); await until(() => kept.appends.length);
+  assert.deepEqual([kept.deliveries.length, kept.appends], [0, [['thinking', nothing, 'd4']]], 'asking afterwards for words Jev kept sends nothing either');
   const failing = mediator(t, async () => { throw new Error('Jev returned HTTP 500'); });
-  failing.m.decide('turn'); await until(() => failing.deliveries.length);
+  failing.m.decide(); await until(() => failing.deliveries.length);
   assert.equal(failing.deliveries.length, 1, 'in doubt, it reaches the harness');
 });
 
@@ -237,7 +238,7 @@ test("words only about how the companion behaves are handled by fdc: the harness
   const considered: Reading[] = [];
   const m = mediator(t, async () => decided);
   m.m.consider = r => considered.push(r);
-  m.m.decide('turn'); await until(() => considered.length);
+  m.m.decide(); await until(() => considered.length);
   assert.equal(m.deliveries.length, 0);
   assert.deepEqual(considered, [decided.actions!.reading]);
   fakeJev(a.h, () => ({ needsAgent: .9, companionOnly: .3, sessions: { asked: .05, unlisted: 0, turnOn: [], turnOff: [] } }));

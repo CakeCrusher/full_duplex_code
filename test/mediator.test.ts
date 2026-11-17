@@ -37,7 +37,7 @@ test('hooks are primary: all raw hooks, including assistant batches, are quiet t
   assert.doesNotMatch(content(f, 'commentary'), /Stop/);
   assert.ok(f.appends.every(e => e.delegationId === null));
   assert.equal(f.mediator.history.fragments.length, 0);
-  f.mediator.decide('delegation', 'unexpected-delegation');
+  f.mediator.decide('unexpected-delegation');
   assert.equal(f.deliveries.length, 0, 'observed input never triggers a new channel request');
 });
 
@@ -72,8 +72,8 @@ test('voice startup and restart send only new observations; earlier work goes to
 test('a delegation sends ordinary user text once, without asking Claude to use companion tools', async t => {
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
-  f.mediator.decide('delegation', 'work');
-  f.mediator.decide('delegation', 'duplicate');
+  f.mediator.decide('work');
+  f.mediator.decide('duplicate');
   await flush();
   assert.equal(f.deliveries.length, 1);
   assert.match(f.deliveries[0].content, /^User request \(transcribed speech\): .+\n\nuser: Make the button blue\.$/);
@@ -83,7 +83,7 @@ test('a delegation sends ordinary user text once, without asking Claude to use c
 test('when voice ends, speech not yet passed on goes to the agent, tagged with why', async t => {
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
-  f.mediator.decide('delegation', 'work');
+  f.mediator.decide('work');
   await flush();
   f.live.emit('event', { type: 'session.output_transcript.delta', delta: 'Sure, passing that on.', start_ms: 1200, end_ms: 2000 });
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'And then make the header', start_ms: 5000, end_ms: 6000 });
@@ -100,7 +100,7 @@ test('when voice ends, speech not yet passed on goes to the agent, tagged with w
 test('when voice ends with everything already passed on, nothing more is sent', async t => {
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
-  f.mediator.decide('delegation', 'work');
+  f.mediator.decide('work');
   f.live.emit('event', { type: 'session.output_transcript.delta', delta: 'Done.', start_ms: 1200, end_ms: 1600 });
   f.mediator.handOff('requested');
   await flush();
@@ -180,7 +180,7 @@ test('a failed delegation is factual context for the conversation, without a com
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the page blue.', start_ms: 0, end_ms: 1000 });
   f.mediator.deliver = () => { throw new Error('channel unavailable'); };
-  f.mediator.decide('delegation', 'failed-request'); await flush();
+  f.mediator.decide('failed-request'); await flush();
   assert.match(content(f, 'thinking'), /request was not delivered/);
   assert.equal(content(f, 'commentary'), '');
 });

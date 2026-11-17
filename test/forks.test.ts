@@ -16,7 +16,7 @@ import { Jev } from '../src/core/jev.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { codex } from '../src/adapters/codex/index.ts';
 import { perceivedText } from '../src/core/perceived.ts';
-import { passingOn, routeActions } from '../src/core/turn.ts';
+import { routeActions } from '../src/core/turn.ts';
 import { fakeJev, harness, page, turn, until } from './live-fake.ts';
 
 const settle = (ms = 30) => new Promise(resolve => setTimeout(resolve, ms));
@@ -78,8 +78,6 @@ test('Jev is asked whether the words are a question asked aside where they are s
   // The main session in focus and at work: asked by the reading that sends the words.
   assert.equal((await jev.read({ trigger: 'job', latest, working: 5000, fork: 'main' })).tangent, .9);
   assert.deepEqual(asked(), ['tangent'], "the job delegation's reading");
-  await jev.read({ trigger: 'delegation', latest, fork: 'main' });
-  assert.deepEqual(asked(), ['tangent'], 'GPT Live asked to pass the words on: they go at once');
   await jev.read({ trigger: 'turn', latest, fork: 'main' });
   assert.deepEqual(asked(), [], "not at the turn's end: nothing is sent by that reading");
   // A fork in focus: every reading of the turn.
@@ -188,14 +186,13 @@ test('while the main session works, a question that is sent opens a fork and goe
   decision = await turn(h, 'By the way, what does CNS mean?');
   assert.deepEqual([decision.send, decision.later, opened.length, h.forks.focus], [true, false, 1, 'fork']);
   assert.match(decision.told!, /^<fork started> The operator turned aside to ask something: it goes to a fork of Claude Code's session/);
-  // GPT Live asked to pass the words on: they go at once, so the fork opens at once.
+  // The voice tool's own reading opens nothing, whichever signal ended the turn: a fork opens as words are sent.
   const { h: asked } = await harness(t, { features: ['instructions'] });
   const windows: string[] = []; asked.forks.open = script => { windows.push(script); return 'Terminal'; };
   fakeJev(asked, () => ({ tangent: .9 })); asked.workingSince = Date.now();
   const request = { utterances: [], through: 0, seqs: [0], fresh: 'What does CNS mean?' }, spoken = [{ role: 'operator' as const, text: request.fresh, at: Date.now() }];
-  assert.equal((await routeActions(asked, request, spoken, 'turn')).told, undefined, "the turn's own reading opens nothing");
-  assert.match((await routeActions(asked, request, spoken, 'delegation')).told!, /goes to a fork/);
-  assert.equal(windows.length, 1);
+  assert.equal((await routeActions(asked, request, spoken)).told, undefined);
+  assert.equal(windows.length, 0);
   const { h: other } = await harness(t, { agent: codex });
   const none: string[] = []; other.forks.open = script => { none.push(script); return 'Terminal'; };
   fakeJev(other, () => ({ tangent: .9, needsAgent: .9, ready: .9 })); other.workingSince = Date.now();
@@ -248,7 +245,7 @@ test('with a fork in focus, words that are no question move the focus back: once
   assert.match(h.forks.untold!, /the conversation went quiet/);
 });
 
-test('a fork takes only words Jev read; waiting work and words GPT Live passes on follow the same rules', async t => {
+test('a fork takes only words Jev read; waiting work follows the same rules, and how sure Jev must be is a setting', async t => {
   const { h } = await harness(t, { features: ['instructions'] });
   const opened: string[] = []; h.forks.open = script => { opened.push(script); return 'Terminal'; }; h.deliver = (() => {}) as any;
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
@@ -269,22 +266,22 @@ test('a fork takes only words Jev read; waiting work and words GPT Live passes o
   answers = { tangent: .1, settled: .1, needsAgent: .9, ready: .05 };
   const waiting = await turn(h, 'Add a legend to the');
   assert.deepEqual([waiting.send, waiting.wait, h.forks.focus], [false, true, 'main']);
-  // GPT Live asks to pass on words Jev had read and kept: from that reading, a question opens a fork, and with a fork in focus anything else goes back.
-  const reading = (tangent: number) => ({ trigger: 'job' as const, said: 'x', transcript: '', needsAgent: .1, tangent });
-  assert.match((await passingOn(h, reading(.9)))!, /goes to a fork/);
-  assert.equal(await passingOn(h, reading(.9)), undefined, 'a question stays with the fork');
-  assert.match((await passingOn(h, reading(.2)))!, /work goes to the main session/);
-  assert.equal(await passingOn(h, reading(.2)), undefined, 'in the main session, words that are no question stay there');
+  // Words that are sent: a question opens a fork, and with a fork in focus anything else goes back.
+  const sent = async (tangent: number) => { answers = { tangent, settled: .1, needsAgent: .9, ready: .9 }; return (await turn(h, 'What does CNS mean?')).told; };
+  assert.match((await sent(.9))!, /goes to a fork/);
+  assert.equal(await sent(.9), undefined, 'a question stays with the fork');
+  assert.match((await sent(.2))!, /work goes to the main session/);
+  assert.equal(await sent(.2), undefined, 'in the main session, words that are no question stay there');
   // How sure Jev must be is a setting (forkFrom, .55 unless set): the same reading opens a fork or not as it says, and
   // what opens a fork stays in one.
   h.setTuning({ ...h.tuning, forkFrom: .8 });
-  assert.equal(await passingOn(h, reading(.6)), undefined, 'under the setting: no fork');
+  assert.equal(await sent(.6), undefined, 'under the setting: no fork');
   h.setTuning({ ...h.tuning, forkFrom: .4 });
-  assert.match((await passingOn(h, reading(.45)))!, /goes to a fork/);
-  assert.equal(await passingOn(h, reading(.45)), undefined, 'it stays with the fork it opened');
-  assert.match((await passingOn(h, reading(.3)))!, /work goes to the main session/);
+  assert.match((await sent(.45))!, /goes to a fork/);
+  assert.equal(await sent(.45), undefined, 'it stays with the fork it opened');
+  assert.match((await sent(.3))!, /work goes to the main session/);
   h.setTuning({ ...h.tuning, forkFrom: .55 });
-  assert.match((await passingOn(h, reading(.6)))!, /goes to a fork/, 'the default');
+  assert.match((await sent(.6))!, /goes to a fork/, 'the default');
 });
 
 test("the fork's answer is on the way until its turn ends: a permission prompt is no answer, and a fork that reports nothing for minutes no longer holds the focus", async t => {

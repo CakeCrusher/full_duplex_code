@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { Jev } from '../src/core/jev.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { liveInstructions, pageState } from '../src/core/prompts.ts';
 import { roles } from '../src/core/roles.ts';
 import { DEFAULT_FEATURES } from '../src/core/features.ts';
 import type { StageView } from '../src/core/stage.ts';
-import { fakeJev, harness, page, pageReading, settle, turn, until } from './live-fake.ts';
+import { fakeJev, harness, learn, page, pageReading, settle, turn, until } from './live-fake.ts';
 
 const view: StageView = { tabId: 7, title: 'Briefing', url: 'http://localhost/b.html', about: null, where: 'section "Intro"',
   commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'goto_options', say: 'Go to the section "Options"' }], parts: [] };
@@ -36,7 +39,7 @@ test("two calls over the same state that ask different questions: the job delega
   await jev.read({ trigger: 'turn', latest });
   assert.deepEqual(Object.keys(bodies[3].questions), ['goal'], "without the learner or the tuner, nothing acts on words about the companion's behavior, so they aren't asked about");
   assert.equal(bodies[3].state.goal, '(none)', 'the goal in force, which new words may replace or end');
-  const kept = await jev.read({ trigger: 'delegation', latest, instructions: ["I1: Don't delegate everything to Claude; make adjustments yourself when you can."] });
+  const kept = await jev.read({ trigger: 'turn', latest, instructions: ["I1: Don't delegate everything to Claude; make adjustments yourself when you can."] });
   assert.match(bodies[4].questions.withheld.instructions, /keep the latest words from the coding agent/, "with instructions in force, whether they keep these words from the agent");
   assert.equal(kept.withheld, 0, 'as Jev answered');
   const done = await jev.read({ trigger: 'job', latest, page: view, done: [{ id: 'goto_options', say: 'Go to the section "Options"', shown: 'Options: three ways forward.' }] });
@@ -146,11 +149,43 @@ test("with a page open, the job delegation knows what its controls can do, and t
   assert.deepEqual(runs, [], 'Jev chose no command: nothing runs');
 });
 
-test("GPT Live asking to pass on words the voice tool carried out on the page doesn't send them: Jev's reading of its reply decides, and they don't go when voice ends", async t => {
+test("GPT Live asking to pass the operator's words on is one more signal that their turn has ended: the Jev requests it leads to are those their quiet leads to, word for word, and nothing goes that Jev doesn't send", async t => {
+  // The same words, with a page open and an instruction in force: one turn ended by the operator's quiet, the other by GPT Live's delegation.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-live-'));
+  const ended = async (by: 'quiet' | 'delegation', needs: number) => {
+    const { h, lives } = await harness(t, { jevKey: 'tsk-test' }, root);
+    stage(h);
+    const bodies: any[] = [];
+    h.jev!.fetch = async (_url, init) => { const body = JSON.parse(String(init.body)); bodies.push(body); return { ok: true, status: 200, json: async () => ({ answers: body.questions.needs_agent ? { needs_agent: { noul: needs }, ready: { noul: .9 } } : {} }) }; };
+    await h.voiceSessions.start('sdp', page('p'), 'fresh');
+    learn(h, 'Answer my questions yourself.');
+    const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); };
+    const live = h.voiceSessions.live!, mediator = h.voiceSessions.mediator!;
+    mediator.operatorQuietMs = 30; mediator.replyStartMs = 30;
+    live.emit('event', { type: 'session.input_transcript.delta', delta: 'What does the second option cost?', start_ms: 0, end_ms: 900 });
+    if (by === 'delegation') live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' }, offset_ms: 1000 });
+    await until(() => bodies.some(body => body.questions.needs_agent)); await settle(60);
+    return { bodies, delivered, told: lives[0].appended.filter(([kind]) => kind === 'thinking').map(([, text]) => text) };
+  };
+  const quiet = await ended('quiet', .2), asked = await ended('delegation', .2);
+  assert.deepEqual(asked.bodies, quiet.bodies, 'the same two requests, state and questions: nothing tells Jev which signal ended the turn');
+  assert.deepEqual(quiet.bodies.map(body => Object.keys(body.questions).includes('needs_agent')), [false, true], "the voice tool's own reading, then the job delegation");
+  assert.ok('withheld' in quiet.bodies[0].questions && 'page_command' in quiet.bodies[0].questions, 'with the instruction and the page, as at any turn');
+  assert.deepEqual([quiet.delivered.length, asked.delivered.length], [0, 0], "Jev kept them: GPT Live's asking sends nothing");
+  const kept = "Nothing was sent to Claude Code: the voice tool found the operator's words need nothing from Claude. Answer them yourself; whatever they ask Claude to do goes to it when they say so.";
+  assert.deepEqual([quiet.told.includes(kept), asked.told.includes(kept)], [false, true], 'GPT Live hears what came of its asking');
+  const sentQuiet = await ended('quiet', .8), sentAsked = await ended('delegation', .8);
+  assert.deepEqual(sentAsked.bodies, sentQuiet.bodies);
+  assert.deepEqual([sentQuiet.delivered.length, sentAsked.delivered.length], [1, 1], 'Jev sends them, either way');
+  assert.equal(sentAsked.delivered[0].content, sentQuiet.delivered[0].content, 'as the same request');
+  assert.deepEqual([sentQuiet.delivered[0].delegationId, sentAsked.delivered[0].delegationId], [null, 'd1'], 'and GPT Live is told they went as the answer to its asking');
+});
+
+test("GPT Live asking to pass on words the voice tool carried out on the page sends nothing: Jev's reading of its reply decides, as for any turn, and they don't go when voice ends", async t => {
   const { h, lives } = await harness(t);
   stage(h);
   const runs: string[][] = []; h.stage.run = async (ids: string[]) => { runs.push(ids); return { done: ids.map(id => view.commands.find(c => c.id === id)!), onScreen: 'Options: three ways forward.' }; };
-  const moments = fakeJev(h, m => m.trigger === 'delegation' ? { page: { command: 'goto_options', more: .1, asked: .9 } } : m.trigger === 'job' ? { needsAgent: .1, ready: .9 } : {});
+  const moments = fakeJev(h, m => m.trigger === 'turn' ? { page: { command: 'goto_options', more: .1, asked: .9 } } : m.trigger === 'job' ? { needsAgent: .1, ready: .9 } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); };
   const live = h.voiceSessions.live!;
@@ -160,7 +195,7 @@ test("GPT Live asking to pass on words the voice tool carried out on the page do
   await settle(50);
   assert.deepEqual(runs, [['goto_options']], 'what they asked for, done on the page');
   assert.deepEqual(moments.find(m => m.trigger === 'job')!.done!.map(c => c.id), ['goto_options'], 'the job delegation reads what was done');
-  assert.deepEqual(delivered, [], "GPT Live's ask alone no longer sends them, and Jev finds nothing left for the agent");
+  assert.deepEqual(delivered, [], "GPT Live's asking sends nothing, and Jev finds nothing left for the agent");
   const thinking = lives[0].appended.filter(([kind]) => kind === 'thinking').map(([, text]) => text);
   assert.ok(thinking.some(text => text.startsWith('The voice tool did what the operator asked on the page (Go to the section "Options"); on screen now: Options: three ways forward.')), 'GPT Live hears what was done');
   assert.ok(!thinking.some(text => text.startsWith('Nothing was sent')), 'and nothing else about its ask');
@@ -169,9 +204,9 @@ test("GPT Live asking to pass on words the voice tool carried out on the page do
   assert.deepEqual(delivered, [], 'done on the page: nothing to hand over when voice ends');
 });
 
-test("while the operator's instructions keep words from the agent, GPT Live asking to pass them on doesn't send them: Jev's reading decides, GPT Live hears why nothing went, and what they ask of the agent by name goes", async t => {
+test("while the operator's instructions keep words from the agent and Jev keeps them, GPT Live, asking to pass them on, hears why nothing went; work, and what they ask of the agent by name, goes on Jev's reading", async t => {
   const { h, lives } = await harness(t);
-  const moments = fakeJev(h, m => m.trigger === 'delegation' ? { withheld: /tell Claude/i.test(m.latest!.text) ? .1 : .9 } : m.trigger === 'job' ? { needsAgent: /histograms/.test(m.latest!.text) ? .8 : .2, ready: .9 } : {});
+  const moments = fakeJev(h, m => m.trigger === 'turn' ? { withheld: /tell Claude/i.test(m.latest!.text) ? .1 : .9 } : m.trigger === 'job' ? { needsAgent: /histograms|tell Claude/i.test(m.latest!.text) ? .8 : .2, ready: .9 } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); h.voiceSessions.mediator!.delivered(request.id); };
   const live = h.voiceSessions.live!, jobs = () => moments.filter(m => m.trigger === 'job');
@@ -187,11 +222,11 @@ test("while the operator's instructions keep words from the agent, GPT Live aski
   live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd2', target: 'client' }, offset_ms: 6000 });
   await until(() => delivered.length === 1);
   assert.match(delivered[0].said, /^I need two histograms of the scores\.$/, 'the order before it was settled: it goes along as context, not as a request');
-  // The operator asks for the agent themselves: it goes on GPT Live's ask, as before.
+  // The operator asks for the agent themselves: that goes on Jev's reading too.
   live.emit('event', { type: 'session.input_transcript.delta', delta: ' Tell Claude to add a caramel option.', start_ms: 10000, end_ms: 10900 });
   live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd3', target: 'client' }, offset_ms: 11000 });
   await until(() => delivered.length === 2);
-  assert.equal(jobs().length, 2, "no reading of whether it needs the agent: GPT Live's ask sends it");
+  assert.equal(jobs().length, 3, "read like the others: GPT Live's asking sends nothing");
 });
 
 test("words that are only about how the companion behaves don't go to the agent on Jev's own reading either", async t => {

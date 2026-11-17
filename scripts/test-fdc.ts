@@ -167,11 +167,9 @@ try {
   } else {
     // Delivered at once. Between turns that is right (the agent ended its turn early, with the command left running in
     // the background); in the middle of one, Jev read words that say they can wait as needed now.
-    // Or GPT Live asked to pass them on itself: either one asking sends, and its asking sends at once.
-    const passed = run.events().some(e => e.type === 'turn.read' && e.why === 'delegation' && e.at >= spoke && e.at <= later.at + 500);
-    const asked = passed ? undefined : run.events().findLast(e => e.type === 'turn.job' && e.at >= spoke && e.at <= later.at + 500)?.now;
+    const asked = run.events().findLast(e => e.type === 'turn.job' && e.at >= spoke && e.at <= later.at + 500)?.now;
     assert.equal(asked, undefined, `words that say they can wait were steered into the turn (Jev read now at ${asked})`);
-    evidence.waitingRequest = passed ? 'delivered at once and done: GPT Live asked to pass it on itself, so holding was not exercised' : 'delivered at once and done: the agent was between turns, so holding was not exercised';
+    evidence.waitingRequest = 'delivered at once and done: the agent was between turns, so holding was not exercised';
   }
   await delay(3000); await voice.close(); voice = undefined;
   Object.assign(evidence, { sessionId: run.sessionId, request: task.id, receivedMidTurn: true, files: files(), answer });

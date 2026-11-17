@@ -14,8 +14,9 @@ const STAGE_GUIDE = fileURLToPath(new URL('../../STAGE.md', import.meta.url));
 // GPT Live's own instructions, in the shape OpenAI recommends for gpt-live-1 (role, backchannels, interruptions, then
 // when to generate <|SpawnThinking|>, its delegation token: "delegate to the backend" is not what it was trained on, and
 // a spoken promise doesn't start any work). With Jev, GPT Live passes nothing on: the voice tool reads each of the
-// operator's turns and sends what needs the agent (turn.ts), and GPT Live is told what it did; who does what is the same
-// account Jev reads (roles.ts), by the features on. Everything about one moment (the page now, a request's outcome) is
+// operator's turns and sends what needs the agent (turn.ts), and GPT Live is told what it did; its delegation, which
+// the API can't turn off and which it generates untold, only ends the operator's turn (mediator.ts). Who does what is
+// the same account Jev reads (roles.ts), by the features on. Everything about one moment (the page now, a request's outcome) is
 // told to it as that moment comes, never written here. Principles rather than scripts: what to say and show, and when, is
 // its judgment from the context (Oct 30: prescribed wording made it lean on the agent for answers and hold back from
 // moving the page).
@@ -145,7 +146,7 @@ export const turnOutcome = ({ profile: { name, product } }: Agent, { send, wait 
   : wait ? `Nothing was sent to ${product} yet: the operator hasn't finished saying it. Their words go once they have, if they need ${name}; you'll be told.`
   : `Nothing was sent to ${product}: the voice tool found the operator's words need nothing from ${name}. Answer them yourself; whatever they ask ${name} to do goes to it when they say so.`;
 // The operator's instructions in force keep their words from the agent (jev.ts, WITHHELD): what GPT Live hears when it
-// asked to pass them on, or when they would have gone on the voice tool's own reading.
+// asked to pass them on.
 export const instructedNote = ({ profile: { name, product } }: Agent) =>
   `Nothing was sent to ${product}: the operator's instructions keep this from ${name}. It goes only when they ask for ${name} themselves.`;
 export const queueFailed = ({ profile: { name } }: Agent) =>

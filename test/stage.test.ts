@@ -105,13 +105,11 @@ test("Jev is asked which page command shows what the voice is talking about and 
   answers = { needs_agent: { noul: .9 } };
   // The operator's own words, as their turn ends: what they ask of the page, and whether they ask anything of it at all.
   answers = { page_command: choice('goto_options', .9), page_more: { noul: .2 }, page_asked: { noul: .9 } };
-  for (const trigger of ['turn', 'delegation'] as const) {
-    const asked = (await jev.read({ trigger, latest: { role: 'operator', text: 'Go to the options.' }, page: view })).page!;
-    assert.deepEqual([asked.command, asked.more, asked.asked], ['goto_options', .2, .9], trigger);
-    assert.match(sent.questions.page_command.instructions, /does what the operator asks for in the latest words, or the first part of it/);
-    assert.match(sent.questions.page_command.criteria.none, /No listed command does what they ask: it is for the coding agent/);
-    assert.ok(!('gave_up' in sent.questions), "that is asked of the voice's words");
-  }
+  const asked = (await jev.read({ trigger: 'turn', latest: { role: 'operator', text: 'Go to the options.' }, page: view })).page!;
+  assert.deepEqual([asked.command, asked.more, asked.asked], ['goto_options', .2, .9]);
+  assert.match(sent.questions.page_command.instructions, /does what the operator asks for in the latest words, or the first part of it/);
+  assert.match(sent.questions.page_command.criteria.none, /No listed command does what they ask: it is for the coding agent/);
+  assert.ok(!('gave_up' in sent.questions), "that is asked of the voice's words");
   // A request for several things splits Jev's choice between the commands that do them: the likeliest runs when it is likelier than none.
   answers = { page_command: { type: 'choice', choice: 'goto_options', confidence: .42, probabilities: { goto_options: .42, none: .33, next_section: .12 } }, page_more: { noul: .8 }, page_asked: { noul: .9 } };
   assert.equal((await jev.read({ trigger: 'turn', latest: { role: 'operator', text: 'Go to the options, and then on to the next section.' }, page: view })).page!.command, 'goto_options', 'the first of them, below what a sentence of the voice would need');
@@ -183,7 +181,7 @@ test('the mediator tells GPT Live what the voice tool did and sends the harness 
   const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, route });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Show me the options and fix the typo.', start_ms: 0, end_ms: 900 });
-  m.decide('delegation', 'd1');
+  m.decide('d1');
   await until(() => deliveries.length);
   assert.deepEqual(appends[0], ['thinking', 'On screen now: Options.', 'd1']);
   assert.match(deliveries[0].content, /Earlier speech went with earlier voice requests\. The voice tool already did the page part\.\n\nuser: Show me the options and fix the typo\.$/);
@@ -201,9 +199,9 @@ test("turns are decided in the order made, however long each one's reading takes
   const m = new Mediator({ live, observer, deliver: task => deliveries.push(task), log: () => {}, publish: () => {}, clean: String, hold: null, route });
   t.after(() => { m.stop(); observer.close(); });
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Go to the options and make its title bigger.', start_ms: 0, end_ms: 900 });
-  m.decide('turn');
+  m.decide();
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Actually, make it smaller instead.', start_ms: 5000, end_ms: 6000 });
-  m.decide('turn');
+  m.decide();
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(deliveries.length, 0, 'the second waits for the first');
   assert.equal(started.length, 1, "the second's reading, which may move the page, starts after the first's");
@@ -229,10 +227,10 @@ test("words a turn kept go to the agent with the next request that goes, before 
   t.after(() => { m.stop(); observer.close(); });
   const say = (role: 'input' | 'output', delta: string, at: number) => live.emit('event', { type: `session.${role}_transcript.delta`, delta, start_ms: at, end_ms: at + 500 });
   say('input', 'I mean the chart we made yesterday.', 0);
-  m.decide('turn');
+  m.decide();
   say('output', 'Mm-hmm.', 600);
   say('input', ' Add a legend to it.', 900);
-  m.decide('turn');
+  m.decide();
   release();
   await until(() => deliveries.length === 1);
   await new Promise(resolve => setTimeout(resolve, 30));
@@ -240,7 +238,7 @@ test("words a turn kept go to the agent with the next request that goes, before 
   // Before Nov 14 the second request took only its own words, and the kept ones went later, after them.
   assert.match(deliveries[0].content, /\nuser: I mean the chart we made yesterday\.\nvoice assistant: Mm-hmm\.\nuser: Add a legend to it\.$/);
   say('input', ' Thanks.', 9000);
-  m.decide('turn');
+  m.decide();
   await until(() => deliveries.length === 2);
   assert.match(deliveries[1].content, /\n\nuser: Thanks\.$/, 'the next request starts where that one ended');
 });
@@ -254,7 +252,7 @@ test("words whose turn fails aren't lost: they go with the next request", async 
   t.after(() => { m.stop(); observer.close(); });
   m.decided = () => { throw new Error('boom'); };
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Fix the parser.', start_ms: 0, end_ms: 900 });
-  m.decide('turn');
+  m.decide();
   await until(() => faults.length);
   assert.deepEqual(faults, ['boom']);
   assert.equal(m.history.request()?.fresh, 'Fix the parser.');

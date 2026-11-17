@@ -10,7 +10,7 @@ import { EventEmitter } from 'node:events';
 import type { TestContext } from 'node:test';
 import { Harness } from '../src/core/bridge.ts';
 import { claude } from '../src/adapters/claude/index.ts';
-import type { Moment, PageJudgment, Reading, Trigger } from '../src/core/jev.ts';
+import type { Moment, PageJudgment, Reading } from '../src/core/jev.ts';
 import { routeTurn } from '../src/core/turn.ts';
 import { Mediator, type Decision, type Route } from '../src/core/mediator.ts';
 import type { Spoken, SpokenRequest } from '../src/core/voice-history.ts';
@@ -114,14 +114,14 @@ export function fakeJev(h: Harness, reading: (moment: Moment) => Partial<Reading
   return moments;
 }
 /** What the voice tool makes of the operator's turn with these words as the latest (turn.ts), as the mediator asks it. */
-export const turn = (h: Harness, said: string, { why = 'turn', cued }: { why?: Trigger; cued?: boolean } = {}) =>
-  routeTurn(h, { utterances: [{ role: 'operator', text: said, endMs: 0 }], through: 0, seqs: [0], fresh: said, ...cued && { cued } }, [{ role: 'operator', text: said, at: Date.now() }], why);
+export const turn = (h: Harness, said: string, { cued }: { cued?: boolean } = {}) =>
+  routeTurn(h, { utterances: [{ role: 'operator', text: said, endMs: 0 }], through: 0, seqs: [0], fresh: said, ...cued && { cued } }, [{ role: 'operator', text: said, at: Date.now() }]);
 
 /** A voice tool that decides a turn in one step (for the mediator's tests): its decision, as its two readings make it (turn.ts). */
-export const decides = (decide: (request: SpokenRequest, spoken: Spoken[], why: Trigger) => Promise<Decision>): Route => {
+export const decides = (decide: (request: SpokenRequest, spoken: Spoken[]) => Promise<Decision>): Route => {
   const made = new Map<SpokenRequest, Decision>();
   return {
-    actions: async (request, spoken, why) => { const d = await decide(request, spoken, why); made.set(request, d); return { reading: d.actions?.reading, told: d.told, note: d.note, keptNote: d.send ? undefined : d.note }; },
+    actions: async (request, spoken) => { const d = await decide(request, spoken); made.set(request, d); return { reading: d.actions?.reading, told: d.told, note: d.note, keptNote: d.send ? undefined : d.note }; },
     job: async request => { const { told, ...d } = made.get(request)!; return d; },
   };
 };

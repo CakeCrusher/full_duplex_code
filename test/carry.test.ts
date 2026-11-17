@@ -76,7 +76,7 @@ test('a request fdc handles itself just after the connection drops gives its wor
     route: decides(() => new Promise(resolve => { handle = () => resolve({ send: false, told: 'Turned on.', note: 'The voice tool turned a session on.' }); })) });
   t.after(() => observer.close());
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Turn on the other session.', start_ms: 0, end_ms: 900 });
-  m.decide('delegation', 'd1');
+  m.decide('d1');
   await until(() => handle);
   m.stop();
   handle();

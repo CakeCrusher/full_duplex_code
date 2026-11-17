@@ -14,12 +14,12 @@ import { claude } from '../src/adapters/claude/index.ts';
 import { until } from '../scripts/test-support.ts';
 
 // Jev's reading of the operator's latest words, as jev.ts gives it.
-const read = (said: string, behave: number, design: number, lasting: string, transcript = `► operator: ${said}`): Reading => ({ trigger: 'delegation', said, transcript, needsAgent: .3, instruction: { behave, design, lasting } });
+const read = (said: string, behave: number, design: number, lasting: string, transcript = `► operator: ${said}`): Reading => ({ trigger: 'turn', said, transcript, needsAgent: .3, instruction: { behave, design, lasting } });
 
 test("Jev reads the operator's latest words in the conversation; a lasting instruction is learned", async () => {
   const calls: any[] = [];
   const fetch = async (url: string, init: RequestInit) => { calls.push({ url, init, body: JSON.parse(String(init.body)) }); return { ok: true, status: 200, json: async () => ({ answers: { needs_agent: { noul: .2 }, behave: { noul: .8 }, design_talk: { noul: .2 }, lasting: { choice: 'always' } } }) }; };
-  const reading = await new Jev({ apiKey: 'key', fetch, log: () => {} }).read({ trigger: 'delegation', learn: true, history: 'user: What did it change?\nvoice assistant: It edited src/core/feed.ts.\n',
+  const reading = await new Jev({ apiKey: 'key', fetch, log: () => {} }).read({ trigger: 'turn', learn: true, history: 'user: What did it change?\nvoice assistant: It edited src/core/feed.ts.\n',
     latest: { role: 'operator', text: "  Don't read out file paths,\n just tell me what you need. " } });
   assert.equal(calls[0].url, 'https://api.typesafe.ai/v1/systemone');
   assert.equal((calls[0].init.headers as Record<string, string>).Authorization, 'Bearer key');
@@ -96,7 +96,7 @@ test('without the turn reading, Jev reads each request sent to the harness, in t
   live.emit('event', { type: 'session.input_transcript.delta', delta: "From now on, don't read paths out loud.", start_ms: 1000, end_ms: 2500 });
   t.mock.timers.tick(10000); await new Promise(resolve => setImmediate(resolve));
   assert.equal(asked.length, 0, 'a pause alone asks nothing');
-  mediator.decide('delegation', 'd1');
+  mediator.decide('d1');
   for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
   assert.equal(delivered.length, 1);
   assert.deepEqual(asked.map(({ trigger, spoken }) => [trigger, spoken.map(({ role, text }: any) => [role, text])]), [['unsent', [['intermediary', 'Claude finished the edit.'], ['operator', "From now on, don't read paths out loud."]]]]);

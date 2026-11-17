@@ -3,13 +3,15 @@
 //   set, add, place, show), it does there, one command after another (presenter.ts); it keeps the goal they set (what
 //   they want shown, taught or walked through) apart from the page, and, with those features on (features.ts), turns
 //   voice sessions on or off (sessions.ts), leaves the companion's own behavior to the learner and the tuner (they take
-//   the reading), and finds what the operator's instructions keep from the agent: such words, like those it carried
-//   out on the page, no longer go because GPT Live asks. It never decides that their words go to the agent. Standby is
-//   read later, once the conversation has gone quiet after the companion's answer (voice-sessions.ts).
+//   the reading), and finds what the operator's instructions keep from the agent. It never decides that their words go
+//   to the agent. Standby is read later, once the conversation has gone quiet after the companion's answer
+//   (voice-sessions.ts).
 // - The job delegation, once the voice companion has replied (jobTurn): whether their words need the coding agent,
 //   read with what the companion said and what the page's commands can do, and whether they have finished saying them.
 //   Words not finished wait for the next reading, which takes them with what the operator adds; never dropped. Keeping
 //   work from the agent is the costly mistake; GPT Live passes nothing on.
+// Both are the same whichever signal ended the turn (mediator.ts): GPT Live starting its answer, the operator's quiet, or
+// GPT Live asking to pass their words on, which sends nothing by itself (the operator's rule, Nov 17).
 // What each reading led to is added to its call's record (jev-audit.ts).
 // From Oct 30 to Nov 17 the operator's words ran nothing on the page (it followed only what the voice said): asked for
 // an order of several settings, the voice said "Sure.", passed it on, and the agent made the changes (jev.ts, pageQuestions).
@@ -17,7 +19,7 @@ import type { Harness } from './bridge.ts';
 import type { Decision } from './mediator.ts';
 import type { StageCommand, StageView } from './stage.ts';
 import type { Spoken, SpokenRequest } from './voice-history.ts';
-import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, NOW, PAGE_ASKED, PRESS, READY, RECENT_MS, SETTLED, STAYS, WITHHELD, type Reading, type Trigger } from './jev.ts';
+import { ADDS, COMPANION_ONLY, GOAL, NEEDS_AGENT, NOW, PAGE_ASKED, PRESS, READY, RECENT_MS, SETTLED, STAYS, WITHHELD, type Reading } from './jev.ts';
 import { companionNoted, handledNote, lookingNote, sessionsChanging } from './prompts.ts';
 
 /** What the voice tool did itself for the operator's turn: for GPT Live at once (told), and for the agent with their words (note). */
@@ -26,9 +28,9 @@ export interface Actions {
   told?: string;
   /** What it did on the page for them (presenter.ts, carryOut): the commands that ran, with what the page answered, and what GPT Live hears of it, without waiting. */
   did?: { told: string; done: (StageCommand & { shown?: string })[] };
-  /** The operator's instructions in force keep words like these from the agent (jev.ts, WITHHELD). With either, GPT Live asking to pass the words on doesn't send them: whether they need the agent is the job delegation's to read. */
+  /** The operator's instructions in force keep words like these from the agent (jev.ts, WITHHELD): kept by the job delegation, they are settled, and GPT Live, if it asked to pass them on, hears why nothing went. */
   withheld?: boolean;
-  /** Only about how the companion behaves: they don't go to the agent, whoever asks. */
+  /** Only about how the companion behaves: they don't go to the agent. */
   mine?: boolean;
   /** For the agent if their words go to it; if they don't, carried to the next request (keptNote). */
   note?: string; keptNote?: string;
@@ -36,17 +38,17 @@ export interface Actions {
   back?: boolean;
 }
 
-export async function routeActions(bridge: Harness, request: SpokenRequest, spoken: Spoken[], why: Trigger): Promise<Actions> {
+export async function routeActions(bridge: Harness, request: SpokenRequest, spoken: Spoken[]): Promise<Actions> {
   // Read at every turn: a companion slower than 300 ms is listed as not answering. The page on stage is for the job
   // delegation (what its controls can do) and for the agent (what the user was looking at).
   const orchestration = bridge.features.has('orchestration');
   const [sessions, view] = await Promise.all([orchestration ? bridge.sessionSwitch.sessions(300) : undefined, bridge.stage.describe().catch(error => { bridge.log({ type: 'stage.error', message: (error as Error).message }); return undefined; })]);
-  const fork = forkMoment(bridge), since = heardAt(bridge);
-  const reading = await bridge.read({ trigger: why, spoken, sessions, page: view, requestId: request.id, ...fork && { fork } });
-  bridge.log({ type: 'turn.read', why, said: request.fresh.slice(-200), companionOnly: reading.companionOnly, withheld: reading.withheld, sessions: reading.sessions });
+  const fork = forkMoment(bridge);
+  const reading = await bridge.read({ trigger: 'turn', spoken, sessions, page: view, requestId: request.id, ...fork && { fork } });
+  bridge.log({ type: 'turn.read', said: request.fresh.slice(-200), companionOnly: reading.companionOnly, withheld: reading.withheld, sessions: reading.sessions });
   const asked = sessions && bridge.sessionSwitch.act(reading, sessions);
   const companion = (reading.companionOnly ?? 0) >= COMPANION_ONLY;
-  // The operator's instructions in force keep words like these from the agent: GPT Live's asking alone doesn't send them.
+  // The operator's instructions in force keep words like these from the agent.
   const withheld = (reading.withheld ?? 0) >= WITHHELD;
   // What they ask for now that a command of the page does, the voice tool does there, and GPT Live hears what it did.
   // Only what they ask for: a remark about the page, a question, or "walk me through it" (the companion leads) runs nothing.
@@ -58,15 +60,12 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
   bridge.jevAudit?.decided(reading.id, { ...sessions && { sessions: asked?.told ?? false }, ...reading.companionOnly !== undefined && { companionOnly: companion }, ...reading.withheld !== undefined && { withheld }, ...reading.page?.command && { page: did ? 'done' : 'not run' }, ...goal && { goal } });
   const handled = asked ? 'sessions' : companion ? 'companion' : undefined;
   // Forks (forks.ts). With a fork in focus, words that are no question for it move the focus back to the main session,
-  // before anything is sent: when the operator has left the fork's matter (not while its answer is still on the way: an
-  // "okay" then answers the voice), or when GPT Live asked to pass them on (work goes to the main session). With the
-  // main session in focus, a question GPT Live asked to pass on goes to a fork. Words Jev sends itself: jobTurn.
-  const passed = why === 'delegation' && !handled && !did && !withheld;
-  const returned = fork === 'fork' && (reading.tangent ?? 1) < stays(bridge) && (passed || ((reading.settled ?? 0) >= SETTLED && !bridge.forks.busy))
-    ? bridge.forks.back(passed ? 'work goes to the main session' : 'the operator moved on') : undefined;
-  const forked = fork === 'main' && passed ? await openFork(bridge, reading, since) : undefined;
+  // before anything is sent, when the operator has left the fork's matter (not while its answer is still on the way: an
+  // "okay" then answers the voice). Words on their way to the agent open a fork, or move back, as they are sent: jobTurn.
+  const returned = fork === 'fork' && (reading.tangent ?? 1) < stays(bridge) && (reading.settled ?? 0) >= SETTLED && !bridge.forks.busy
+    ? bridge.forks.back('the operator moved on') : undefined;
   if (returned) bridge.jevAudit?.decided(reading.id, { fork: 'back' });
-  const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent, bridge.features), forked, returned].filter(Boolean).join(' ') || undefined;
+  const told = [asked && sessionsChanging(asked.told), companion && companionNoted(bridge.agent, bridge.features), returned].filter(Boolean).join(' ') || undefined;
   return { reading, view, told, ...did && { did }, ...withheld && { withheld }, note: view ? lookingNote(view) : undefined, keptNote: handled && handledNote(handled), ...handled === 'companion' && { mine: true }, ...returned && { back: true } };
 }
 
@@ -86,13 +85,6 @@ async function openFork(bridge: Harness, reading: Reading, since: number) {
   const told = await bridge.forks.start(reading.said);
   if (told) bridge.jevAudit?.decided(reading.id, { fork: bridge.forks.focus === 'fork' ? 'opened' : 'failed' });
   return told;
-}
-/** GPT Live asked to pass on words Jev had read and kept (mediator.ts, passOn): they go by the same rules, from that reading. */
-export async function passingOn(bridge: Harness, reading?: Reading) {
-  const fork = forkMoment(bridge);
-  if (!reading || !fork) return undefined;
-  if (fork === 'main') return openFork(bridge, reading, heardAt(bridge));
-  return (reading.tangent ?? 1) < stays(bridge) ? bridge.forks.back('work goes to the main session') : undefined;
 }
 
 /** Words waiting undecided before this reading (mediator.ts): the operator went on speaking before the decision, the words have waited too long, or an earlier reading of them found they need the agent. */
@@ -117,8 +109,8 @@ export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: S
   const adds = reading.adds === undefined || reading.adds >= ADDS || Boolean(recent?.held && (reading.now ?? 0) >= PRESS);
   // Once found to need the agent, waiting words keep needing it: a later reading of the whole stretch never drops them
   // (read with the talk around them, a request was sometimes found to need nothing and waited minutes for another).
-  // Not words that are only about how the companion behaves, as when GPT Live asks to pass them on: read for the agent
-  // anyway, "I want you to be in full control. I don't want you delegating to Claude Code" went to Claude at .48 (Nov 17).
+  // Not words that are only about how the companion behaves: read for the agent anyway, "I want you to be in full
+  // control. I don't want you delegating to Claude Code" went to Claude at .48 (Nov 17).
   const needed = !actions.mine && (neededBefore || ((reading.needsAgent ?? 1) >= NEEDS_AGENT && adds)), ready = (reading.ready ?? 1) >= READY;
   // Sent once the operator has finished saying it and stopped, or once it has waited too long (mediator.ts, HELD_CAP_MS).
   const send = needed && ((ready && !continued) || overdue);
@@ -140,8 +132,8 @@ export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: S
 }
 
 /** Both calls in turn, without waiting for a reply: the turn as the tests (and a voice tool that heard none) read it. */
-export async function routeTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], why: Trigger, reply?: string): Promise<Decision> {
-  const actions = await routeActions(bridge, request, spoken, why);
+export async function routeTurn(bridge: Harness, request: SpokenRequest, spoken: Spoken[], reply?: string): Promise<Decision> {
+  const actions = await routeActions(bridge, request, spoken);
   const job = await jobTurn(bridge, request, spoken, reply, actions);
   return { ...job, told: [actions.told, job.told].filter(Boolean).join(' ') || undefined, actions };
 }

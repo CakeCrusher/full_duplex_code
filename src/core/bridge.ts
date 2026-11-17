@@ -309,7 +309,7 @@ export class Harness {
    */
   read({ spoken = [], ...moment }: Omit<Moment, 'latest' | 'history' | 'instructions' | 'learn' | 'tune'> & { spoken?: Spoken[] }, timeoutMs?: number): Promise<Reading> {
     if (!this.jev) return Promise.reject(new Error('Jev is not configured'));
-    const words = ['turn', 'delegation', 'unsent'].includes(moment.trigger), tune = this.jevTuning && (words || moment.trigger === 'settings');
+    const words = ['turn', 'unsent'].includes(moment.trigger), tune = this.jevTuning && (words || moment.trigger === 'settings');
     const ask = tune ? ++this.tuneAsks : 0, latest = spoken.at(-1), record = this.voiceSessions.run?.record ?? this.voiceSessions.current();
     // When the conversation has gone quiet (voice-sessions.ts), the history runs to now: what fdc sent since the last words is part of what Jev judges.
     return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(perceivedText(record, spoken.slice(0, -1), moment.trigger === 'quiet' ? Date.now() : latest.at, HISTORY_BYTES)) },
