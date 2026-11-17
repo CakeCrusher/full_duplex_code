@@ -105,10 +105,15 @@ export const instructionsRemoved = (gone: readonly { id: string; text: string }[
 
 // fdc's own instructions to the coding agent, in its system prompt from the start of every session: a new one, one fdc
 // resumes, or one it never started (each adapter passes them its own way: src/adapters/README.md). How voice requests reach
-// it, and how to make a page the voice can present: without them, an agent made pages the voice could move only by their
-// headings until a note about a page that fell short named the guide (Codex, Oct 28: its first page, for half an hour).
+// it, and how to make a page the voice can present and work: without them, an agent made pages the voice could move only
+// by their headings until a note about a page that fell short named the guide (Codex, Oct 28: its first page, for half an
+// hour). Who the user is talking to is part of how requests reach it: told only that the user "is talking to you by
+// voice", both agents asked to "pretend to be a barista… you'll be driving the dashboard" made themselves the barista
+// (Nov 17): they greeted the user and asked for the order in their own replies, which the voice read out, Claude's first
+// board had no control for ordering at all (it ran the board from its terminal), and every answer then went to the agent
+// as an answer to its question.
 export const agentInstructions = ({ profile: { requests } }: Agent) =>
-  `${requests} are transcribed requests from the user, who is talking to you by voice through Full-Duplex Code (fdc). Handle them in this conversation at your normal processing opportunities and respond normally in the terminal. If a transcription is ambiguous, ask for clarification.\n\n`
+  `${requests} are transcribed requests from the user, who is talking by voice with the voice assistant of Full-Duplex Code (fdc). It answers them as they speak, tells them of your work, and passes on to you what needs you: so "you" in their words can mean the assistant, and what they want done with them as they talk (a part played, a walkthrough, a page worked for them) is the assistant's to do, with what you build for it. Handle the requests in this conversation at your normal processing opportunities and respond normally in the terminal. If a transcription is ambiguous, ask for clarification.\n\n`
   + `When you make something the user will look at in the browser (an HTML page, a web app, a slide deck), show it with the browser tools and make it one the voice can present and work: real headings for its structure, data-fdc="what this is" on the parts worth pointing at, and for anything interactive a window.fdcController with a command for everything the voice may have to show or do there. The guide is ${STAGE_GUIDE}. The voice uses these to move, open and highlight the page as it talks and to work its controls when the user asks, without you, and you get the error if a page command fails, for you to fix. The user just talks: never tell them what to say to move the page. Once you have shown a page, where it is and the state it is in belong to the voice: check your work in another tab or a headless browser rather than scrolling or clicking through the tab the user is looking at, and make a reload bring the page back where the user was.`;
 
 // Added to a delivered voice request by the agent's own hook: who is speaking.
