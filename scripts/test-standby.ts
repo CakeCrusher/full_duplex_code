@@ -130,15 +130,15 @@ try {
   // and again while it starts, and all of it reaches the other end. The waking sound (the start cue's first note, then
   // softly again) plays until the held words are out; then the start cue.
   // (A quiet of more than 5 s first: all of what the page keeps to record ahead of a sound.)
-  // First a short remark: too short to wake it (two seconds of voice do), and the page lets them hear and see it being
+  // First a short remark: too short to wake it (a second of voice does), and the page lets them hear and see it being
   // picked up: a soft note as it passes each quarter of the way, and a meter that rises, then falls away.
   const rising = () => page.evaluate(() => { const meter = document.getElementById('rising') as HTMLMeterElement; return meter.hidden ? 0 : meter.value; });
   let rose = 0, hearing = false; const watch = setInterval(async () => { rose = Math.max(rose, await rising().catch(() => 0)); hearing ||= await text('#audioState').catch(() => '') === 'Standby · hearing you…'; }, 60);
   const remarkAt = Date.now();
-  await speak(1200);
+  await speak(550);
   await sleep(1500); clearInterval(watch);
   const notes = (await tonesSince(remarkAt)).map(([, frequency]) => frequency);
-  console.log({ remarkSeconds: 1.2, roseTo: rose.toFixed(2), notes });
+  console.log({ remarkSeconds: .55, roseTo: rose.toFixed(2), notes });
   assert.equal(logged('voice.waking').length, 0, 'a short remark does not wake it');
   assert.ok(rose > .5 && rose < .75 && hearing, `the page showed their voice being picked up, part of the way (${rose.toFixed(2)})`);
   assert.deepEqual(notes, [330, 440], 'and sounded it: a soft note for each quarter of the way it got');
@@ -148,8 +148,8 @@ try {
   await sleep(5500);
   const spokeAt = Date.now();
   await speak(2500);
-  await waitFor(() => logged('voice.waking').length === 1, 'two seconds of voice wake it', 5000);
-  assert.ok(logged('voice.waking')[0].at - spokeAt > 1900, 'not before');
+  await waitFor(() => logged('voice.waking').length === 1, 'a second of voice wakes it', 5000);
+  assert.ok(logged('voice.waking')[0].at - spokeAt > 900, 'not before');
   const wokeAt = logged('voice.waking')[0].at;
   await sleep(1500); await speak(1500);
   await waitFor(async () => await text('#connection') === 'Listening', 'the resumed session started', 15000);

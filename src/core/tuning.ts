@@ -158,9 +158,9 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     "How long the operator's voice must go on, without a pause longer than half a second, to wake voice from Standby (ms). While it lasts, the page lets them hear it being picked up, rising until voice wakes; their words from the start of it are replayed to GPT Live, so none are lost. Only their voice is held to this: the agent's news wakes voice through the currency as before, and while voice is Live their sound keeps it Live as before. Lower: short remarks wake it, and so do more sounds that are not the operator talking to it. Higher: fewer wakes for nothing, and the operator must talk longer before it listens. This one is the operator's to choose: change it only when they ask for it.",
     levels: [
     { value: 300, consequence: 'As before Nov 17: a third of a second of voice wakes it. All 22 of the 22 recorded wakes for nothing happen.' },
-    { value: 1000, consequence: '13 of the 22 wakes for nothing still happen; 77 of the 81 times the operator did speak, voice wakes within 8 s of when it did.' },
+    { value: 1000, consequence: "The default, the operator's choice (Nov 17, after a day at 2000, which they halved): 13 of the 22 wakes for nothing still happen; 77 of the 81 times the operator did speak, voice wakes within 8 s of when it did." },
     { value: 1500, consequence: '8 of the 22 wakes for nothing still happen; 68 of 81 real ones come within 8 s.' },
-    { value: 2000, consequence: "The default, the operator's choice (Nov 17): 5 of the 22 wakes for nothing still happen; 57 of 81 real ones come within 8 s, about a second later, the others once the operator has gone on talking for 2 s." },
+    { value: 2000, consequence: '5 of the 22 wakes for nothing still happen; 57 of 81 real ones come within 8 s, about a second later, the others once the operator has gone on talking for 2 s.' },
     { value: 3000, consequence: '2 of the 22 wakes for nothing still happen; 41 of 81 real ones come within 8 s, about 2 s later.' },
   ] },
   speechPrice: { min: 0, max: 1000, describe:
@@ -241,7 +241,7 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
 };
 
 // Standby's defaults are the operator's choice in the Standby sandbox (Oct 18).
-export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 20000, wakeThreshold: 50, wakeVoiceMs: 2000, standbyQuickMs: 5000, standbyQuickAfterMs: 60000, standbyFrom: 0.5,
+export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 20000, wakeThreshold: 50, wakeVoiceMs: 1000, standbyQuickMs: 5000, standbyQuickAfterMs: 60000, standbyFrom: 0.5,
   speechPrice: 20, liveSpeechPrice: 20, toolPrice: 1, promptPrice: 1, messagePrice: 10, turnEndPrice: 50, failurePrice: 50, approvalPrice: 100, requestPrice: 100, forkFrom: 0.55 };
 
 /** Settings from partial overrides: unknown names and values out of range are refused. */

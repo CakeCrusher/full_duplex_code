@@ -89,25 +89,25 @@ test('their voice wakes it once it has lasted, and the paused session resumes: a
   assert.deepEqual(lives[1].appended, [], 'the operator speaking is the cue: nothing is added or said first');
 });
 
-test("on Standby their voice must last two seconds: pauses of half a second belong to it, a longer one starts it again, and the page hears it rise and fall", async t => {
+test("on Standby their voice must last a second: pauses of half a second belong to it, a longer one starts it again, and the page hears it rise and fall", async t => {
   const { h, sent, goQuiet } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30 } });
-  assert.equal(h.tuning.wakeVoiceMs, 2000);
+  assert.equal(h.tuning.wakeVoiceMs, 1000);
   const silence = (reports: number) => { for (let i = 0; i < reports; i++) h.voiceSessions.heard({ at: spokenTo + i * 100, inputRms: 0, rawInputRms: .001, gateThreshold: .008 }); spokenTo += reports * 100; };
   const rose = () => sent('wake_rising').map(e => Math.round(e.value * 100));
   speak(h, 15);
   await goQuiet();
-  speak(h, 12);
+  speak(h, 6);
   assert.equal(sent('voice_wake').length, 0, 'what they said before Standby does not count toward it');
   assert.equal(rose().at(-1), 60);
   silence(7);
   assert.equal(rose().at(-1), 0, 'a pause of more than half a second: it falls away');
-  speak(h, 8); silence(4); speak(h, 7);
+  speak(h, 4); silence(2); speak(h, 3);
   h.voiceSessions.checkStandby(spokenTo);
-  assert.equal(sent('voice_wake').length, 0, '1.9 s with a short pause inside is one stretch, not yet two seconds; and nothing of it is in the currency');
-  assert.equal(rose().at(-1), 95);
+  assert.equal(sent('voice_wake').length, 0, '0.9 s with a short pause inside is one stretch, not yet a second; and nothing of it is in the currency');
+  assert.equal(rose().at(-1), 90);
   speak(h, 1);
-  assert.deepEqual(sent('voice_wake').map(e => e.reason), ['operator'], 'two seconds: voice wakes');
-  assert.equal(h.voiceSessions.activity.value(60000, priceFor(h.tuning), spokenTo, h.voiceSessions.standby!.since), 20 * h.tuning.speechPrice, 'and what woke it counts from then on, as it would have Live');
+  assert.deepEqual(sent('voice_wake').map(e => e.reason), ['operator'], 'a second: voice wakes');
+  assert.equal(h.voiceSessions.activity.value(60000, priceFor(h.tuning), spokenTo, h.voiceSessions.standby!.since), 10 * h.tuning.speechPrice, 'and what woke it counts from then on, as it would have Live');
 });
 
 test("GPT Live's last words still playing when it goes on Standby don't wake it: its session is closed", async t => {
