@@ -17,12 +17,17 @@ import { fakeJev, harness, learn, Live, page, settle, until } from './live-fake.
 
 const WINDOW = 2000;
 // The operator speaking for about this long, as the page's level reports (0.1 s each) say.
-const speak = (h: any, reports: number, voiced?: number, at = Date.now()) => { for (let i = 0; i < reports; i++) h.voiceSessions.heard({ at, inputRms: .05, rawInputRms: .05, gateThreshold: .008, voiced }); };
+// The operator's microphone, a tenth of a second to a report: one call goes on where the last one stopped, unless it says when.
+let spokenTo = 0;
+const speak = (h: any, reports: number, voiced?: number, at = Math.max(Date.now(), spokenTo)) => {
+  for (let i = 0; i < reports; i++) h.voiceSessions.heard({ at: at + i * 100, inputRms: .05, rawInputRms: .05, gateThreshold: .008, voiced });
+  spokenTo = at + reports * 100;
+};
 const agent = (h: any, data: Record<string, unknown>) => h.adapter.observations.observe({ session_id: h.sessionId, ...data });
 const later = (ms: number) => Date.now() + ms;
 
 async function quiet(t: TestContext, extra: Record<string, unknown> = {}) {
-  const f = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10 }, ...extra });
+  const f = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10, wakeVoiceMs: 300 }, ...extra });
   const voicePage = page('voice-page');
   Object.assign(voicePage.ws, { terminate() {}, close() {}, on() {} });
   f.h.pages.all.set(voicePage.ws, voicePage);
@@ -48,7 +53,7 @@ test('a quiet conversation goes on Standby: GPT Live closes, voice stays on, and
 });
 
 test('after a long quiet the next one is usually long too: Standby comes after the shorter window, and only then', async t => {
-  const { h, lives } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10, standbyQuickMs: 500, standbyQuickAfterMs: 5000 } });
+  const { h, lives } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10, wakeVoiceMs: 300, standbyQuickMs: 500, standbyQuickAfterMs: 5000 } });
   const logged: any[] = [], log = h.log.bind(h); h.log = (event: any) => { logged.push(event); log(event); };
   const now = Date.now();
   // Talk with short pauses: the full window applies.
@@ -66,12 +71,13 @@ test('after a long quiet the next one is usually long too: Standby comes after t
   assert.ok(logged.some(e => e.type === 'voice.standby' && e.quick && e.afterMs === 500));
 });
 
-test('speech wakes it, priced like everything else, and the paused session resumes: a fork, not greeted, with nothing added first', async t => {
-  const { h, lives, sent, goQuiet } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30 } });
+test('their voice wakes it once it has lasted, and the paused session resumes: a fork, not greeted, with nothing added first', async t => {
+  const { h, lives, sent, goQuiet } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30, wakeVoiceMs: 300 } });
   await goQuiet();
   speak(h, 2); h.voiceSessions.checkStandby();
-  assert.equal(sent('voice_wake').length, 0, `a voice's first tenth of a second only starts it; the next is worth ${DEFAULT_TUNING.speechPrice}, under a threshold of 30`);
-  speak(h, 1); h.voiceSessions.checkStandby();
+  assert.equal(sent('voice_wake').length, 0, 'their voice has not lasted the 0.3 s set here');
+  assert.deepEqual(sent('wake_rising').map(e => Math.round(e.value * 100)), [33, 67], 'the page is told how far it has got');
+  speak(h, 1);
   assert.deepEqual(sent('voice_wake').map(e => e.reason), ['operator']);
   // The page reconnects on the same microphone.
   await h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true);
@@ -83,8 +89,29 @@ test('speech wakes it, priced like everything else, and the paused session resum
   assert.deepEqual(lives[1].appended, [], 'the operator speaking is the cue: nothing is added or said first');
 });
 
-test("GPT Live's last words still playing when it goes on Standby don't wake it: its session is closed", async t => {
+test("on Standby their voice must last two seconds: pauses of half a second belong to it, a longer one starts it again, and the page hears it rise and fall", async t => {
   const { h, sent, goQuiet } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30 } });
+  assert.equal(h.tuning.wakeVoiceMs, 2000);
+  const silence = (reports: number) => { for (let i = 0; i < reports; i++) h.voiceSessions.heard({ at: spokenTo + i * 100, inputRms: 0, rawInputRms: .001, gateThreshold: .008 }); spokenTo += reports * 100; };
+  const rose = () => sent('wake_rising').map(e => Math.round(e.value * 100));
+  speak(h, 15);
+  await goQuiet();
+  speak(h, 12);
+  assert.equal(sent('voice_wake').length, 0, 'what they said before Standby does not count toward it');
+  assert.equal(rose().at(-1), 60);
+  silence(7);
+  assert.equal(rose().at(-1), 0, 'a pause of more than half a second: it falls away');
+  speak(h, 8); silence(4); speak(h, 7);
+  h.voiceSessions.checkStandby(spokenTo);
+  assert.equal(sent('voice_wake').length, 0, '1.9 s with a short pause inside is one stretch, not yet two seconds; and nothing of it is in the currency');
+  assert.equal(rose().at(-1), 95);
+  speak(h, 1);
+  assert.deepEqual(sent('voice_wake').map(e => e.reason), ['operator'], 'two seconds: voice wakes');
+  assert.equal(h.voiceSessions.activity.value(60000, priceFor(h.tuning), spokenTo, h.voiceSessions.standby!.since), 20 * h.tuning.speechPrice, 'and what woke it counts from then on, as it would have Live');
+});
+
+test("GPT Live's last words still playing when it goes on Standby don't wake it: its session is closed", async t => {
+  const { h, sent, goQuiet } = await quiet(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30, wakeVoiceMs: 300 } });
   await goQuiet();
   for (let i = 0; i < 10; i++) h.voiceSessions.heard({ at: Date.now(), inputRms: 0, outputRms: .05 });
   h.voiceSessions.checkStandby();
@@ -183,9 +210,11 @@ test("chewing, typing and knocks don't wake it: only a voice that lasts does", a
   await goQuiet();
   speak(h, 30, 0); h.voiceSessions.checkStandby();
   assert.equal(sent('voice_wake').length, 0, 'loud, but no voice in it (chewing, typing)');
-  for (let i = 0; i < 10; i++) speak(h, 1, 1, Date.now() - 10000 + i * 700);
+  const from = Date.now() + 4000;
+  for (let i = 0; i < 10; i++) speak(h, 2, 1, from + i * 800);
   h.voiceSessions.checkStandby();
-  assert.equal(sent('voice_wake').length, 0, 'a knock rings through one window at a time');
+  assert.equal(sent('voice_wake').length, 0, 'a word here and there, with more than half a second between: no stretch lasts');
+  assert.ok(sent('wake_rising').filter(e => Math.round(e.value * 100) === 33).length >= 10, 'each time it starts again from the bottom');
   speak(h, 4, 1); h.voiceSessions.checkStandby();
   assert.deepEqual(sent('voice_wake').map(e => e.reason), ['operator'], 'a voice that lasts wakes it');
 });
@@ -232,7 +261,7 @@ test('ending voice on Standby hands the unsent speech to the agent, as ending vo
 });
 
 test('without Standby, or with a request on its way to the agent, voice stays Live', async t => {
-  const off = await quiet(t, { tuning: { standbyAfterMs: 0, wakeThreshold: 10 } });
+  const off = await quiet(t, { tuning: { standbyAfterMs: 0, wakeThreshold: 10, wakeVoiceMs: 300 } });
   off.h.voiceSessions.checkStandby(later(600000));
   assert.equal(off.lives[0].state, 'active');
   const on = await quiet(t);
@@ -373,7 +402,7 @@ test('on Standby the microphone goes on being recorded wherever there is sound, 
 });
 
 test("a voice session's microphone track goes on through the Standby that follows it, until the next session's audit takes over on the page", async t => {
-  const { h, lives } = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10 } });
+  const { h, lives } = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10, wakeVoiceMs: 300 } });
   const ws: any = Object.assign(new EventEmitter(), { readyState: 1, bufferedAmount: 0, send() {}, close() {}, terminate() {} });
   attachPage(h, ws, 'local');
   const voicePage = [...h.pages.all.values()].find(p => p.ws === ws)!;
@@ -407,7 +436,7 @@ test("a voice session's microphone track goes on through the Standby that follow
 // Nov 16: a page's audio clock had stopped with its audio device, a second or two at a time, and ended 6 s behind. The
 // bridge refused every level as stale: voice went on Standby mid-sentence, 15 s into each connection, and no voice woke it.
 test("a page whose clock is far behind is still heard: the companion speaking keeps voice on, and the operator's voice wakes Standby", async t => {
-  const { h, lives, published } = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30 } });
+  const { h, lives, published } = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 30, wakeVoiceMs: 300 } });
   const ws: any = Object.assign(new EventEmitter(), { readyState: 1, bufferedAmount: 0, send() {}, close() {}, terminate() {} });
   attachPage(h, ws, 'local');
   const voicePage = [...h.pages.all.values()].find(p => p.ws === ws)!;
@@ -423,8 +452,8 @@ test("a page whose clock is far behind is still heard: the companion speaking ke
   // Quiet for the window: Standby. Then the operator speaks.
   h.voiceSessions.checkStandby(later(WINDOW + 500)); await until(() => lives[0].state === 'closed');
   assert.ok(h.voiceSessions.standby);
-  level({ inputRms: .05, rawInputRms: .05, voiced: 1 }, 4);
-  h.voiceSessions.checkStandby();
+  // Their voice, as it arrives: the bridge's clock times how long it lasts, since the page's can't be used.
+  for (let i = 0; i < 4; i++) { level({ inputRms: .05, rawInputRms: .05, voiced: 1 }, 1); await new Promise(resolve => setTimeout(resolve, 105)); }
   assert.deepEqual(published.filter(p => p.event.type === 'voice_wake').map(p => p.event.reason), ['operator'], 'their voice wakes it');
   const levels = fs.readFileSync(path.join(h.runDir, 'events.jsonl'), 'utf8').split('\n').filter(line => line.includes('"audio_level"')).map(line => JSON.parse(line));
   assert.ok(levels.length === 14 && levels.every(e => Math.abs(e.at - Date.now()) < 1000 && e.at - e.pageAt > BEHIND - 1000), "each is on record at the bridge's time, with the page's own");
@@ -467,7 +496,7 @@ test("waking, the page reports the held words still going out, and when they all
 const answer = (h: any, reports = 5, at = Date.now()) => { for (let i = 0; i < reports; i++) h.voiceSessions.heard({ at, inputRms: 0, outputRms: .05 }); };
 
 test("Standby on Jev's word: once the voice companion has had its say, Jev reads the quiet, once; sure that no meaningful exchange is about to begin, voice goes on Standby at once, not after the window", async t => {
-  const { h, lives, sent } = await quiet(t, { tuning: { standbyAfterMs: 60000, wakeThreshold: 30 } });
+  const { h, lives, sent } = await quiet(t, { tuning: { standbyAfterMs: 60000, wakeThreshold: 30, wakeVoiceMs: 300 } });
   const moments = fakeJev(h, () => ({ standby: .9 })), quiets = () => moments.filter(m => m.trigger === 'quiet');
   const logged: any[] = [], log = h.log.bind(h); h.log = ((event: any) => { logged.push(event); log(event); }) as typeof h.log;
   lives[0].startedAt = Date.now() - 20000;
@@ -506,7 +535,7 @@ test('the quiet reading asks Jev one question, says whether the companion answer
 });
 
 test("Standby on Jev's word waits for the companion's answer, takes no for an answer, and gives way to anyone who speaks while Jev reads", async t => {
-  const { h, lives } = await quiet(t, { tuning: { standbyAfterMs: 60000, wakeThreshold: 30 } });
+  const { h, lives } = await quiet(t, { tuning: { standbyAfterMs: 60000, wakeThreshold: 30, wakeVoiceMs: 300 } });
   let sure = .9, during = () => {};
   const moments = fakeJev(h, moment => { if (moment.trigger === 'quiet') during(); return { standby: sure }; }), quiets = () => moments.filter(m => m.trigger === 'quiet');
   lives[0].startedAt = Date.now() - 20000;
@@ -539,7 +568,7 @@ test("Standby on Jev's word waits for the companion's answer, takes no for an an
 });
 
 test("Standby on Jev's word never begins with a request on its way to the agent, a turn still being decided, before anyone has spoken in the session, or in the 15 s every session is billed", async t => {
-  const { h, lives } = await quiet(t, { tuning: { standbyAfterMs: 60000, wakeThreshold: 30 } });
+  const { h, lives } = await quiet(t, { tuning: { standbyAfterMs: 60000, wakeThreshold: 30, wakeVoiceMs: 300 } });
   const moments = fakeJev(h, () => ({ standby: .9 })), quiets = () => moments.filter(m => m.trigger === 'quiet');
   h.voiceSessions.checkStandby(later(20000));
   await settle();
@@ -565,7 +594,7 @@ test("Standby on Jev's word never begins with a request on its way to the agent,
 
 test("words the job delegation put off because the operator hadn't finished go to the agent when Standby comes, rather than at the next wake", async t => {
   const { fakeJev } = await import('./live-fake.ts');
-  const f = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10 } });
+  const f = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10, wakeVoiceMs: 300 } });
   fakeJev(f.h, m => m.made === 'replied' ? { needsAgent: .9, ready: .05 } : {});
   const voicePage = page('voice-page');
   Object.assign(voicePage.ws, { terminate() {}, close() {}, on() {} });

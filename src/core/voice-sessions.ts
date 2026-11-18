@@ -32,6 +32,11 @@ const FIRST_AUDIO_MS = 15000, AUDIO_GAP_MS = 5000;
 export const STANDBY = 'Standby: the conversation was quiet';
 // A page asked to wake voice is asked again, then Standby ends: voice can't be left neither on nor off.
 const WAKE_AGAIN_MS = 10000, WAKE_GIVE_UP_MS = 30000;
+// A stretch of the operator's voice on Standby: the page reports a level about every tenth of a second, and a pause up to
+// this long belongs to the stretch (a voice is heard in about 70% of the windows of someone talking, so shorter gaps are
+// everywhere inside speech; at 0.3 s, 2 s of talking rarely counted as one stretch on their recordings, at 0.8 s twice as
+// many wakes for nothing came back).
+const LEVEL_MS = 100, WAKE_PAUSE_MS = 500;
 // When the voice companion has had its say (readQuiet): this long after GPT Live stopped speaking, or after the operator did if it gave no answer.
 const QUIET_ANSWERED_MS = 2000, QUIET_UNANSWERED_MS = 6000;
 // GPT Live bills each session it connects at least this long (USAGE.md): Standby sooner saves nothing, and its wake would be billed again.
@@ -167,12 +172,37 @@ export class VoiceSessions {
   heard(level: MicrophoneLevel & { outputRms?: number }) {
     const voice = operatorVoice(level), held = voice && level.at - this.voiceAt < 250;
     if (voice) this.voiceAt = level.at;
-    if (held) this.activity.add('operator');
+    // Live, their voice keeps voice Live through the currency, and so do their held words still going in after a wake
+    // (the microphone is silent then, and they are being heard). On Standby it wakes voice by lasting (lasting()).
+    if (this.standby && !this.standby.waking) this.lasting(level.at, voice);
+    else if (held || level.backlogMs! > 0) this.activity.add('operator');
     // On Standby GPT Live is disconnected: its audio still playing is the closed session's last words, which once woke it
     // again within a second (Oct 21, twice), for a new session billed at least 15 s.
     const live = (level.outputRms ?? 0) >= LIVE_SPEECH_RMS && !this.standby;
     if (live) { this.activity.add('live'); this.liveSpeechAt = level.at; }
     if (held || live) { const now = Date.now(); if (now - this.spokeAt > 1500 && Number.isFinite(this.spokeAt)) this.lastQuietMs = now - this.spokeAt; this.spokeAt = now; this.liveSpokeLast = live && !held; }
+  }
+  /**
+   * On Standby, the operator's voice wakes voice once it has lasted wakeVoiceMs (tuning.ts), pauses of up to WAKE_PAUSE_MS
+   * inside it: on their recorded sessions, a third of a second of voice anywhere in the window (the rule until Nov 17)
+   * woke it for a video playing, other people and noise in one wake out of five. How far the stretch under way has got
+   * (0 to 1) goes to the listening page with every level, which lets them hear it rise (web/cues.ts); a stretch that
+   * breaks falls back to nothing. Only what they say after Standby began counts: their goodbye doesn't.
+   */
+  stretch?: { from: number; at: number }; rose = 0;
+  lasting(at: number, voice: boolean) {
+    const standby = this.standby!, bridge = this.bridge;
+    if (at < standby.since) return;
+    if (this.stretch && at - this.stretch.at > WAKE_PAUSE_MS) this.stretch = undefined;
+    if (voice) this.stretch = { from: this.stretch?.from ?? at - LEVEL_MS, at };
+    const rose = this.stretch ? Math.min(1, (this.stretch.at - this.stretch.from) / bridge.tuning.wakeVoiceMs) : 0;
+    if (rose !== this.rose) bridge.publish({ type: 'wake_rising', value: this.rose = rose }, standby.page);
+    // The paused session has to finish closing first; and with Standby turned off, checkStandby wakes it anyway.
+    if (rose < 1 || (this.live && this.live.state !== 'closed') || !bridge.tuning.standbyAfterMs) return;
+    // What woke it counts from here on as it would have Live: the voice that wakes it keeps it Live.
+    for (let spoken = this.stretch!.from + LEVEL_MS; spoken <= at; spoken += LEVEL_MS) this.activity.add('operator', spoken);
+    this.stretch = undefined; this.rose = 0;
+    this.wake('operator', true);
   }
   /**
    * Every second: voice that has been quiet for the Standby window goes on Standby, and voice on
@@ -218,7 +248,7 @@ export class VoiceSessions {
     const bridge = this.bridge;
     // A fork that has answered doesn't keep the focus through the quiet: the main session's news is what wakes the voice (forks.ts).
     bridge.forks.quiet();
-    this.standby = { since: Date.now(), page };
+    this.standby = { since: Date.now(), page }; this.stretch = undefined; this.rose = 0;
     bridge.log({ type: 'voice.standby', liveRun: live.reservation, ...how });
     bridge.publish({ type: 'standby', state: 'on' });
     void live.close(STANDBY);

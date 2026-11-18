@@ -50,13 +50,13 @@ test("with the operator's words, Jev reads them in the same call and keeps the c
   assert.match(sent.questions.standbyAfterMs.instructions, /Keep the current level unless/);
   // The operator's own choices (the quiet window, and how sure Jev must be for Standby at once or for a fork) change only
   // when they ask for that setting itself; the others Jev fits to what their words call for.
-  for (const name of ['standbyAfterMs', 'standbyFrom', 'forkFrom']) assert.match(sent.questions[name].instructions, /Which level has the operator asked for\? Keep the current level unless their instructions, or their latest words, ask for this setting itself to change/, name);
+  for (const name of ['standbyAfterMs', 'wakeVoiceMs', 'standbyFrom', 'forkFrom']) assert.match(sent.questions[name].instructions, /Which level has the operator asked for\? Keep the current level unless their instructions, or their latest words, ask for this setting itself to change/, name);
   assert.match(sent.questions.wakeThreshold.instructions, /Which level fits the operator's instructions and preferences best\?/);
   assert.deepEqual(Object.keys(sent.questions.standbyFrom.criteria), ['level_0.4', 'level_0.5', 'level_0.6', 'level_0.7', 'level_1']);
   assert.deepEqual(Object.keys(sent.questions.standbyAfterMs.criteria), ['level_0', 'level_10000', 'level_15000', 'level_20000', 'level_30000', 'level_60000', 'level_120000']);
   // Every Standby setting is Jev's to choose, each level with what it was measured to cost and buy.
   for (const name of ['speechPrice', 'liveSpeechPrice', 'toolPrice', 'promptPrice', 'messagePrice', 'turnEndPrice', 'failurePrice', 'approvalPrice', 'requestPrice']) assert.ok(sent.questions[name], name);
-  assert.match(sent.questions.wakeThreshold.instructions, /Choose higher when the operator says it wakes up for nothing/);
+  assert.match(sent.questions.wakeThreshold.instructions, /Choose higher when the operator says the agent's news wakes it too readily/);
   // When the instructions change, with no words: the default unless they ask otherwise.
   await new Jev({ apiKey: 'k', log: () => {}, fetch }).read({ trigger: 'settings', instructions: [], tune: { earlier: [], current: DEFAULT_TUNING, pinned: [] } });
   assert.match(sent.questions.standbyAfterMs.instructions, /Choose the default unless their instructions ask for this setting itself to change/);

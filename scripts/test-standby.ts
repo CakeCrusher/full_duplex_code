@@ -43,6 +43,9 @@ try {
     const Native = window.AudioContext;
     window.AudioContext = class extends Native { constructor(options?: AudioContextOptions) { super(options); if (options?.latencyHint === 'interactive') (window as any).pageAudio = this; } };
     const start = OscillatorNode.prototype.start, tones: [number, number][] = (window as any).tones = [];
+    // The rush of air that rises while their voice is picked up on Standby (cues.ts): looped noise, started once.
+    const play = AudioBufferSourceNode.prototype.start; (window as any).rushes = 0;
+    AudioBufferSourceNode.prototype.start = function (...args: any[]) { if (this.loop) (window as any).rushes++; return play.apply(this, args as any); };
     OscillatorNode.prototype.start = function (...args: any[]) { if (this.frequency.value !== 330) tones.push([Date.now(), this.frequency.value]); return start.apply(this, args as any); };
     navigator.mediaDevices.getUserMedia = async () => {
       const audio = new AudioContext({ sampleRate: 24000 }); await audio.resume();
@@ -130,11 +133,24 @@ try {
   // and again while it starts, and all of it reaches the other end. The waking sound (the start cue's first note, then
   // softly again) plays until the held words are out; then the start cue.
   // (A quiet of more than 5 s first: all of what the page keeps to record ahead of a sound.)
+  // First a remark of a second: too short to wake it (two seconds of voice do), and the page lets them hear and see
+  // it being picked up, rising, then falling away.
+  const rising = () => page.evaluate(() => { const meter = document.getElementById('rising') as HTMLMeterElement; return meter.hidden ? 0 : meter.value; });
+  let rose = 0, hearing = false; const watch = setInterval(async () => { rose = Math.max(rose, await rising().catch(() => 0)); hearing ||= await text('#audioState').catch(() => '') === 'Standby · hearing you…'; }, 60);
+  await speak(1000);
+  await sleep(1500); clearInterval(watch);
+  console.log({ remarkSeconds: 1, roseTo: rose.toFixed(2), rushes: await page.evaluate(() => (window as any).rushes) });
+  assert.equal(logged('voice.waking').length, 0, 'a remark of a second does not wake it');
+  assert.ok(rose > .3 && rose < .8 && hearing, `the page showed their voice being picked up, part of the way (${rose.toFixed(2)})`);
+  assert.equal(await page.evaluate(() => (window as any).rushes), 1, 'and sounded it: the rising rush of air');
+  assert.equal(await rising(), 0, 'which falls away when they stop');
+  assert.equal(await text('#audioState'), 'Standby · listening here');
   fork.startMs = 6000;
   await sleep(5500);
   const spokeAt = Date.now();
-  await speak(1500);
-  await waitFor(() => logged('voice.waking').length === 1, 'speech wakes voice', 5000);
+  await speak(2500);
+  await waitFor(() => logged('voice.waking').length === 1, 'two seconds of voice wake it', 5000);
+  assert.ok(logged('voice.waking')[0].at - spokeAt > 1900, 'not before');
   const wokeAt = logged('voice.waking')[0].at;
   await sleep(1500); await speak(1500);
   await waitFor(async () => await text('#connection') === 'Listening', 'the resumed session started', 15000);
@@ -142,11 +158,13 @@ try {
   assert.equal(woke.wake, 'operator'); assert.equal(woke.plan, 'fork', 'the paused session resumes');
   assert.ok(woke.startMs >= 6000, `it took ${woke.startMs} ms to start`);
   assert.ok(!lives[1].greeting && !lives[1].appended.length, 'not greeted; nothing added');
-  await sleep(5000);
+  // The held words go out as they were said, a second for a second: the start cue follows them.
+  await waitFor(async () => (await tonesSince(wokeAt - 500)).some(([, frequency]) => frequency === 990), 'the start cue', 12000);
+  await sleep(1000);
   const held = await heardSince(spokeAt), tones = await tonesSince(wokeAt - 500);
   const startCue = tones.find(([, frequency]) => frequency === 990)?.[0];
-  console.log({ forkStartedAfter: woke.startMs / 1000, spokeFor: 3, heardSpeechSeconds: held.seconds.toFixed(2), wakingNotes: tones.filter(([at, f]) => f === 660 && at < (startCue ?? Infinity)).length, startCueAfterLastHeldWordMs: startCue && startCue - held.lastAt });
-  assert.ok(held.seconds > 2.6, `the other end heard nearly all 3 s of speech, before and while the fork started (${held.seconds.toFixed(2)} s)`);
+  console.log({ forkStartedAfter: woke.startMs / 1000, spokeFor: 4, heardSpeechSeconds: held.seconds.toFixed(2), wakingNotes: tones.filter(([at, f]) => f === 660 && at < (startCue ?? Infinity)).length, startCueAfterLastHeldWordMs: startCue && startCue - held.lastAt });
+  assert.ok(held.seconds > 3.5, `the other end heard nearly all 4 s of speech, before and while the fork started (${held.seconds.toFixed(2)} s)`);
   assert.ok(tones[0]?.[1] === 660 && tones[0][0] - wokeAt < 1000, 'the waking sound starts as voice wakes');
   assert.ok(tones.filter(([at, f]) => f === 660 && at < woke.at).length >= 6, 'and goes on while the session starts');
   assert.ok(startCue && startCue >= held.lastAt - 300, 'the start cue sounds once the held words are out');
@@ -154,7 +172,7 @@ try {
   // spoke while it was connected, so all the speech in it was said on Standby and while the fork started.
   const onStandby = recorded(0);
   console.log({ recordedOnStandbySeconds: onStandby.toFixed(2), gaps: logged('audio.audit_gap').filter(e => e.reason === 'standby_quiet').length });
-  assert.ok(onStandby > 2.6, `the first session's microphone track goes on through its Standby and holds nearly all 3 s said there (${onStandby.toFixed(2)} s)`);
+  assert.ok(onStandby > 4.4, `the first session's microphone track goes on through its Standby and holds nearly all 5 s said there, the remark that woke nothing included (${onStandby.toFixed(2)} s)`);
   assert.ok(recorded(1) < .3, "and the next session's own track starts after them");
 
   assert.equal(logged('audio.audit_paused').length, 0, 'what led up to the words went out without the page taking it for a backlog and dropping some');
@@ -186,7 +204,7 @@ try {
   await waitFor(async () => await text('#connection') === 'Standby · speak to wake it', 'quiet again: Standby', 12000);
   fork.never = true;
   const spokeAgainAt = Date.now(), recordedBefore = recorded(connected);
-  await speak(1500);
+  await speak(2500);
   await waitFor(() => logged('voice.fork_never_started').length === 1, 'the fork never starts', 15000);
   await waitFor(async () => await text('#connection') === 'Listening', 'a new session started instead', 15000);
   const fallback = logged('voice.started').at(-1);
@@ -195,8 +213,8 @@ try {
   await sleep(3000);
   const again = await heardSince(spokeAgainAt);
   console.log({ fallbackPlan: fallback.plan, startedAfter: fallback.startMs / 1000, heardSpeechSeconds: again.seconds.toFixed(2) });
-  assert.ok(again.seconds > 1.2, `the other end heard nearly all 1.5 s of speech said before the failed fork (${again.seconds.toFixed(2)} s)`);
-  assert.ok(recorded(connected) - recordedBefore > 1.2, `recorded too, in the track of the session that was on Standby (${(recorded(connected) - recordedBefore).toFixed(2)} s)`);
+  assert.ok(again.seconds > 2.1, `the other end heard nearly all 2.5 s of speech said before the failed fork (${again.seconds.toFixed(2)} s)`);
+  assert.ok(recorded(connected) - recordedBefore > 2.1, `recorded too, in the track of the session that was on Standby (${(recorded(connected) - recordedBefore).toFixed(2)} s)`);
 
   // 5. Quiet again: Standby again. Ending voice there turns voice off.
   await waitFor(async () => await text('#connection') === 'Standby · speak to wake it', 'quiet again: Standby', 12000);

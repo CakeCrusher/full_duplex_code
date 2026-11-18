@@ -13,7 +13,7 @@
     <section class="controls" aria-label="Voice controls">
       <button id="start" disabled>Start voice</button><button id="fresh" disabled hidden title="Start a new conversation; GPT Live won't have the earlier one">Start fresh</button><button id="mute" disabled aria-pressed="false">Mute microphone</button><button id="note" hidden aria-pressed="false" title="A voice note on the timeline: the session microphone pauses while you record it">Record a note</button><button id="stop" disabled>End voice</button>
       <label class="microphone-device" for="microphone-device">Microphone <select id="microphone-device"><option value="">Chrome default</option></select></label>
-      <div class="levels"><span id="audioState">Microphone off</span><meter id="level" min="0" max="1" value="0" aria-label="Microphone level"></meter></div>
+      <div class="levels"><span id="audioState">Microphone off</span><meter id="level" min="0" max="1" value="0" aria-label="Microphone level"></meter><meter id="rising" class="rising" min="0" max="1" value="0" hidden aria-label="Your voice, toward waking voice"></meter></div>
       <p id="connection-facts" class="connection-facts"></p>
     </section>
     <section id="learned" class="learned-list" aria-label="What Jev learned and changed" aria-live="polite"></section>

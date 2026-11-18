@@ -67,6 +67,8 @@ function handle(event: BridgeEvent) {
   // The page beside the conversation moved without the agent: by the voice's own words, or by the voice tool.
   if (event.type === 'stage' && !replaying && event.done?.length) notice(`${event.cue ? 'The page followed the voice' : 'The voice tool moved the page'}: ${event.done.map((step: string) => step.replace(/\s*\([^()]*\)\s*$/, '')).join(', then ')}.`);
   if (event.type === 'voice_on' && !active && !starting && !standby) { notice(`Voice turned on from ${event.from}.`); start(resumable(currentStatus) ? 'resume' : 'fresh', false, true); }
+  // On Standby, their voice being picked up: how far toward waking it has lasted (0 to 1), heard and shown.
+  if (event.type === 'wake_rising' && standby && !waking) rising(Number(event.value) || 0);
   if (event.type === 'voice_wake') wake();
   if (event.type === 'history') {
     replaying = true;
@@ -276,9 +278,15 @@ function pause() {
   $('audioState').textContent = 'Standby · listening here';
   if (currentStatus) handle(currentStatus);
 }
+function rising(value: number) {
+  cuePlayer.rising(value);
+  const meter = $<HTMLMeterElement>('rising'); meter.value = value; meter.hidden = !value;
+  if (standby && !waking) $('audioState').textContent = value ? 'Standby · hearing you…' : 'Standby · listening here';
+}
 // Speech or news woke voice (or the operator clicked): a new connection on the same microphone.
 function wake() {
   if (!standby || waking || active || starting) return;
+  rising(0);
   waking = true; audio.wakeHold(); cuePlayer.waking(true);
   $('audioState').textContent = 'Waking…';
   start('resume', true, false, true);
@@ -295,6 +303,7 @@ async function replayWhenConnected() {
   audio.replay();
 }
 function releaseAudio() {
+  rising(0);
   voiceSessionId = null; standby = false; waking = false; cuePlayer.waking(false); loaded(false);
   if (audio.node && bridge.open) bridge.send({ type: 'audio_stopped' });
   generation++;

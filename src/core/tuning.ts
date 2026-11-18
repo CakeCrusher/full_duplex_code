@@ -21,6 +21,8 @@ export interface Tuning {
   compactTokens: number;
   standbyAfterMs: number;
   wakeThreshold: number;
+  /** How long the operator's voice must last, without a pause longer than WAKE_PAUSE_MS, to wake voice from Standby (ms; voice-sessions.ts). */
+  wakeVoiceMs: number;
   /** After a long quiet, the next one is likely long too: Standby after this much quiet instead (0: never sooner). */
   standbyQuickMs: number;
   /** How long the conversation's previous quiet must have lasted for Standby to come sooner. */
@@ -140,7 +142,7 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     { value: 1, consequence: "Never on Jev's word: Standby only after the quiet window (21 an hour, 4.7 of them interrupting; saved 31%)." },
   ] },
   wakeThreshold: { min: 1, max: 1000, describe:
-    "How much currency in the quiet window keeps voice Live, and wakes it from Standby. Everything is priced in one currency by the price settings, by default: each tenth of a second of the operator's sound or of GPT Live's audio 20; each display batch of an agent message 10 (a message is usually about 3 batches); a finished turn 50; a failed turn 50; an approval request 100; a request GPT Live passes on 100; a tool call or a prompt 1. At the default 50: about 0.3 s of the operator's sound wakes it; an approval, a request, or a finished or failed turn always does; tool calls practically never do (50 within the window). The levels' finished turns that waited silently were measured with a finished turn worth 30; at 50 they wake it up to a threshold of 50. Higher: voice is on Standby more and wakes less often for noise, but more finished turns wait silently until the operator speaks, and GPT Live misses more of what it would have said; above 100 even an approval request no longer wakes it. Lower: the reverse. Choose higher when the operator says it wakes up for nothing, for coughs or noises; lower when they say they missed that the agent finished, or want to hear about its work right away.",
+    "How much currency in the quiet window keeps voice Live, and wakes it from Standby. Everything is priced in one currency by the price settings, by default: each tenth of a second of the operator's sound or of GPT Live's audio 20; each display batch of an agent message 10 (a message is usually about 3 batches); a finished turn 50; a failed turn 50; an approval request 100; a request GPT Live passes on 100; a tool call or a prompt 1. At the default 50: an approval, a request, or a finished or failed turn always wakes it; tool calls practically never do (50 within the window); about 0.3 s of the operator's sound in the window keeps it Live. Their voice wakes it another way, by lasting (wakeVoiceMs): the levels' seconds of sound and noise wakes were measured before Nov 17, when sound woke it through this currency, and now say only how much sound keeps it Live. The levels' finished turns that waited silently were measured with a finished turn worth 30; at 50 they wake it up to a threshold of 50. Higher: voice is on Standby more, but more finished turns wait silently until the operator speaks, and GPT Live misses more of what it would have said; above 100 even an approval request no longer wakes it. Lower: the reverse. Choose higher when the operator says the agent's news wakes it too readily; lower when they say they missed that the agent finished, or want to hear about its work right away.",
     levels: [
     { value: 10, consequence: 'Any agent message, finished turn, or tenth of a second of sound wakes it: saved 18%, 5.0 wakes an hour for noise; GPT Live missed 22 s an hour; every finished turn is reported at once.' },
     { value: 30, consequence: 'A finished turn alone wakes it, or 0.2 s of sound: saved 20%, 4.1 noise wakes an hour; GPT Live missed 45 s an hour.' },
@@ -149,8 +151,20 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     { value: 100, consequence: 'It takes 0.5 s of sound, an approval or a request: saved 24%, 2.4 noise wakes an hour; 2 finished turns an hour waited silently; GPT Live missed 95 s an hour.' },
     { value: 150, consequence: 'It takes 0.8 s of sound or several agent events together, and an approval request alone no longer wakes it: saved 27%, 2.0 noise wakes an hour; 3 finished turns an hour waited silently; GPT Live missed 126 s an hour.' },
   ] },
+  // Measured on the operator's five sessions of Nov 16-17 (.scratch/wake): of 103 wakes by the microphone, GPT Live
+  // transcribed words of theirs after 81, and nothing to speak of after 22 (a video playing, other voices, noise). Each
+  // level: the same microphone levels, replayed with pauses of up to half a second inside a stretch of voice.
+  wakeVoiceMs: { min: 300, max: 10000, asked: true, describe:
+    "How long the operator's voice must go on, without a pause longer than half a second, to wake voice from Standby (ms). While it lasts, the page lets them hear it being picked up, rising until voice wakes; their words from the start of it are replayed to GPT Live, so none are lost. Only their voice is held to this: the agent's news wakes voice through the currency as before, and while voice is Live their sound keeps it Live as before. Lower: short remarks wake it, and so do more sounds that are not the operator talking to it. Higher: fewer wakes for nothing, and the operator must talk longer before it listens. This one is the operator's to choose: change it only when they ask for it.",
+    levels: [
+    { value: 300, consequence: 'As before Nov 17: a third of a second of voice wakes it. All 22 of the 22 recorded wakes for nothing happen.' },
+    { value: 1000, consequence: '13 of the 22 wakes for nothing still happen; 77 of the 81 times the operator did speak, voice wakes within 8 s of when it did.' },
+    { value: 1500, consequence: '8 of the 22 wakes for nothing still happen; 68 of 81 real ones come within 8 s.' },
+    { value: 2000, consequence: "The default, the operator's choice (Nov 17): 5 of the 22 wakes for nothing still happen; 57 of 81 real ones come within 8 s, about a second later, the others once the operator has gone on talking for 2 s." },
+    { value: 3000, consequence: '2 of the 22 wakes for nothing still happen; 41 of 81 real ones come within 8 s, about 2 s later.' },
+  ] },
   speechPrice: { min: 0, max: 1000, describe:
-    "What each tenth of a second of the operator's microphone sound that passes the noise gate is worth in Standby's currency. Sound includes noise the gate lets through: a cough, a door, typing near the microphone. With the threshold at 50, the default 20 means about 0.3 s of sound wakes voice and keeps it Live. Lower: it takes longer sound to wake it, so fewer noise wakes, but voice also stays Live less after the operator stops talking. Higher: the slightest sound wakes it. Choose lower when the operator complains that noise or coughs wake it; higher when they say it doesn't notice them start speaking.",
+    "What each tenth of a second of the operator's microphone sound that passes the noise gate is worth in Standby's currency. Sound includes noise the gate lets through: a cough, a door, typing near the microphone. With the threshold at 50, the default 20 means about 0.3 s of sound in the window keeps voice Live. It no longer wakes voice from Standby: their voice does that by lasting (wakeVoiceMs), and the levels below were measured before Nov 17, when sound woke it through this price. Lower: voice stays Live less after the operator stops talking. Higher: the slightest sound keeps it Live. Choose lower when the operator wants Standby to come sooner despite sounds around them; higher when it goes on Standby while they are still talking.",
     levels: [
     { value: 5, consequence: 'About 1 s of sound wakes it: saved 24%, 1.7 noise wakes an hour; GPT Live missed 70 s an hour.' },
     { value: 10, consequence: 'About 0.5 s of sound: saved 22%, 2.3 noise wakes an hour; GPT Live missed 60 s an hour.' },
@@ -227,7 +241,7 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
 };
 
 // Standby's defaults are the operator's choice in the Standby sandbox (Oct 18).
-export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 20000, wakeThreshold: 50, standbyQuickMs: 5000, standbyQuickAfterMs: 60000, standbyFrom: 0.5,
+export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 20000, wakeThreshold: 50, wakeVoiceMs: 2000, standbyQuickMs: 5000, standbyQuickAfterMs: 60000, standbyFrom: 0.5,
   speechPrice: 20, liveSpeechPrice: 20, toolPrice: 1, promptPrice: 1, messagePrice: 10, turnEndPrice: 50, failurePrice: 50, approvalPrice: 100, requestPrice: 100, forkFrom: 0.55 };
 
 /** Settings from partial overrides: unknown names and values out of range are refused. */

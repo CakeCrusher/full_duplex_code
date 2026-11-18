@@ -54,7 +54,7 @@ try {
   // Quiet again, then the operator speaks: it wakes and answers from the conversation.
   await until(() => logged('voice.standby').length === 2, { timeout: 60000, label: 'Standby again' });
   console.log('\nSTANDBY AGAIN');
-  speaking = true; await delay(1000); speaking = false;
+  speaking = true; await delay(2500); speaking = false;
   await until(() => logged('voice.woke').length === 2, { timeout: 30000, label: 'speech wakes voice' });
   const speechWake = logged('voice.waking')[1];
   assert.equal(speechWake.reason, 'operator');

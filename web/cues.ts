@@ -83,6 +83,27 @@ export class CuePlayer {
     oscillator.connect(envelope).connect(context.destination);
     oscillator.start(at); oscillator.stop(at + duration + .02);
   }
+  rush?: { filter: BiquadFilterNode; gain: GainNode };
+  /**
+   * On Standby, while the operator's voice is being picked up: a soft rush of air that rises in pitch and loudness as their
+   * voice lasts toward the wake (0 to 1), and falls away if they stop before it. The wake's own note follows it. Noise, not
+   * a note: a note repeats itself as a voice does, and the microphone would count it as theirs.
+   */
+  rising(value: number) {
+    const context = this.context;
+    if (!context || context.state === 'closed' || (!value && !this.rush)) return;
+    if (!this.rush) {
+      const buffer = context.createBuffer(1, context.sampleRate, context.sampleRate), data = buffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      const source = context.createBufferSource(), filter = context.createBiquadFilter(), gain = context.createGain();
+      source.buffer = buffer; source.loop = true; filter.type = 'bandpass'; filter.Q.value = .8; gain.gain.value = 0;
+      source.connect(filter).connect(gain).connect(context.destination); source.start();
+      this.rush = { filter, gain };
+    }
+    const now = context.currentTime, { filter, gain } = this.rush;
+    filter.frequency.setTargetAtTime(500 + 1900 * value, now, .1);
+    gain.gain.setTargetAtTime(value ? .03 + .11 * value : 0, now, value ? .1 : .06);
+  }
   pulseTimer?: ReturnType<typeof setInterval>;
   /**
    * While voice wakes from Standby: the start cue's first note at once (the operator is heard), then again softly, like
