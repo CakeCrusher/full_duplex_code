@@ -3,9 +3,10 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import * as pty from 'node-pty';
-import { startTestHarness, synthesize, connectTestVoice, until, delay } from './test-support.ts';
+import { startTestHarness, startCodexTestHarness, synthesize, connectTestVoice, until, delay } from './test-support.ts';
 
-// Forks with real voice, real Jev and real Claude Code (spends GPT Live, a few minutes, and Jev and Claude usage). Claude
+// Forks with real voice, real Jev and real Claude Code, or real Codex with `codex` as the argument (spends GPT Live, a few
+// minutes, and Jev and the agent's usage). Claude
 // works on a long job; the operator, by voice, turns aside to ask something only the agent can answer (what a file in
 // the project says): Jev's reading of the words, as they are sent, opens a fork (in a terminal of its own, here a
 // pseudo-terminal), and the request goes to it from the conversation record, "<fork started>" in it; the fork answers
@@ -14,7 +15,8 @@ import { startTestHarness, synthesize, connectTestVoice, until, delay } from './
 // fork is left behind. Jev's readings must have read the same tags.
 const aside = synthesize('fork-aside', 'By the way, a quick question while that runs: what is the code word written in the file named secret dot txt? Just tell me what it says.');
 const moved = synthesize('fork-moved', 'Okay, got it, thanks. Now back to the main work: when it is done, also create a file named back dot txt containing the word back.');
-const test = await startTestHarness('fork-voice', { jevKey: process.env.TYPESAFE_API_KEY, tuning: { standbyAfterMs: 0 } });
+const options = { jevKey: process.env.TYPESAFE_API_KEY, tuning: { standbyAfterMs: 0 } };
+const test = process.argv[2] === 'codex' ? await startCodexTestHarness('fork-voice-codex', options) : await startTestHarness('fork-voice', options);
 const { harness, cwd } = test;
 const evidence: Record<string, any> = { passed: false };
 const file = (name: string) => path.join(cwd, name);
@@ -34,7 +36,7 @@ harness.forks.open = script => {
 try {
   assert.ok(process.env.TYPESAFE_API_KEY, 'Jev decides forks: TYPESAFE_API_KEY is needed');
   // Claude ready, as the operator sees it before typing (a channel message in its first seconds can be lost: noted apart).
-  await until(() => harness.observer.state === 'idle', { label: 'Claude ready', timeout: 60000 }); await delay(3000);
+  await until(() => harness.observer.state === 'idle', { label: 'the agent ready', timeout: 60000 }); await delay(3000);
   // The main work, typed, as the operator would in Claude's terminal.
   harness.deliver({ id: randomUUID(), content: 'Run the shell command `sleep 150` in the foreground (not in the background), then create a file named slow-done.txt containing the word done. Nothing else.', said: 'typed' });
   await until(() => harness.observer.state === 'working', { label: 'Claude at work', timeout: 60000 });
@@ -54,7 +56,7 @@ try {
   await voice.speak(moved);
   await until(() => harness.forks.focus === 'main', { label: "Jev's reading moving back to the main session", timeout: 40000 });
   assert.equal(harness.forks.adapter, undefined, 'the fork is left behind');
-  const toMain = await until(() => events().find(e => e.type === 'agent.input' && !e.fork && String(e.text).includes('<fork ended>')), { label: "the main session's request", timeout: 60000 });
+  const toMain = await until(() => events().find(e => e.type === 'agent.input' && !e.fork && String(e.text).includes('<fork ended>')), { label: "the main session's request", timeout: 240000 }); // Asked for "when it is done": Jev may hold it until the long job ends.
   evidence.toMain = String(toMain.text).slice(-1500);
   assert.match(String(toMain.text), /<fork started>[\s\S]*secret[\s\S]*<fork ended>[\s\S]*back/i, 'the main session gets the forked stretch between the tags, then the new words');
   await until(() => fs.existsSync(file('back.txt')) && fs.existsSync(file('slow-done.txt')), { label: 'back.txt after the long job', timeout: 240000 });

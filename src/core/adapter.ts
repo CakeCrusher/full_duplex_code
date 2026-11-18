@@ -185,6 +185,8 @@ export interface AgentSession {
   log: (event: Record<string, unknown>) => void;
   /** This session is a fork of that one (its ID), opened in its own window for a tangent (forks.ts). */
   forkOf?: string;
+  /** The script a fork's window runs (window.ts): what the adapter keeps running for that window ends with it. */
+  window?: string;
   /** Where this session's hooks and sockets are served on the bridge, before their paths: '' for the main session, '/fork/<n>' for the run's nth fork. */
   prefix?: string;
 }

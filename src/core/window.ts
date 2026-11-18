@@ -43,9 +43,18 @@ export function writeScript(file: string, launch: { command: string; args: reado
   const answered = launch.confirm && fs.existsSync(expect) ? `${file}.exp` : undefined;
   if (answered) fs.writeFileSync(answered, ANSWERS, { mode: 0o600 });
   const lines = ['#!/bin/sh', `cd ${quote(cwd)} || exit 1`, ...env.PATH ? [`export PATH=${quote(env.PATH)}`] : [],
-    ...Object.entries(launch.env).map(([name, value]) => `export ${name}=${quote(value)}`), `exec ${(answered ? [expect, '-f', answered, '--', launch.confirm!, ...command] : command).map(quote).join(' ')}`];
+    ...Object.entries(launch.env).map(([name, value]) => `export ${name}=${quote(value)}`),
+    // The agent's process ID (exec keeps the shell's), for fdc to see when it ends or its window closes (forks.ts).
+    `echo $$ > ${quote(`${file}.pid`)}`, `exec ${(answered ? [expect, '-f', answered, '--', launch.confirm!, ...command] : command).map(quote).join(' ')}`];
   fs.writeFileSync(file, `${lines.join('\n')}\n`, { mode: 0o700 });
   return file;
+}
+
+/** Whether the process a window's script left the ID of still runs; undefined while the window is not up. */
+export function windowAlive(script: string): boolean | undefined {
+  let pid: number;
+  try { pid = Number(fs.readFileSync(`${script}.pid`, 'utf8')); } catch { return undefined; }
+  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
 }
 
 export type Run = (command: string, args: string[]) => { status: number | null; stderr?: string | Buffer | null; error?: Error };

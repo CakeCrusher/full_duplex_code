@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentAdapter, Observation } from './adapter.ts';
 import { QUIET_TURN_MS, TURN_ENDS, type Harness } from './bridge.ts';
 import { forkBack, forkFailed, forkNote, forkOpened } from './prompts.ts';
-import { openWindow, writeScript } from './window.ts';
+import { openWindow, windowAlive, writeScript } from './window.ts';
 import { perceive } from './perceived.ts';
 
 /** The tags the conversation record (perceived.ts) carries where a fork began and ended: the voice, Jev and both sessions read them as they are. */
@@ -27,6 +27,8 @@ export class Forks {
   adapter?: AgentAdapter; ready = false; count = 0;
   /** Where the fork in focus is served on the bridge: each fork has its own, so one left behind (its window still open) can't take the next one's place. */
   route = '';
+  /** What the fork in focus is told as it starts: fdc's instructions and that it is a fork (an agent that takes them through its hook gets these there: endpoints.ts). */
+  instructions = '';
   /** How long a fork has to connect once its window opened (Claude Code asks the operator to confirm its channel there first). */
   static START_MS = 60000; starting?: NodeJS.Timeout;
   /** When a request last went to the fork, and when the fork last ended a turn (as the agent reports it): between the two its answer is on the way. */
@@ -35,7 +37,7 @@ export class Forks {
   get busy() { return this.asked > this.answered && Date.now() - Math.max(this.asked, this.active) < QUIET_TURN_MS; }
   open: typeof openWindow;
   constructor(bridge: Harness, { open = openWindow }: { open?: typeof openWindow } = {}) { this.bridge = bridge; this.open = open; }
-  /** A tangent can go to a fork: always, when the agent can fork (not Codex yet) and the main session has an ID; Jev decides when. */
+  /** A tangent can go to a fork: always, when the agent can fork and the main session has an ID; Jev decides when. */
   get possible() { const b = this.bridge; return Boolean(b.agent.canFork) && Boolean(b.sessionId); }
   /**
    * Where each session is in the conversation record: when its last request was cut from it (mediator.ts, send). A fork
@@ -50,14 +52,16 @@ export class Forks {
   async start(said: string): Promise<string | undefined> {
     const b = this.bridge;
     if (!this.possible || this.focus === 'fork') return;
-    const n = ++this.count, runDir = path.join(b.runDir, `fork-${n}`);
+    const n = ++this.count, runDir = path.join(b.runDir, `fork-${n}`), script = path.join(runDir, 'fork.command');
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
-    const adapter = b.agent.create({ ...b.agentSession, runDir, sessionId: undefined, forkOf: b.sessionId, prefix: this.route = `/fork/${n}`, instructions: `${b.agentInstructions}\n\n${forkNote(b.agent)}`, log: event => b.log({ ...event, fork: n }) });
+    const adapter = b.agent.create({ ...b.agentSession, runDir, sessionId: undefined, forkOf: b.sessionId, window: script, prefix: this.route = `/fork/${n}`, instructions: this.instructions = `${b.agentInstructions}\n\n${forkNote(b.agent)}`, log: event => b.log({ ...event, fork: n }) });
     try {
+      // Followed from before its launch: Codex's fork is made there, and can take requests as the launch returns.
+      this.adapter = adapter; this.ready = false; this.wire(adapter, n);
       const launch = await adapter.launch({ baseUrl: b.baseUrl, token: b.agentToken });
-      const how = this.open(writeScript(path.join(runDir, 'fork.command'), launch, b.cwd));
-      this.adapter = adapter; this.ready = false; this.focus = 'fork'; this.cursors.fork = this.cursors.main; this.asked = this.answered = this.active = 0;
-      this.wire(adapter, n);
+      const how = this.open(writeScript(script, launch, b.cwd));
+      this.watch(adapter, script);
+      this.focus = 'fork'; this.cursors.fork = this.cursors.main; this.asked = this.answered = this.active = 0;
       // A fork that doesn't start (its window waits for the operator, or the agent failed there) gives the focus, and what was sent to it, back to the main session.
       this.starting = setTimeout(() => { if (this.adapter === adapter && !this.ready) { const told = this.back('the fork did not start'); if (told) b.tell(told); } }, Forks.START_MS);
       this.starting.unref();
@@ -65,6 +69,7 @@ export class Forks {
       b.focusChanged();
       return this.record(`${FORK_STARTED} ${forkOpened(b.agent, how)}`);
     } catch (error) {
+      this.adapter = undefined; this.ready = false;
       void adapter.close();
       b.log({ type: 'fork.failed', n, message: (error as Error).message });
       return forkFailed(b.agent, (error as Error).message);
@@ -117,6 +122,21 @@ export class Forks {
     adapter.on('session', (id: string) => b.log({ type: 'fork.session', n, sessionId: id }));
     adapter.on('fault', (error: Error) => b.fault(error));
   }
+  /**
+   * The agent ended in the fork's window, or the operator closed it: back to the main session. Seen from the window's
+   * process (window.ts), as not every agent reports its end: Codex's thread lives on in fdc's app server, where requests
+   * would go on reaching a fork nobody sees.
+   */
+  static WATCH_MS = 2000; watching?: NodeJS.Timeout;
+  watch(adapter: AgentAdapter, script: string) {
+    clearInterval(this.watching);
+    this.watching = setInterval(() => {
+      if (this.adapter !== adapter) return clearInterval(this.watching);
+      if (windowAlive(script) !== false) return;
+      const told = this.back('the fork ended'); if (told) this.bridge.tell(told);
+    }, Forks.WATCH_MS);
+    this.watching.unref();
+  }
   /** Into the record at once, before the turn's words are sent; the voice is told the same text (perceive keeps it once). */
   record(text: string) { const run = this.bridge.voiceSessions.run; if (run) perceive(run.record, { at: Date.now(), kind: 'thinking', text }); return text; }
   /**
@@ -125,7 +145,7 @@ export class Forks {
    * back then sends them to the main session, cut from its own place in the record. Never nowhere.
    */
   retire() {
-    const adapter = this.adapter, b = this.bridge; this.adapter = undefined; this.ready = false; clearTimeout(this.starting);
+    const adapter = this.adapter, b = this.bridge; this.adapter = undefined; this.ready = false; clearTimeout(this.starting); clearInterval(this.watching);
     if (!adapter) return false;
     const left = new Error('The fork was left before it took a request: its words go to the main session.');
     const untaken = [...b.outbox.values()].filter(entry => entry.target === 'fork' && (entry.state === 'queued' || entry.state === 'dispatching'));

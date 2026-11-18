@@ -37,3 +37,29 @@ export function readCodexArgs(args: readonly string[]): AgentArguments {
   // Codex chooses session IDs itself and names the session once it starts.
   return { direct: false, resume, sessionId: undefined, assignSession: false };
 }
+
+/**
+ * A fork of the operator's session (forks.ts) is made through the app server and opened in its window with `resume`, which
+ * refuses permission options there ("Permission overrides are not supported when resuming a remote task"). So their
+ * options are read in two parts: the permissions they give, as the app server takes them when it makes the fork, and
+ * everything else that shapes how Codex works (model, configuration, directories), for the window's command. Left out:
+ * what chooses the session (`resume` / `fork` and its ID, --last, --all), a first prompt and its images, and a worktree of
+ * its own (the fork works where the session it forks does).
+ */
+export function codexForkArgs(args: readonly string[]): { args: string[]; permissions: { sandbox?: string; approvalPolicy?: string } } {
+  const out: string[] = [], permissions: { sandbox?: string; approvalPolicy?: string } = {};
+  const DROP = new Set(['--last', '--all', '--include-non-interactive', '--worktree', ...VARIADIC]);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') break;
+    if (!arg.startsWith('-')) continue;
+    const inline = arg.startsWith('--') && arg.includes('='), name = inline ? arg.slice(0, arg.indexOf('=')) : arg;
+    const values = !inline && ONE_VALUE.has(name) && i + 1 < args.length ? [args[++i]] : [], value = inline ? arg.slice(arg.indexOf('=') + 1) : values[0];
+    if (VARIADIC.has(name)) while (!inline && i + 1 < args.length && !args[i + 1].startsWith('-')) i++;
+    if (name === '-s' || name === '--sandbox') permissions.sandbox = value;
+    else if (name === '-a' || name === '--ask-for-approval') permissions.approvalPolicy = value;
+    else if (name === '--dangerously-bypass-approvals-and-sandbox' || name === '--yolo') Object.assign(permissions, { sandbox: 'danger-full-access', approvalPolicy: 'never' });
+    else if (!DROP.has(name)) out.push(arg, ...values);
+  }
+  return { args: out, permissions };
+}

@@ -89,7 +89,7 @@ export class Endpoints {
       if (!observer?.hook(event)) { res.writeHead(409); return res.end('{}'); }
       // The hook's answer: nothing, except for a voice request this bridge delivered (AgentDefinition.vouch), and fdc's
       // instructions for an agent they reach through its hook (AgentDefinition.instruct).
-      const reply = bridge.agent.vouch?.(event, id => bridge.outbox.has(id), voiceProvenance()) ?? bridge.agent.instruct?.(event, bridge.agentInstructions);
+      const reply = bridge.agent.vouch?.(event, id => bridge.outbox.has(id), voiceProvenance()) ?? bridge.agent.instruct?.(event, forkHook ? bridge.forks.instructions : bridge.agentInstructions);
       res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(reply ?? {}));
     }
     // Another companion of this user, on this computer, turning this one's voice on or off.

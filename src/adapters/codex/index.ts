@@ -2,9 +2,10 @@ import { EventEmitter } from 'node:events';
 import { runCommand } from '../../core/command.ts';
 import type { AgentAdapter, AgentDefinition, AgentLaunch, AgentSession, VoiceRequest } from '../../core/adapter.ts';
 import { hookCommand } from '../../core/hook-command.ts';
+import { windowAlive } from '../../core/window.ts';
 import { codexProfile } from './profile.ts';
 import { codexContext } from './context.ts';
-import { readCodexArgs } from './arguments.ts';
+import { codexForkArgs, readCodexArgs } from './arguments.ts';
 import { CodexObserver } from './observer.ts';
 import { CodexDelivery, receivedRequest, turnInput } from './delivery.ts';
 import { CODEX_HOOKS, startAppServer, type AppServer, type ListedHook } from './app-server.ts';
@@ -40,15 +41,30 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     this.observations.on('session', id => { this.emit('session', id); this.delivery.attach(id); });
   }
   async launch({ baseUrl, token }: { baseUrl: string; token: string }): Promise<AgentLaunch> {
-    const { root, cwd, agentArgs, log } = this.session;
-    const relay = hookCommand(root, baseUrl).map(quote).join(' ');
+    const { root, cwd, agentArgs, log, forkOf, prefix = '' } = this.session;
+    // A fork (forks.ts) has an app server of its own, whose hooks go to the fork's route on the bridge.
+    const relay = hookCommand(root, baseUrl + prefix).map(quote).join(' ');
     // The app server runs Codex's tools, so it gets the operator's environment,
     // without the companion's OpenAI key, plus the relay's token.
     const env: NodeJS.ProcessEnv = { ...process.env, FD_BRIDGE_TOKEN: token }; delete env.OPENAI_API_KEY;
     this.server = await startAppServer({ cwd, env, hooks: relay, log });
     await this.delivery.connect(this.server.url, this.server.token);
     await this.confirmHooks(cwd);
-    return { command: 'codex', args: codexArgs(this.server.url, agentArgs), env: { [TOKEN_VARIABLE]: this.server.token }, files: {} };
+    return { command: 'codex', args: codexArgs(this.server.url, forkOf ? await this.fork(forkOf, cwd) : agentArgs), env: { [TOKEN_VARIABLE]: this.server.token }, files: {} };
+  }
+  /**
+   * A fork (forks.ts): Codex's own fork of the session, made here on the fork's app server with the permissions the
+   * operator's options give (in a window's command Codex refuses them for a fork), then opened in its window with
+   * `resume` and their other options. The app server announces the new thread as it makes it, and the adapter takes it
+   * then: requests reach the fork before its window is up.
+   */
+  async fork(forkOf: string, cwd: string) {
+    const { args, permissions } = codexForkArgs(this.session.agentArgs);
+    const forked = await this.delivery.call('thread/fork', { threadId: forkOf, cwd, excludeTurns: true, ...permissions });
+    const thread = forked.result?.thread;
+    if (forked.error || typeof thread?.id !== 'string') throw new Error(`Codex could not fork the session: ${forked.error?.message ?? 'it named no fork'}`);
+    this.session.log({ type: 'codex.forked', from: forkOf, threadId: thread.id, sandbox: forked.result.sandbox, approvalPolicy: forked.result.approvalPolicy });
+    return ['resume', thread.id, ...args];
   }
   /** Codex unobserved would be no use: every companion hook must be on and trusted. */
   async confirmHooks(cwd: string) {
@@ -60,7 +76,14 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
   }
   deliver(request: VoiceRequest) { return this.delivery.deliver(request); }
   history() { return this.observations.observations; }
-  async close() { this.delivery.close(); this.observations.close(); await this.server?.stop(); }
+  async close() {
+    this.delivery.close(); this.observations.close();
+    // A fork left behind keeps its window, the operator's from then on (forks.ts): Codex there runs on this adapter's app
+    // server, which goes on until that window's process ends, or fdc does.
+    const { forkOf, window } = this.session;
+    if (forkOf && window) while (windowAlive(window)) await new Promise(resolve => setTimeout(resolve, 5000).unref());
+    await this.server?.stop();
+  }
 }
 
 export function doctor() {
@@ -70,6 +93,7 @@ export function doctor() {
 }
 
 export const codex: AgentDefinition = {
+  canFork: true,
   ask: (prompt, outputFile) => ({ command: 'codex', args: ['exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '-o', outputFile, prompt], output: 'file' }),
   profile: codexProfile,
   context: codexContext,

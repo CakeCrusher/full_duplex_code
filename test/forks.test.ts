@@ -10,8 +10,10 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { forkArgs } from '../src/adapters/claude/arguments.ts';
 import { piForkArgs } from '../src/adapters/pi/arguments.ts';
+import { codexForkArgs } from '../src/adapters/codex/arguments.ts';
 import { pi } from '../src/adapters/pi/index.ts';
 import { openWindow, writeScript } from '../src/core/window.ts';
+import { Forks } from '../src/core/forks.ts';
 import { Jev } from '../src/core/jev.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { codex } from '../src/adapters/codex/index.ts';
@@ -35,6 +37,14 @@ test("a fork keeps the operator's options for how Claude works, not their choice
   assert.deepEqual(forkArgs(['--debug-file', '/run/debug.log', '--model', 'opus'], '/run/fork-1'), ['--debug-file', '/run/fork-1/debug.log', '--model', 'opus'], 'the fork logs to a file of its own');
 });
 
+test("a Codex fork keeps the operator's options for how Codex works; their permissions go to the app server that makes the fork", () => {
+  assert.equal(codex.canFork, true);
+  assert.deepEqual(codexForkArgs(['resume', '--last', '--model', 'gpt-5.5', '-s', 'workspace-write', '-a', 'never', '-i', 'a.png', 'b.png', '--search', '-c', 'x=1', 'Go on']),
+    { args: ['--model', 'gpt-5.5', '--search', '-c', 'x=1'], permissions: { sandbox: 'workspace-write', approvalPolicy: 'never' } });
+  assert.deepEqual(codexForkArgs(['fork', 'abc', '--all', '--worktree', '--yolo', '--config=y=2', '--', '--model x']), { args: ['--config=y=2'], permissions: { sandbox: 'danger-full-access', approvalPolicy: 'never' } });
+  assert.deepEqual(codexForkArgs(['--sandbox=read-only', '--no-alt-screen']), { args: ['--no-alt-screen'], permissions: { sandbox: 'read-only' } });
+});
+
 test("a Pi fork: Pi's own --fork of the session, its extension on the fork's routes, with the operator's options but not their choice of session", async () => {
   assert.deepEqual(piForkArgs(['--model', 'x', '-c', '--session', 'abc', '--thinking', 'high', 'hello']), ['--model', 'x', '--thinking', 'high']);
   const adapter = pi.create({ root: '/r', runDir: '/tmp', cwd: '/tmp', observation: 'events', agentArgs: ['-c', '--model', 'x'], instructions: 'fdc', clean: String, log: () => {}, forkOf: 'abcd1234', prefix: '/fork/1' });
@@ -50,7 +60,7 @@ test("the fork's window runs the agent by its full path, in the project, with fd
   writeScript(file, { command: 'node', args: ['--version', "it's"], env: { FD_BRIDGE_TOKEN: 'secret' } }, '/tmp/my project');
   const script = fs.readFileSync(file, 'utf8');
   assert.match(script, /^#!\/bin\/sh\ncd '\/tmp\/my project' \|\| exit 1\nexport PATH=/);
-  assert.match(script, /export FD_BRIDGE_TOKEN='secret'\nexec '\/[^']+\/node' '--version' 'it'\\''s'\n$/);
+  assert.match(script, /export FD_BRIDGE_TOKEN='secret'\necho \$\$ > '[^']+\/fork\.command\.pid'\nexec '\/[^']+\/node' '--version' 'it'\\''s'\n$/);
   assert.equal(fs.statSync(file).mode & 0o777, 0o700, 'owner-only: it holds the bridge token');
   // An agent that waits for Enter on a prompt as it starts: in a window the operator is not at, fdc answers it.
   const asking = path.join(dir, 'asking.command'), expect = path.join(dir, 'expect'); fs.writeFileSync(expect, '');
@@ -166,6 +176,16 @@ test("a fork opens in a window of its own: Claude's fork of the session, with it
   assert.equal(again.target, 'main');
   assert.match(again.content, /<fork started>[\s\S]*user: And what does CNS mean\?[\s\S]*<fork ended> Back to the main session of Claude Code \(the fork did not start\)/);
   forkChannel.terminate();
+  // The agent ended in the fork's window, or the window was closed, and no hook said so (Codex's thread lives on in fdc's
+  // app server): seen from the window's process, and back to the main session.
+  const gone = spawn(process.execPath, ['-e', '']); await new Promise(resolve => gone.on('close', resolve));
+  Forks.WATCH_MS = 20; t.after(() => { Forks.WATCH_MS = 2000; });
+  h.forks.open = script => { fs.writeFileSync(`${script}.pid`, `${process.pid}\n`); return 'Terminal'; };
+  await h.forks.start('One more aside?');
+  await settle(80);
+  assert.equal(h.forks.focus, 'fork', 'a fork whose window is open stays');
+  fs.writeFileSync(path.join(h.runDir, 'fork-3', 'fork.command.pid'), `${gone.pid}\n`);
+  await until(() => h.forks.focus === 'main');
 });
 
 test('while the main session works, a question that is sent opens a fork and goes to it; nothing sent, a main session between turns, or an agent that can\'t fork: no fork', async t => {
@@ -191,11 +211,11 @@ test('while the main session works, a question that is sent opens a fork and goe
   const request = { utterances: [], through: 0, seqs: [0], fresh: 'What does CNS mean?' }, spoken = [{ role: 'operator' as const, text: request.fresh, at: Date.now() }];
   assert.equal((await routeActions(asked, request, spoken)).told, undefined);
   assert.equal(windows.length, 0);
-  const { h: other } = await harness(t, { agent: codex });
+  const { h: other } = await harness(t, { agent: { ...codex, canFork: false } });
   const none: string[] = []; other.forks.open = script => { none.push(script); return 'Terminal'; };
   fakeJev(other, () => ({ tangent: .9, needsAgent: .9, ready: .9 })); other.workingSince = Date.now();
   await turn(other, 'By the way, what does CNS mean?');
-  assert.equal(none.length, 0, 'Codex has no fork yet');
+  assert.equal(none.length, 0, 'an agent that cannot fork gets none');
 });
 
 test('with a fork in focus, words that are no question move the focus back: once the operator has left its matter (not while its answer is on the way), or as they are sent; a question stays', async t => {
