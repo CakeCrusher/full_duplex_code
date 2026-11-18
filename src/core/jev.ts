@@ -125,7 +125,7 @@ export const ADDS = .4, RECENT_MS = 10000, PRESS = .5;
 // fdc holds it until the turn ends (outbox.ts). Steering is the default: a correction made to wait costs the operator more
 // than an interruption that could have waited.
 export const NOW = .3;
-// Forks (the questions and what they were measured on are below, forking): a question asked aside opens a fork from the
+// Forks (the questions and what they were measured on are below, forking): words that belong in a fork open one from the
 // setting forkFrom (tuning.ts); with a fork open, words stay with it from STAYS (from forkFrom, set lower: what opens
 // a fork stays in one), and the focus moves back to the main session from SETTLED.
 export const STAYS = .5, SETTLED = .5;
@@ -278,28 +278,37 @@ const QUIET = {
     'No meaningful exchange is about to begin: the operator handed off work and waits, has drifted off or stepped away, or the companion has finished and nothing it owes is ready yet. Certainly so when the operator said goodbye, that they are stepping away or done for now, or asked the companion to go quiet, sleep, stand by or wait until they call it.',
     'One is about to begin or still going: the operator is in a live back-and-forth, the companion owes an answer it can give now or is partway through what they asked for, or the operator was just asked something.'),
 };
-// Forks (forks.ts): while the main session works, a question the operator turns aside to ask goes to a fork of the
-// agent's session, and they move back to the main session after it. The operator's rule (Nov 14, from their own labels
-// of 12 recorded requests): a fork is for a clarifying question, an answer or explanation for themselves; anything to
-// be done or executed is main work, also on another topic or "in the background"; what should not have gone to the
-// agent at all is neither. A fork is thrown away on the way back, so work sent to one is the costly mistake; a question
-// sent to the main session goes as it did without forks.
-// - `tangent`: are the operator's words such a question? With the main session in focus and in the middle of a turn, it
-//   decides as the words are sent: from the setting forkFrom they go to a fork. On 278 recorded requests made while the agent worked, labeled by a
-//   blind judge on the operator's rule (their 12 all matched; .scratch/round2/forks), it separates forks from main work
-//   at AUC .94 (the wording before it: .66). At the default .55, the operator's choice, it finds 30 of 34 forks and
-//   forks 28 of 186 main-work requests: about half are questions about the work under way, the others steer it or ask
-//   for something to be shown (at .8: 23 forks and 6 main-work requests, all six of them questions).
+// Forks (forks.ts): words the operator turns aside with go to a fork of the agent's session, and they move back to the
+// main session after it. The operator's rule (Nov 14, from their own labels of 12 recorded requests): a fork is for a
+// clarifying question, an answer or explanation for themselves; anything to be done or executed is main work, also on
+// another topic or "in the background"; what should not have gone to the agent at all is neither. On Nov 18 they added
+// two things: a fork they ask for by name is one, whatever goes there ("I want you to basically branch off as we
+// continue running through this presentation", "I want you to fork": Jev "should have absolutely forked"), and whether
+// the agent is working is not part of it ("it should only be conditioned on what jev thinks"). A fork is left behind
+// on the way back, so work sent to one unasked is the costly mistake; a question sent to the main session goes as it
+// did without forks.
+// - `tangent`: do the operator's words belong in a fork? With the main session in focus, it decides as the words are
+//   sent: from the setting forkFrom they go to a fork. Measured on 671 recorded requests (Nov 2 to 18; 317 made while
+//   the agent worked, 354 while it was idle), each in the turn's request as it is made once the voice has replied,
+//   labeled on the operator's rule by blind judges (.scratch/forks-nov18): 123 forks, 414 requests for work, 134 that
+//   should not have gone to the agent. It separates forks from main work at AUC .93 (.96 while the agent works, .92
+//   while it is idle; the wording before it, which began "The coding agent is in the middle of its work" and knew no
+//   fork asked for by name: .92, and it read the three recorded requests for a fork at .04, .13 and .09, where this
+//   one reads .94, .72 and .84). At the default .5 it finds 102 of the 123 forks and forks 40 of the 414 requests for
+//   work, most of them questions about the work or pushing back on it. Asked in every turn's request, it leaves the
+//   other answers where they were: on 200 recorded turns that were not sent, needs_agent moved by .001 on average and
+//   3 came out differently (asked the same way twice, 3 of 300 do).
 // - `settled`: with a fork in focus, has the operator left its matter? Read with `tangent`, as their turn ends. No recorded session has a fork, so it was measured on 133 turns that followed requests a fork would have
 //   opened for, with the fork's tag put in their history (.scratch/round2/forks/back): words that are no question
 //   (below STAYS) move the focus back when the operator has left the matter (from SETTLED) or when they are on their way
-//   to the agent, which moves back for 38 of 45 turns that should and leaves the fork in 8 of 39 that go on with it. The
+//   to the agent, which moves back for 33 of 45 turns that should and leaves the fork in 7 of 39 that go on with it
+//   (the same with the wording of `tangent` before Nov 18). The
 //   wording before it ("do the latest words settle the tangent?") was near chance there (AUC .59 against .83; both
 //   answers together .88).
 const forking = (whole: boolean) => ({
-  tangent: noul(`The coding agent is in the middle of its work. ${whole ? 'Does what the operator is saying (\`saying\`) turn' : 'Do the latest words turn'} aside to ask something: a question the operator wants answered or explained for themselves now, with nothing asked to be done?`,
-    'A clarifying question or a request to explain: what something means, why something is so, what a number or a state currently is, how two things differ, to be walked through something. Answering may take looking something up, but nothing is to be built, changed, fixed, run, added or tried, and the work under way is not steered.',
-    "A request for work, on any topic: to make, change, fix, run, add, try, explore, compare, measure or find something, even 'in the background' or 'as a subagent'; a correction, redirection, stop, decision, preference or added requirement for the work under way; an answer to what the agent asked; the next step of a process the agent runs; feedback on what the agent is building, including a question that is really a criticism of it or that needs new work to answer. Also words that are not for the agent: talk with or about the voice companion, a question the companion can answer from what it was told, thinking aloud, fragments."),
+  tangent: noul(`${whole ? 'Does what the operator is saying (\`saying\`) belong' : 'Do the latest words belong'} in a fork of the coding agent's session (a copy of it, opened beside the main session): ${whole ? 'does it' : 'do they'} turn aside to ask something the operator wants answered or explained for themselves now, with nothing asked to be done, or ask for a fork?`,
+    "A clarifying question or a request to explain: what something means, why something is so, what a number or a state currently is, how two things differ, to be walked through something. Answering may take looking something up, but nothing is to be built, changed, fixed, run, added or tried, and the agent's work is not steered. Or the operator asks for a fork themselves: to fork, to branch off, to open a fork or a side session for something. Then whatever is to go there belongs in it, work included.",
+    "A request for work, on any topic: to make, change, fix, run, add, try, explore, compare, measure or find something, even 'in the background' or 'as a subagent' when no fork is asked for; a correction, redirection, stop, decision, preference or added requirement for the agent's work; an answer to what the agent asked; the next step of a process the agent runs; feedback on what the agent built or is building, including a question that is really a criticism of it or that needs new work to answer. Also words that are not for the agent: talk with or about the voice companion, a question the companion can answer from what it was told, thinking aloud, fragments."),
   settled: noul('A fork of the coding agent\'s session is open for a question the operator turned aside to ask (`<fork started>` in `history`), while the main session goes on with its work. Do the latest words leave it: the operator is done with that question, turns to the main work, or asks for something to be done?',
     "They accept or close the answer ('okay, got it', 'thanks, that answers it') and move on; they turn to the main work or ask how it is going; or they ask for something to be made, changed, fixed, run or tried, or steer the work: work belongs to the main session, also when it follows from the answer.",
     'They stay with it: a follow-up question, another thing they want explained, asking for the answer again or in more detail, or talk with the voice companion about it.'),
@@ -515,8 +524,7 @@ export class Jev {
       ...trigger === 'quiet' && { standby: QUIET.standby },
       // Words about how the companion behaves are for the learner and the tuner: asked only while either is on.
       ...turn && { ...(learn || tune) && { companion_only: GATE.companion_only }, ...instructions?.length && INSTRUCTED, ...GOAL_QUESTION, ...sessions && sessionQuestions(sessions) },
-      // Forks: whether the words are a question asked aside, while a fork can open (the main session in the middle of a
-      // turn) or one is in focus; and with one in focus, whether the operator has left its matter (turn.ts).
+      // Forks: whether the words belong in a fork, while one can open (the main session in focus) or one is in focus; and with one in focus, whether the operator has left its matter (turn.ts).
       ...turn && moment.fork && { tangent: FORK.tangent, ...moment.fork === 'fork' && { settled: FORK.settled } },
       ...page && (turn || trigger === 'cue' || trigger === 'step') && pageQuestions(page, trigger, asked),
       ...learn && LEARNER, ...learn && turn && removable?.length && removeQuestion(removable),

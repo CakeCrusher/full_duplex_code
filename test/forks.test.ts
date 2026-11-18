@@ -1,4 +1,4 @@
-// Forks: while the main session works, a question the operator turns aside to ask goes to a fork of the agent's session,
+// Forks: words the operator turns aside with (a question, or a fork asked for by name) go to a fork of the agent's session,
 // in a terminal window of its own, and back to the main session after it; delegation, hooks and the channel follow the
 // session in focus, and the fork is left behind on the way back.
 import test from 'node:test';
@@ -80,12 +80,12 @@ test("the fork's window runs the agent by its full path, in the project, with fd
   }
 });
 
-test("the turn's request asks whether the words are a question asked aside while a fork can open or one is in focus, and, with one in focus, also whether the operator has left its matter", async () => {
+test("the turn's request asks whether the words belong in a fork while one can open or one is in focus, and, with one in focus, also whether the operator has left its matter", async () => {
   const bodies: any[] = [];
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url: string, init: any) => { bodies.push(JSON.parse(String(init.body))); return { ok: true, status: 200, json: async () => ({ answers: { standby: { noul: .1 }, needs_agent: { noul: .9 }, tangent: { noul: .9 }, settled: { noul: .2 } } }) }; } } as any);
   const asked = () => Object.keys(bodies.at(-1).questions).filter(name => name === 'tangent' || name === 'settled').sort();
   const latest = { role: 'operator' as const, text: 'By the way, what does CNS mean?' };
-  // The main session in focus and at work: a fork opens as the words are sent (turn.ts), and the request is the same both times.
+  // The main session in focus, here at work: a fork opens as the words are sent (turn.ts), and the request is the same both times.
   assert.equal((await jev.read({ trigger: 'turn', made: 'replied', latest, working: 5000, fork: 'main' })).tangent, .9);
   assert.deepEqual(asked(), ['tangent']);
   await jev.read({ trigger: 'turn', made: 'ended', latest, working: 5000, fork: 'main' });
@@ -95,7 +95,7 @@ test("the turn's request asks whether the words are a question asked aside while
   assert.deepEqual(asked(), ['settled', 'tangent']);
   assert.deepEqual([inFork.settled, inFork.tangent], [.2, .9]);
   await jev.read({ trigger: 'turn', made: 'replied', latest });
-  assert.deepEqual(asked(), [], 'no fork can open (the agent is between turns, or can\'t fork): neither');
+  assert.deepEqual(asked(), [], 'no fork can open (the agent can\'t fork): neither');
 });
 
 test("a fork opens in a window of its own: Claude's fork of the session, with its hooks and channel on routes of its own; requests and the voice follow the focus; on the way back the fork is left behind", async t => {
@@ -188,22 +188,24 @@ test("a fork opens in a window of its own: Claude's fork of the session, with it
   await until(() => h.forks.focus === 'main');
 });
 
-test('while the main session works, a question that is sent opens a fork and goes to it; nothing sent, a main session between turns, or an agent that can\'t fork: no fork', async t => {
+test('a question that is sent opens a fork and goes to it, whether the main session is working or between turns; nothing sent, or an agent that can\'t fork: no fork', async t => {
   const { h } = await harness(t, { features: ['instructions'] });
   const opened: string[] = []; h.forks.open = script => { opened.push(script); return 'Terminal'; };
   const sent: string[] = []; h.deliver = ((request: any) => { sent.push(h.forks.focus); }) as any;
   const moments = fakeJev(h, moment => ({ tangent: .9, needsAgent: moment.latest?.text.includes('CNS') ? .9 : .1, ready: .9 }));
-  // The main session between turns: the question goes to it, and Jev isn't asked.
+  // The main session between turns: Jev is asked all the same, and the question goes to a fork (whether the agent is
+  // working is not part of it: the operator, Nov 18).
   let decision = await turn(h, 'What does CNS mean?');
-  assert.deepEqual([decision.send, opened.length, moments.some(m => m.fork)], [true, 0, false]);
-  // At work, words that stay with the voice: no fork, whatever they read as.
+  assert.deepEqual([decision.send, opened.length, h.forks.focus, moments.every(m => m.fork === 'main')], [true, 1, 'fork', true]);
+  h.forks.back('the operator moved on');
+  // Words that stay with the voice: no fork, whatever they read as.
   h.workingSince = Date.now();
   decision = await turn(h, 'Mm, interesting.');
-  assert.deepEqual([decision.send, opened.length, h.forks.focus], [false, 0, 'main']);
+  assert.deepEqual([decision.send, opened.length, h.forks.focus], [false, 1, 'main']);
   // At work, a question that is sent: the fork opens as it goes, and the voice is told.
   decision = await turn(h, 'By the way, what does CNS mean?');
-  assert.deepEqual([decision.send, decision.later, opened.length, h.forks.focus], [true, false, 1, 'fork']);
-  assert.match(decision.told!, /^<fork started> The operator turned aside to ask something: it goes to a fork of Claude Code's session/);
+  assert.deepEqual([decision.send, decision.later, opened.length, h.forks.focus], [true, false, 2, 'fork']);
+  assert.match(decision.told!, /^<fork started> The operator turned aside, to ask something or for a fork: it goes to a fork of Claude Code's session/);
   // The voice tool's own reading opens nothing, whichever signal ended the turn: a fork opens as words are sent.
   const { h: asked } = await harness(t, { features: ['instructions'] });
   const windows: string[] = []; asked.forks.open = script => { windows.push(script); return 'Terminal'; };
@@ -290,7 +292,7 @@ test('a fork takes only words Jev read; waiting work follows the same rules, and
   assert.equal(await sent(.9), undefined, 'a question stays with the fork');
   assert.match((await sent(.2))!, /work goes to the main session/);
   assert.equal(await sent(.2), undefined, 'in the main session, words that are no question stay there');
-  // How sure Jev must be is a setting (forkFrom, .55 unless set): the same reading opens a fork or not as it says, and
+  // How sure Jev must be is a setting (forkFrom, .5 unless set): the same reading opens a fork or not as it says, and
   // what opens a fork stays in one.
   h.setTuning({ ...h.tuning, forkFrom: .8 });
   assert.equal(await sent(.6), undefined, 'under the setting: no fork');
@@ -298,8 +300,8 @@ test('a fork takes only words Jev read; waiting work follows the same rules, and
   assert.match((await sent(.45))!, /goes to a fork/);
   assert.equal(await sent(.45), undefined, 'it stays with the fork it opened');
   assert.match((await sent(.3))!, /work goes to the main session/);
-  h.setTuning({ ...h.tuning, forkFrom: .55 });
-  assert.match((await sent(.6))!, /goes to a fork/, 'the default');
+  h.setTuning({ ...h.tuning, forkFrom: .5 });
+  assert.match((await sent(.55))!, /goes to a fork/, 'the default');
 });
 
 test("the fork's answer is on the way until its turn ends: a permission prompt is no answer, and a fork that reports nothing for minutes no longer holds the focus", async t => {

@@ -106,15 +106,19 @@ export async function routeActions(bridge: Harness, request: SpokenRequest, spok
   return { reading, view, ...sessions && { sessions }, told, ...did && { did }, ...withheld && { withheld }, note: view ? lookingNote(view) : undefined, keptNote: handled && handledNote(handled), ...handled === 'companion' && { mine: true }, ...returned && { back: true } };
 }
 
-/** Where a fork decision stands (jev.ts): the main session in focus and in the middle of a turn (a question asked aside can go to a fork), or a fork in focus (the operator can move back). */
-const forkMoment = (bridge: Harness) => !bridge.forks.possible ? undefined : bridge.forks.focus === 'fork' ? 'fork' as const : bridge.agentWorking() !== undefined ? 'main' as const : undefined;
+/**
+ * Where a fork decision stands (jev.ts): the main session in focus (words can go to a fork), or a fork in focus (the
+ * operator can move back). Whether the agent is working is not part of it (the operator, Nov 18: "it should only be
+ * conditioned on what jev thinks"): until then a fork opened only in the middle of the main session's turn.
+ */
+const forkMoment = (bridge: Harness) => !bridge.forks.possible ? undefined : bridge.forks.focus === 'fork' ? 'fork' as const : 'main' as const;
 /** With a fork open, words Jev reads as a question from this likelihood stay with it: STAYS, or the setting that opens a fork if that is lower (what opens a fork stays in one). */
 const stays = (bridge: Harness) => Math.min(STAYS, bridge.tuning.forkFrom);
 /** When the operator last spoke: a request is cut up to their latest words, so words said since a reading began would go with the ones it read. */
 const heardAt = (bridge: Harness) => bridge.mediator?.history.lastInputAt ?? 0;
 /**
- * Words on their way to the agent that Jev read as a question asked aside (from the setting forkFrom, tuning.ts) go to
- * a fork, opened now: what the voice is told. Not when the operator has gone on speaking since the reading began
+ * Words on their way to the agent that Jev read as belonging in a fork (from the setting forkFrom, tuning.ts) go to
+ * one, opened now: what the voice is told. Not when the operator has gone on speaking since the reading began
  * (`since`): what they added is unread, and may be work.
  */
 async function openFork(bridge: Harness, reading: Reading, since: number) {
@@ -144,7 +148,7 @@ export async function jobTurn(bridge: Harness, request: SpokenRequest, spoken: S
   // Not finished, or still being said: no decision yet. The next reading takes these words with what the operator adds, or
   // they go once the conversation stays quiet (mediator.ts). There is a next time, so a pause is no reason to send half a request.
   const wait = !send && (needed || continued);
-  // Forks (forks.ts), as the words are sent: a question asked aside opens a fork (it is free, so nothing is held). With a
+  // Forks (forks.ts), as the words are sent: words that belong in a fork open one (it is free, so nothing is held). With a
   // fork in focus, words for the agent that are no question for it are the main session's: back at once, also while they
   // wait for the operator to finish, since waiting words go later without another reading (mediator.ts, sendHeld).
   const forked = send && fork === 'main' ? await openFork(bridge, reading, since) : undefined;

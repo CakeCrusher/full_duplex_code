@@ -39,7 +39,7 @@ export interface Tuning {
   failurePrice: number;
   approvalPrice: number;
   requestPrice: number;
-  /** How sure Jev must be that words are a question asked aside before they go to a fork of the agent's session (0 to 1; jev.ts, FORK). */
+  /** How sure Jev must be that words belong in a fork of the agent's session before they go to one (0 to 1; jev.ts, forking). */
   forkFrom: number;
 }
 
@@ -227,22 +227,23 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     { value: 30, consequence: 'Saved 21%, 18 wakes an hour: no practical difference from the default.' },
     { value: 100, consequence: 'The default: a request keeps voice Live for the window after it.' },
   ] },
-  // Forks (forks.ts; the question is in jev.ts, FORK). Measured on 278 recorded requests made while the agent worked
-  // (Oct 31 to Nov 14), labeled on the operator's rule by a blind judge that matched their own 12 labels
-  // (.scratch/round2/forks): 34 questions asked aside, 186 requests for work, 58 that should not have gone to the agent.
+  // Forks (forks.ts; the question is in jev.ts, forking). Measured on 671 recorded requests (Nov 2 to 18), 317 made
+  // while the agent worked and 354 while it was idle, labeled on the operator's rule by blind judges
+  // (.scratch/forks-nov18): 123 that belong in a fork, 414 requests for work, 134 that should not have gone to the agent.
   forkFrom: { min: 0.05, max: 1, asked: true, describe:
-    "How sure Jev must be that the operator's words are a question asked aside (a clarifying question, something to explain to them, with nothing asked to be done) before they go to a fork of the agent's session while it works (0 to 1). A fork answers at once without interrupting the main work, and is thrown away afterward: work sent to one is lost and has to be asked again, while a question left on the main session is answered there, in the middle of its work. Lower: more questions get a fork, and more requests that steer the work under way go to one too. Higher: forks only for the clearest questions. The operator chose 0.55 from these measurements and changes it by saying so: lower when they ask for their questions to get a fork more often or to interrupt the work less; higher when they say something they asked for went to a fork, or that it forks too much; a score they name is the level nearest to it.",
+    "How sure Jev must be that the operator's words belong in a fork of the agent's session before they go to one (0 to 1): a question asked aside (a clarifying question, something to explain to them, with nothing asked to be done), or a fork they ask for by name. It doesn't matter whether the agent is working. A fork answers without touching the main session, and is left behind afterward: work sent to one unasked is lost to the main session and has to be asked again, while a question left on the main session is answered there. Lower: more questions get a fork, and more requests for work go to one too. Higher: forks only for the clearest questions. The operator sets it by saying so: lower when they ask for their questions to get a fork more often or to interrupt the work less; higher when they say something they asked for went to a fork, or that it forks too much; a score they name is the level nearest to it.",
     levels: [
-    { value: 0.4, consequence: 'Forks most: 31 of 34 questions asked aside got a fork, and 38 of 186 requests for work went to one too.' },
-    { value: 0.55, consequence: "The default, the operator's choice (Nov 15): 30 of 34 questions asked aside got a fork; 28 of 186 requests for work went to one too, about half of them questions about the work under way, the others steering it or asking for something to be shown." },
-    { value: 0.7, consequence: '26 of 34 questions asked aside got a fork; 17 of 186 requests for work went to one too.' },
-    { value: 0.8, consequence: 'Forks only for the clearest questions: 23 of 34 got a fork; 6 of 186 requests for work went to one too.' },
+    { value: 0.4, consequence: 'Forks most: 105 of the 123 requests that belong in a fork got one, and 54 of 414 requests for work went to one too.' },
+    { value: 0.5, consequence: "The default since Nov 18, when the operator asked for the question to be measured again and the level set anew: 102 of 123 got a fork; 40 of 414 requests for work went to one too, most of them questions about the work or pushing back on it. While the agent works it finds 34 of 37, as many as their choice of Nov 15 did (0.55 on the question as it was then worded: 30 of 34)." },
+    { value: 0.6, consequence: '90 of 123 got a fork; 23 of 414 requests for work went to one too.' },
+    { value: 0.7, consequence: '78 of 123 got a fork; 13 of 414 requests for work went to one too.' },
+    { value: 0.8, consequence: 'Forks only for the clearest: 48 of 123 got a fork; 4 of 414 requests for work went to one too.' },
   ] },
 };
 
 // Standby's defaults are the operator's choice in the Standby sandbox (Oct 18).
 export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 20000, wakeThreshold: 50, wakeVoiceMs: 1000, standbyQuickMs: 5000, standbyQuickAfterMs: 60000, standbyFrom: 0.5,
-  speechPrice: 20, liveSpeechPrice: 20, toolPrice: 1, promptPrice: 1, messagePrice: 10, turnEndPrice: 50, failurePrice: 50, approvalPrice: 100, requestPrice: 100, forkFrom: 0.55 };
+  speechPrice: 20, liveSpeechPrice: 20, toolPrice: 1, promptPrice: 1, messagePrice: 10, turnEndPrice: 50, failurePrice: 50, approvalPrice: 100, requestPrice: 100, forkFrom: 0.5 };
 
 /** Settings from partial overrides: unknown names and values out of range are refused. */
 export function tuning(overrides: unknown = {}, base: Tuning = DEFAULT_TUNING): Tuning {

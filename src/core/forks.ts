@@ -10,12 +10,13 @@ import { perceive } from './perceived.ts';
 /** The tags the conversation record (perceived.ts) carries where a fork began and ended: the voice, Jev and both sessions read them as they are. */
 export const FORK_STARTED = '<fork started>', FORK_ENDED = '<fork ended>';
 
-// While the main session works, a question the operator turns aside to ask goes to a fork of the agent's session, opened
-// in a terminal window of its own (Jev decides which words, and when the operator has left the matter: jev.ts, turn.ts).
+// Words the operator turns aside with (a question for themselves, or a fork they ask for by name) go to a fork of the
+// agent's session, opened in a terminal window of its own, whether the main session is working or idle (Jev decides
+// which words, and when the operator has left the matter: jev.ts, turn.ts).
 // Delegation doesn't change: the conversation from the cursor to the latest words goes to whichever session is in focus,
 // and GPT Live carries what it learns in either. The voice hears the focused session's work; the main session's weighs
 // nothing for it (nor for Standby) meanwhile. A fork doesn't last: on the way back to the main session fdc stops following
-// it (its window stays the operator's), and the next question aside opens a new one. One fork at a time: a fork of a fork
+// it (its window stays the operator's), and the next words for a fork open a new one. One fork at a time: a fork of a fork
 // is not offered.
 
 export type Focus = 'main' | 'fork';
@@ -37,7 +38,7 @@ export class Forks {
   get busy() { return this.asked > this.answered && Date.now() - Math.max(this.asked, this.active) < QUIET_TURN_MS; }
   open: typeof openWindow;
   constructor(bridge: Harness, { open = openWindow }: { open?: typeof openWindow } = {}) { this.bridge = bridge; this.open = open; }
-  /** A tangent can go to a fork: always, when the agent can fork and the main session has an ID; Jev decides when. */
+  /** Words can go to a fork: always, when the agent can fork and the main session has an ID; Jev decides which. */
   get possible() { const b = this.bridge; return Boolean(b.agent.canFork) && Boolean(b.sessionId); }
   /**
    * Where each session is in the conversation record: when its last request was cut from it (mediator.ts, send). A fork

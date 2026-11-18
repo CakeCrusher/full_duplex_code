@@ -168,13 +168,13 @@ export const sentWords = ({ profile: { product } }: Agent, said?: string, fork =
 };
 // Forks (forks.ts): the fork's own instruction, and what the voice is told when the focus moves.
 export const forkNote = ({ profile: { name } }: Agent) =>
-  `This session is a fork of the operator's main ${name} session, opened in a window of its own for a question they turned aside to ask. The main session goes on with its work on the project meanwhile, and this fork is left behind once the operator moves back to it: answer here, and leave changes to the project to the main session.`;
+  `This session is a fork of the operator's main ${name} session, opened in a window of its own for what they turned aside with: usually a question, sometimes work they asked to have done in a fork. The main session stays as it was, and goes on with any work it had under way; this fork is left behind once the operator moves back to it. Answer a question here and leave changes to the project to the main session; do work here only when they asked for it to be done in a fork.`;
 export const forkOpened = ({ profile: { product } }: Agent, how: string) =>
-  `The operator turned aside to ask something: it goes to a fork of ${product}'s session, opening in a new ${how} window (it may ask them to confirm there before it starts). What is passed on now goes to the fork; the main session keeps working, and you won't hear its work until the voice tool moves back to it.`;
+  `The operator turned aside, to ask something or for a fork: it goes to a fork of ${product}'s session, opening in a new ${how} window (it may ask them to confirm there before it starts). What is passed on now goes to the fork; the main session stays as it was, goes on with any work it had under way, and you won't hear from it until the voice tool moves back to it.`;
 export const forkBack = ({ profile: { product } }: Agent, state: string, why: string) =>
   `Back to the main session of ${product} (${why}): what is passed on goes there again, and you hear its work from now; it is ${state}. The fork is left behind; its window stays open.`;
 export const forkFailed = ({ profile: { product } }: Agent, message: string) =>
-  `A fork of ${product}'s session for the operator's question could not open (${message.slice(0, 160)}): it goes to the main session.`;
+  `A fork of ${product}'s session for the operator's words could not open (${message.slice(0, 160)}): it goes to the main session.`;
 // Told the words went, the voice then hears when their delivery failed: they go again with the next request.
 export const uncertainWords = ({ profile: { product } }: Agent, said?: string) =>
   `The operator's words may not have reached ${product}${said?.trim() ? ` ("${wordsEnd(said)}")` : ''}: their delivery failed, and they go again with the next request.`;

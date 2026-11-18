@@ -30,7 +30,7 @@ test('each Jev call of a turn is recorded with what fdc asked, what Jev answered
   const turnCall = calls().find(c => c.made === 'ended')!, jobCall = calls().find(c => c.made === 'replied')!;
   assert.equal(jobCall.requestId, delivered[0].id, 'the request the words went to the agent by');
   assert.equal(turnCall.requestId, delivered[0].id);
-  assert.deepEqual(jobCall.config, { url: 'https://api.typesafe.ai/v1/systemone', model: 'jev-latest', timeoutMs: 3000, features: ['instructions'], thresholds: { needs_agent: .35, ready: .2, companion_only: .85, goal: .6, behave: .6, design_talk: .5 } });
+  assert.deepEqual(jobCall.config, { url: 'https://api.typesafe.ai/v1/systemone', model: 'jev-latest', timeoutMs: 3000, features: ['instructions'], thresholds: { needs_agent: .35, ready: .2, companion_only: .85, goal: .6, tangent: .5, behave: .6, design_talk: .5 } });
   assert.deepEqual([turnCall.trigger, jobCall.trigger], ['turn', 'turn'], "one request, made as the turn ended and again once the companion's reply was in");
   assert.deepEqual(turnCall.questions, jobCall.questions, 'the same questions both times');
   assert.deepEqual({ ...turnCall.state, voice_reply: '' }, { ...jobCall.state, voice_reply: '' }, 'over the same state, but for what the companion had said by then');

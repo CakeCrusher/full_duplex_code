@@ -57,7 +57,7 @@ test("one request for the operator's turn, the same as it ends and once the voic
   assert.match(whole.questions.ready.instructions, /^Have the operator finished saying what they want for now \(`saying`: all they have said that is not decided yet, ending with the latest words\), so that a good listener/);
   assert.match(whole.questions.now.instructions, /Must what the operator is saying \(`saying`\) reach it now/);
   assert.match(whole.questions.adds.instructions, /Does what the operator is saying \(`saying`\) give the agent anything it needs beyond that request\?$/);
-  assert.match(whole.questions.tangent.instructions, /Does what the operator is saying \(`saying`\) turn aside to ask something/);
+  assert.match(whole.questions.tangent.instructions, /^Does what the operator is saying \(`saying`\) belong in a fork of the coding agent's session .*: does it turn aside to ask something .*, or ask for a fork\?$/);
   assert.match(whole.questions.goal.instructions, /^Do the latest words set what the operator wants/, 'the goal, like the page and the learner, from the new words');
 });
 
