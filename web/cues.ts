@@ -60,6 +60,9 @@ const PATTERNS: Record<Cue, { type: OscillatorType; gain: number; notes: [number
   learned: { type: 'triangle', gain: .1, notes: [[784, 0, .08], [988, .1, .08], [1319, .2, .14]] },
 };
 
+// The notes that climb to the start cue's first one while the operator's voice is picked up on Standby (rising).
+const RISE = [330, 440, 550];
+
 export class CuePlayer {
   context?: AudioContext;
   // The context must first be created during a user gesture (Start voice).
@@ -83,26 +86,19 @@ export class CuePlayer {
     oscillator.connect(envelope).connect(context.destination);
     oscillator.start(at); oscillator.stop(at + duration + .02);
   }
-  rush?: { filter: BiquadFilterNode; gain: GainNode };
+  step = 0;
   /**
-   * On Standby, while the operator's voice is being picked up: a soft rush of air that rises in pitch and loudness as their
-   * voice lasts toward the wake (0 to 1), and falls away if they stop before it. The wake's own note follows it. Noise, not
-   * a note: a note repeats itself as a voice does, and the microphone would count it as theirs.
+   * On Standby, while the operator's voice is being picked up (0 to 1, toward the wake): three soft notes, one as it
+   * passes each quarter of the way, climbing to the wake's own note, which follows them. A sound that stops within the
+   * first quarter makes none, and stopping sooner than the wake is heard as the notes not going on. Short notes, far
+   * apart, and quieter than any other cue: a held sound was disruptive (tried Nov 17, a rush of air), and should the
+   * microphone take a note for their voice, it adds its own length to the stretch and no more. (On five recorded
+   * sessions it did not take the Standby cue, louder and longer, for voice.)
    */
   rising(value: number) {
-    const context = this.context;
-    if (!context || context.state === 'closed' || (!value && !this.rush)) return;
-    if (!this.rush) {
-      const buffer = context.createBuffer(1, context.sampleRate, context.sampleRate), data = buffer.getChannelData(0);
-      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-      const source = context.createBufferSource(), filter = context.createBiquadFilter(), gain = context.createGain();
-      source.buffer = buffer; source.loop = true; filter.type = 'bandpass'; filter.Q.value = .8; gain.gain.value = 0;
-      source.connect(filter).connect(gain).connect(context.destination); source.start();
-      this.rush = { filter, gain };
-    }
-    const now = context.currentTime, { filter, gain } = this.rush;
-    filter.frequency.setTargetAtTime(500 + 1900 * value, now, .1);
-    gain.gain.setTargetAtTime(value ? .03 + .11 * value : 0, now, value ? .1 : .06);
+    const context = this.context, step = Math.floor(value * (RISE.length + 1));
+    if (context && context.state !== 'closed' && step > this.step && RISE[step - 1]) this.tone('sine', .05, RISE[step - 1], context.currentTime + .02, .22, .03);
+    this.step = step;
   }
   pulseTimer?: ReturnType<typeof setInterval>;
   /**

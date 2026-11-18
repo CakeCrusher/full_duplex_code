@@ -37,19 +37,16 @@ try {
   browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
   const page = await (await browser.newContext({ permissions: ['microphone'] })).newPage();
   // A virtual microphone whose loudness the test sets: quiet room noise below the gate, or speech. And the page's
-  // sounds, as the notes it starts (the virtual microphone's own 330 Hz tone aside).
+  // sounds, as the notes it starts (the virtual microphone's own 200 Hz tone aside).
   await page.addInitScript(() => {
     // The page's own audio context (the one it asks low latency of), for the test to stop as a stalled audio device does.
     const Native = window.AudioContext;
     window.AudioContext = class extends Native { constructor(options?: AudioContextOptions) { super(options); if (options?.latencyHint === 'interactive') (window as any).pageAudio = this; } };
     const start = OscillatorNode.prototype.start, tones: [number, number][] = (window as any).tones = [];
-    // The rush of air that rises while their voice is picked up on Standby (cues.ts): looped noise, started once.
-    const play = AudioBufferSourceNode.prototype.start; (window as any).rushes = 0;
-    AudioBufferSourceNode.prototype.start = function (...args: any[]) { if (this.loop) (window as any).rushes++; return play.apply(this, args as any); };
-    OscillatorNode.prototype.start = function (...args: any[]) { if (this.frequency.value !== 330) tones.push([Date.now(), this.frequency.value]); return start.apply(this, args as any); };
+    OscillatorNode.prototype.start = function (...args: any[]) { if (this.frequency.value !== 200) tones.push([Date.now(), this.frequency.value]); return start.apply(this, args as any); };
     navigator.mediaDevices.getUserMedia = async () => {
       const audio = new AudioContext({ sampleRate: 24000 }); await audio.resume();
-      const source = audio.createOscillator(); source.frequency.value = 330; const gain = audio.createGain(); gain.gain.value = .004;
+      const source = audio.createOscillator(); source.frequency.value = 200; const gain = audio.createGain(); gain.gain.value = .004;
       const destination = audio.createMediaStreamDestination(); source.connect(gain); gain.connect(destination); source.start();
       (window as any).speak = (on: boolean) => { gain.gain.value = on ? .3 : .004; };
       return destination.stream;
@@ -133,16 +130,18 @@ try {
   // and again while it starts, and all of it reaches the other end. The waking sound (the start cue's first note, then
   // softly again) plays until the held words are out; then the start cue.
   // (A quiet of more than 5 s first: all of what the page keeps to record ahead of a sound.)
-  // First a remark of a second: too short to wake it (two seconds of voice do), and the page lets them hear and see
-  // it being picked up, rising, then falling away.
+  // First a short remark: too short to wake it (two seconds of voice do), and the page lets them hear and see it being
+  // picked up: a soft note as it passes each quarter of the way, and a meter that rises, then falls away.
   const rising = () => page.evaluate(() => { const meter = document.getElementById('rising') as HTMLMeterElement; return meter.hidden ? 0 : meter.value; });
   let rose = 0, hearing = false; const watch = setInterval(async () => { rose = Math.max(rose, await rising().catch(() => 0)); hearing ||= await text('#audioState').catch(() => '') === 'Standby · hearing you…'; }, 60);
-  await speak(1000);
+  const remarkAt = Date.now();
+  await speak(1200);
   await sleep(1500); clearInterval(watch);
-  console.log({ remarkSeconds: 1, roseTo: rose.toFixed(2), rushes: await page.evaluate(() => (window as any).rushes) });
-  assert.equal(logged('voice.waking').length, 0, 'a remark of a second does not wake it');
-  assert.ok(rose > .3 && rose < .8 && hearing, `the page showed their voice being picked up, part of the way (${rose.toFixed(2)})`);
-  assert.equal(await page.evaluate(() => (window as any).rushes), 1, 'and sounded it: the rising rush of air');
+  const notes = (await tonesSince(remarkAt)).map(([, frequency]) => frequency);
+  console.log({ remarkSeconds: 1.2, roseTo: rose.toFixed(2), notes });
+  assert.equal(logged('voice.waking').length, 0, 'a short remark does not wake it');
+  assert.ok(rose > .5 && rose < .75 && hearing, `the page showed their voice being picked up, part of the way (${rose.toFixed(2)})`);
+  assert.deepEqual(notes, [330, 440], 'and sounded it: a soft note for each quarter of the way it got');
   assert.equal(await rising(), 0, 'which falls away when they stop');
   assert.equal(await text('#audioState'), 'Standby · listening here');
   fork.startMs = 6000;
@@ -165,7 +164,9 @@ try {
   const startCue = tones.find(([, frequency]) => frequency === 990)?.[0];
   console.log({ forkStartedAfter: woke.startMs / 1000, spokeFor: 4, heardSpeechSeconds: held.seconds.toFixed(2), wakingNotes: tones.filter(([at, f]) => f === 660 && at < (startCue ?? Infinity)).length, startCueAfterLastHeldWordMs: startCue && startCue - held.lastAt });
   assert.ok(held.seconds > 3.5, `the other end heard nearly all 4 s of speech, before and while the fork started (${held.seconds.toFixed(2)} s)`);
-  assert.ok(tones[0]?.[1] === 660 && tones[0][0] - wokeAt < 1000, 'the waking sound starts as voice wakes');
+  const climb = await tonesSince(spokeAt);
+  assert.deepEqual(climb.slice(0, 4).map(([, frequency]) => frequency), [330, 440, 550, 660], 'three soft notes climb to the waking sound');
+  assert.ok(climb[3][0] - wokeAt < 1000, 'which starts as voice wakes');
   assert.ok(tones.filter(([at, f]) => f === 660 && at < woke.at).length >= 6, 'and goes on while the session starts');
   assert.ok(startCue && startCue >= held.lastAt - 300, 'the start cue sounds once the held words are out');
   // The audit has those words as the microphone had them, in the track of the session that went on Standby: nobody
