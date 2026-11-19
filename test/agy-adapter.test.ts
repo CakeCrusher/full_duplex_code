@@ -14,7 +14,7 @@ import { AgyObserver, forkPoint, toolOf } from '../src/adapters/agy/observer.ts'
 import { AgyDelivery } from '../src/adapters/agy/delivery.ts';
 import { AgyServer, logEvent } from '../src/adapters/agy/server.ts';
 import { GREETING, receivedRequest, turnText, WAKE } from '../src/adapters/agy/message.ts';
-import { PLUGIN, projectFolder } from '../src/adapters/agy/launch.ts';
+import { browserServer, PLUGIN, projectFolder, releasePlugin, writePlugin } from '../src/adapters/agy/launch.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const until = async <T>(check: () => T, label = 'condition') => {
@@ -69,6 +69,7 @@ test('the observer follows the conversation the first hook names: requests, repl
   t.after(() => observer.close());
   const hook = (event: Record<string, unknown>) => observer.hook({ conversationId: id, transcriptPath: file, workspacePaths: [dir], cwd: dir, ...event });
   assert.equal(hook({ hookEventName: 'SessionStart' }), true);
+  assert.equal(observer.state, 'working', "opened with fdc's greeting, it is not ready until that turn ends");
   assert.deepEqual(sessions, [id]);
   assert.deepEqual(observer.conversation, [{ role: 'input', text: 'An earlier question' }, { role: 'output', text: 'An earlier answer' }], 'what the transcript held seeds the conversation');
   assert.equal(emitted.length, 0, '…and is never news');
@@ -85,7 +86,7 @@ test('the observer follows the conversation the first hook names: requests, repl
     + step(5, { source: 'MODEL', type: 'GENERIC', content: 'Created At: 2026-11-19T02:34:20-05:00\nCompleted At: 2026-11-19T02:34:20-05:00\nCreated tab. Tab ID: 77' })
     + step(6, { source: 'MODEL', type: 'PLANNER_RESPONSE', content: 'The report is open.' }));
   await until(() => emitted.includes('PLANNER_RESPONSE'), 'the reply');
-  assert.deepEqual(emitted, ['USER_INPUT', 'TOOL_RESULT', 'PLANNER_RESPONSE'], "fdc's own wake is not news; a reply that only calls tools is told by their results");
+  assert.deepEqual(emitted, ['USER_INPUT', 'TOOL_CALL', 'TOOL_RESULT', 'PLANNER_RESPONSE'], "fdc's own wake is not news; a reply that only calls tools is told as it starts them, and by their results");
   assert.deepEqual(observer.agent.receivedRequest(observer.observations.find(o => o.name === 'USER_INPUT' && o.raw.source === 'SYSTEM_SDK')!.raw.text), request);
   const result = observer.observations.find(o => o.name === 'TOOL_RESULT')!;
   assert.deepEqual(observer.toolUse(result), { tool: `mcp__${PLUGIN}_open-claude-in-chrome__tabs_create_mcp`, input: { url: 'http://127.0.0.1:8765/r.html' }, response: 'Created tab. Tab ID: 77' }, 'an MCP call reaches the stage under the name Claude would give it, with its answer');
@@ -103,7 +104,10 @@ test('the observer follows the conversation the first hook names: requests, repl
   // Another conversation's hook (a subagent, a side question) is refused.
   assert.equal(observer.hook({ hookEventName: 'PreInvocation', conversationId: randomUUID() }), false);
   hook({ hookEventName: 'Stop', terminationReason: 'NO_TOOL_CALL', fullyIdle: false, error: '' });
-  assert.deepEqual([observer.state, observer.running, observer.observations.at(-1)!.kind, observer.observations.at(-1)!.raw.background !== undefined], ['idle', false, 'turn_end', true]);
+  assert.deepEqual([observer.state, observer.running, observer.observations.at(-1)!.kind, observer.observations.at(-1)!.raw.background !== undefined], ['working', false, 'event', true],
+    'a task it sent to the background still runs: it goes on by itself when the task ends, so its work is not done');
+  hook({ hookEventName: 'Stop', terminationReason: 'NO_TOOL_CALL', fullyIdle: true, error: '' });
+  assert.deepEqual([observer.state, observer.observations.at(-1)!.kind], ['idle', 'turn_end']);
   hook({ hookEventName: 'Stop', terminationReason: 'ERROR', error: 'quota exceeded' });
   assert.deepEqual([observer.state, observer.observations.at(-1)!.kind], ['failed', 'turn_failed']);
   // The terminal switches conversation (/resume): fdc follows it.
@@ -242,6 +246,29 @@ test("the launch: agy with fdc's plugin in the project's folder under the tempor
   await assert.rejects(fork.launch({ baseUrl: 'http://127.0.0.1:9', token: 't' }), /can't be reached to fork it/);
   assert.equal(fork.plugin, undefined);
   await fork.close();
+});
+
+test("agy gets Open Claude in Chrome's browser tools from fdc's plugin, as Chrome finds them, unless its own configuration has them", t => {
+  const home = tmp(t), host = path.join(home, 'ocic', 'host'), manifests = path.join(home, 'Library/Application Support/Google/Chrome/NativeMessagingHosts');
+  assert.equal(browserServer(home), undefined, 'not installed: no browser tools');
+  fs.mkdirSync(path.join(host, 'codemode'), { recursive: true }); fs.mkdirSync(manifests, { recursive: true });
+  fs.writeFileSync(path.join(manifests, 'com.anthropic.open_claude_in_chrome.json'), JSON.stringify({ name: 'com.anthropic.open_claude_in_chrome', path: path.join(host, 'native-host-wrapper.sh') }));
+  fs.writeFileSync(path.join(host, 'codemode', 'server-hybrid.js'), '');
+  assert.deepEqual(browserServer(home)?.args, [path.join(host, 'codemode', 'server-hybrid.js')]);
+  fs.writeFileSync(path.join(host, 'mcp-server.js'), '');
+  const server = browserServer(home)!;
+  assert.deepEqual([server.command, server.args, Object.keys(server.env)], [process.execPath, [path.join(host, 'mcp-server.js')], ['OCIC_PIPE']], 'its plain server, the one that needs nothing more');
+  fs.mkdirSync(path.join(home, '.gemini', 'config'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.gemini', 'config', 'mcp_config.json'), JSON.stringify({ mcpServers: { browser: { command: 'node', args: ['/x/open-claude-in-chrome/host/mcp-server.js'] } } }));
+  assert.equal(browserServer(home), undefined, 'already in agy\'s own configuration');
+  const cwd = tmp(t), plugin = writePlugin({ root, baseUrl: 'http://127.0.0.1:9', instructions: 'i', cwd, tmp: tmp(t), browser: server });
+  assert.deepEqual(JSON.parse(fs.readFileSync(plugin.servers!, 'utf8')), { mcpServers: { 'open-claude-in-chrome': server } });
+  releasePlugin(plugin);
+  assert.equal(fs.existsSync(plugin.servers!), false, 'emptied with the rest as fdc stops');
+  plugin.shared = false; releasePlugin(plugin);
+  // Called through agy's plugin, its tools reach the stage under the names it reads (stage.ts).
+  assert.equal(toolOf({ name: 'call_mcp_tool', args: { ServerName: `${PLUGIN}_open-claude-in-chrome`, ToolName: 'navigate', Arguments: { tabId: 3 } } }).tool, `mcp__${PLUGIN}_open-claude-in-chrome__navigate`);
+  assert.match(`mcp__${PLUGIN}_open-claude-in-chrome__navigate`, /chrome[\w-]*__(navigate|set_tab_focus|tabs_create_mcp|execute_code)$/);
 });
 
 test('through the bridge: agy\'s log and first hook connect it; a request sent mid-turn comes back as the answer to its next model call\'s hook, and is observed as the operator\'s message', async t => {

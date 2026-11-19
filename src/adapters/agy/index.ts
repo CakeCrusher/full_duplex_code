@@ -10,7 +10,7 @@ import { AgyObserver, forkPoint } from './observer.ts';
 import { AgyDelivery } from './delivery.ts';
 import { AgyServer } from './server.ts';
 import { forkOpening, GREETING, receivedRequest, turnText } from './message.ts';
-import { releasePlugin, writePlugin, type AgyPlugin } from './launch.ts';
+import { browserServer, releasePlugin, writePlugin, type AgyPlugin } from './launch.ts';
 
 // The sessions of this fdc by conversation: a fork is made by the session it forks, through its language server.
 const sessions = new Map<string, AgyAdapter>();
@@ -52,7 +52,7 @@ export class AgyAdapter extends EventEmitter implements AgentAdapter {
       this.open(opening);
       return { command: 'agy', args: [...logging, '--conversation', conversation, '-i', opening, ...agyForkArgs(agentArgs)], env, files: {} };
     }
-    const plugin = this.plugin = writePlugin({ root, baseUrl, instructions, cwd });
+    const plugin = this.plugin = writePlugin({ root, baseUrl, instructions, cwd, browser: browserServer() });
     if (!plugin.shared) this.session.log({ type: 'agy.plugin_own', workspace: plugin.workspace, why: "another fdc runs in this project: a conversation made by it resumes here without fdc's hooks" });
     // A new conversation opens with a first message: fdc's greeting, unless the operator gave one (-i).
     const greeting = !readAgyArgs(agentArgs).resume && !firstMessageArg(agentArgs);
@@ -116,10 +116,10 @@ export const agy: AgentDefinition = {
   doctor,
   usage: {
     examples: ['agy', 'agy --model gemini-3.8-flash-high', 'agy --conversation CONVERSATION_ID', 'agy --continue --mode accept-edits'],
-    notes: `agy: Antigravity loads a plugin of fdc's for this session only (--add-dir, in a temporary
-  folder): hooks that report its work and hand it each request at its next model call, and fdc's
-  instructions as rules. A new conversation opens with a one-word greeting, since agy opens one only
-  with a first message. --conversation and --continue choose the conversation as usual; --print and
-  --remote-agent are refused: there would be no session to talk to.`,
+    notes: `agy: Antigravity loads a plugin of fdc's while fdc runs (--add-dir, the project's folder in the
+  temporary folder, emptied as fdc stops): hooks that report its work and hand it each request at its
+  next model call, and fdc's instructions as rules. A new conversation opens with a one-word greeting,
+  since agy opens one only with a first message. --conversation and --continue choose the conversation
+  as usual; --print and --remote-agent are refused: there would be no session to talk to.`,
   },
 };

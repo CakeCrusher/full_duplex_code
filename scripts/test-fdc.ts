@@ -109,7 +109,9 @@ try {
   run = await launch('first', AGENTS[agent].args);
   const command = run.events().find(e => e.type === 'launcher.command');
   evidence.command = command && { command: command.command, via: command.via };
-  // Typed work, then a spoken request while the agent works on it.
+  // Typed work, then a spoken request while the agent works on it. An agent that opens with a turn of its own (agy's
+  // greeting, which opens its conversation) finishes it first, or its end would read as the end of the typed work.
+  await waitFor(async () => (await run!.status()).agent === 'idle', `${agent} idle before the typed work`, 60000);
   run.terminal.write(work); await delay(500); run.terminal.write('\r');
   await waitFor(async () => (await run!.status()).agent === 'working', `${agent} working on the typed work`, 60000);
   const typedAt = Date.now();

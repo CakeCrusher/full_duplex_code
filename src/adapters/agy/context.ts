@@ -7,6 +7,7 @@ export const agyContext: ContextRule[] = [
   { event: 'OPENING', remove: true },
   // What a tool was asked: a whole file being written, or an edit's text, can be long (a path or a command is short).
   { event: 'TOOL_RESULT', key: 'args', truncate: 1500 },
+  { event: 'TOOL_CALL', key: 'calls.args', truncate: 1500 },
   { event: 'ToolConfirmation', key: 'args', truncate: 1500 },
   // What it answered: a file read, a command's output, a page fetched.
   { event: 'TOOL_RESULT', key: 'output', truncate: 1200 },

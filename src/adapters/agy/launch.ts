@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { hookCommand } from '../../core/hook-command.ts';
+import { browserSocket } from '../../core/browser.ts';
 
 // What Antigravity loads for an fdc session: a plugin of fdc's (its hooks, which run the relay, and its rules, which hold
 // fdc's instructions and so reach the system prompt of every conversation, new or resumed, and after compaction). agy
@@ -26,7 +27,25 @@ const EVENTS = ['SessionStart', 'PreInvocation', 'PostInvocation', 'PostToolUse'
 // Matched by tool for tool events, and listed flat for the others (agy's hooks.json).
 const TOOL_EVENTS = new Set(['PostToolUse']);
 
-export interface AgyPlugin { workspace: string; rules: string; hooks: string; /** The project's own folder, rather than one of this session's. */ shared: boolean }
+export interface AgyPlugin { workspace: string; rules: string; hooks: string; /** The project's own folder, rather than one of this session's. */ shared: boolean; /** Its MCP servers, when it brings the browser tools. */ servers?: string }
+export interface McpServer { command: string; args: string[]; env: Record<string, string> }
+
+/**
+ * Open Claude in Chrome's MCP server, as Chrome finds its native host: the browser tools the voice presents pages
+ * through (fdc reaches the same pages by the same host: browser.ts). The operator gives them to Claude, Codex and Pi in
+ * their own configuration; agy gets them from fdc's plugin, unless its own MCP configuration has them already. agy asks
+ * before each call to them, as for any MCP tool, unless the operator allows it.
+ */
+export function browserServer(home = os.homedir()): McpServer | undefined {
+  const config = (() => { try { return fs.readFileSync(path.join(home, '.gemini', 'config', 'mcp_config.json'), 'utf8'); } catch { return ''; } })();
+  if (config.includes('open-claude-in-chrome')) return;
+  for (const dir of ['Library/Application Support/Google/Chrome/NativeMessagingHosts', '.config/google-chrome/NativeMessagingHosts']) {
+    let host: string;
+    try { host = path.dirname(JSON.parse(fs.readFileSync(path.join(home, dir, 'com.anthropic.open_claude_in_chrome.json'), 'utf8')).path); } catch { continue; }
+    // Its plain server: the hybrid one beside it also starts a code runner, which the browser tools don't need.
+    for (const script of ['mcp-server.js', 'codemode/server-hybrid.js']) if (fs.existsSync(path.join(host, script))) return { command: process.execPath, args: [path.join(host, script)], env: { OCIC_PIPE: browserSocket() } };
+  }
+}
 
 /** The project's plugin folder: in the temporary folder, by the project's path. */
 export const projectFolder = (cwd: string, tmp = os.tmpdir()) => path.join(tmp, PLUGIN, createHash('sha1').update(path.resolve(cwd)).digest('hex').slice(0, 12));
@@ -35,7 +54,7 @@ const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catc
 const writable = (folder: string) => { for (const entry of fs.readdirSync(folder, { recursive: true, withFileTypes: true })) fs.chmodSync(path.join(entry.parentPath, entry.name), entry.isDirectory() ? 0o700 : 0o600); fs.chmodSync(folder, 0o700); };
 
 /** Writes the session's plugin (its hooks go to `baseUrl`'s /hook) into the project's folder, unless another fdc holds it, and returns where its parts are. */
-export function writePlugin({ root, baseUrl, instructions, cwd, tmp = os.tmpdir() }: { root: string; baseUrl: string; instructions: string; cwd: string; tmp?: string }): AgyPlugin {
+export function writePlugin({ root, baseUrl, instructions, cwd, tmp = os.tmpdir(), browser }: { root: string; baseUrl: string; instructions: string; cwd: string; tmp?: string; browser?: McpServer }): AgyPlugin {
   let workspace = projectFolder(cwd, tmp), shared = true;
   fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
   const owner = path.join(workspace, '.owner');
@@ -49,8 +68,10 @@ export function writePlugin({ root, baseUrl, instructions, cwd, tmp = os.tmpdir(
   fs.writeFileSync(path.join(dir, 'plugin.json'), JSON.stringify({ name: PLUGIN, description: "Full-Duplex Code's voice companion: its hooks and instructions, while fdc runs." }, null, 2));
   fs.writeFileSync(hooks, JSON.stringify({ [PLUGIN]: Object.fromEntries(EVENTS.map(event => [event, TOOL_EVENTS.has(event) ? [{ matcher: '*', hooks: [handler] }] : [handler]])) }, null, 2));
   fs.writeFileSync(rules, `${instructions}\n\nThe workspace folder ${workspace} is Full-Duplex Code's own (its hooks and these instructions): it is not part of the user's project, which is ${cwd}. Work in the project, never in that folder.\n`);
+  const servers = path.join(dir, 'mcp_config.json');
+  if (browser) fs.writeFileSync(servers, JSON.stringify({ mcpServers: { 'open-claude-in-chrome': browser } }, null, 2)); else fs.rmSync(servers, { force: true });
   readOnly(workspace);
-  return { workspace, rules, hooks, shared };
+  return { workspace, rules, hooks, shared, ...browser && { servers } };
 }
 
 // Read-only, so that nothing is made there by mistake.
@@ -65,7 +86,7 @@ export function releasePlugin(plugin: AgyPlugin) {
   try {
     writable(plugin.workspace);
     if (!plugin.shared) return fs.rmSync(plugin.workspace, { recursive: true, force: true });
-    fs.writeFileSync(plugin.hooks, '{}\n'); fs.writeFileSync(plugin.rules, '');
+    fs.writeFileSync(plugin.hooks, '{}\n'); fs.writeFileSync(plugin.rules, ''); if (plugin.servers) fs.rmSync(plugin.servers, { force: true });
     fs.rmSync(path.join(plugin.workspace, '.owner'), { force: true });
     readOnly(plugin.workspace);
   } catch {}

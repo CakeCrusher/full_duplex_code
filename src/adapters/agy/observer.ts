@@ -71,7 +71,9 @@ export class AgyObserver extends AgentObserver {
     const previous = this.sessionId;
     if (previous !== id) { this.sessionId = id; this.log({ type: 'agent.session', sessionId: id, previous }); this.emit('session', id); }
     this.attachTranscript(file);
-    if (!this.running && this.state !== 'needs_attention') this.status('idle', 'Antigravity is ready');
+    // Opened with fdc's own first message, the conversation's first turn is that message's: not ready until it ends.
+    const opening = this.opening !== undefined && this.stoppedAt === undefined;
+    if (!this.running && this.state !== 'needs_attention') this.status(opening ? 'working' : 'idle', opening ? 'Antigravity is opening the conversation' : 'Antigravity is ready');
   }
   /**
    * Follows the conversation's transcript, from its start: steps made before fdc took it up seed the conversation as
@@ -110,9 +112,13 @@ export class AgyObserver extends AgentObserver {
         if (calls.length && emit) {
           const done = this.ended >= this.announced + calls.length;
           this.announced += calls.length;
-          if (!done) this.status('working', `Antigravity is using ${calls.map((call: { tool: string }) => call.tool).join(', ')}`);
+          if (!done) {
+            this.status('working', `Antigravity is using ${calls.map((call: { tool: string }) => call.tool).join(', ')}`);
+            // As other agents' hooks report a tool as it starts: what it runs, before its result.
+            this.observe('TOOL_CALL', { calls }, emit, 'tool');
+          }
         }
-        // A reply that only calls tools says nothing yet: each call's result step records it.
+        // A reply that only calls tools says nothing more: each call's result step records what it did.
         if (!content.trim()) return;
         this.observe('PLANNER_RESPONSE', { text: content, ...calls.length && { tools: calls.map((call: { tool: string }) => call.tool) } }, emit);
         this.textDelta(content, { source: 'transcript' }, emit);
@@ -175,10 +181,13 @@ export class AgyObserver extends AgentObserver {
     if (name === 'Stop') {
       this.running = false; this.stoppedAt = Date.now();
       const failed = event.terminationReason === 'ERROR' || Boolean(event.error);
-      this.turn = failed ? 'failed' : 'turn_finished';
+      // A command it sent to the background still runs (agy does so after a few seconds, `sleep 15` included): the turn
+      // ends, and agy goes on by itself when the task ends. Its work is not done, so this is progress, not a turn's end.
+      const waiting = !failed && event.fullyIdle === false;
+      this.turn = failed ? 'failed' : waiting ? 'working' : 'turn_finished';
       // Its reasons: NO_TOOL_CALL (it answered), USER_CANCELED (interrupted), ERROR, MAX_* (a limit).
-      this.observe('Stop', { reason: event.terminationReason, ...event.error && { error: event.error }, ...event.fullyIdle === false && { background: 'tasks it started still run, and it wakes when they end' } }, true, failed ? 'turn_failed' : 'turn_end');
-      this.status(failed ? 'failed' : 'idle', failed ? 'Antigravity reported an error' : event.terminationReason === 'USER_CANCELED' ? 'Antigravity was interrupted' : 'Antigravity finished responding');
+      this.observe('Stop', { reason: event.terminationReason, ...event.error && { error: event.error }, ...waiting && { background: 'a task it started still runs; it goes on when the task ends' } }, true, failed ? 'turn_failed' : waiting ? 'event' : 'turn_end');
+      this.status(failed ? 'failed' : waiting ? 'working' : 'idle', failed ? 'Antigravity reported an error' : waiting ? 'Antigravity is waiting for a task it started' : event.terminationReason === 'USER_CANCELED' ? 'Antigravity was interrupted' : 'Antigravity finished responding');
     }
     return true;
   }

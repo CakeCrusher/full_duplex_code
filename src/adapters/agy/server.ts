@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { StringDecoder } from 'node:string_decoder';
+import { resolveCommand, type Command } from '../../core/command.ts';
 
 // The language server inside each agy process, which its terminal talks to: the companion's way in while no turn runs.
 // agy takes the token the server requires of its callers (CSRF) from ANTIGRAVITY_SERVER_CSRF_TOKEN as it starts, so fdc
@@ -63,9 +64,9 @@ export class AgyServer extends EventEmitter {
   /** The token agy's server will require, given to agy as it starts (`env`). */
   readonly token = randomBytes(24).toString('hex');
   port?: number; settled = false;
-  command: string;
+  /** agy as the launcher runs it: on the PATH, or an alias of the operator's (resolved once, when first needed). */
+  command?: Command;
   tail?: LogTail;
-  constructor(command = 'agy') { super(); this.command = command; }
   get env() { return { ANTIGRAVITY_SERVER_CSRF_TOKEN: this.token }; }
   /** Follows agy's log: emits each LogEvent, and `port` once the server listens. */
   follow(file: string, fromEnd: boolean) {
@@ -85,7 +86,8 @@ export class AgyServer extends EventEmitter {
   send(conversation: string, text: string, timeoutMs = 10000): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.port === undefined) return reject(new Error("Antigravity's language server has not started."));
-      const child = spawn(this.command, ['agentapi', 'send-message', conversation, text], { env: { ...process.env, ANTIGRAVITY_LS_ADDRESS: `127.0.0.1:${this.port}`, ANTIGRAVITY_CSRF_TOKEN: this.token }, stdio: ['ignore', 'pipe', 'pipe'] });
+      const agy = this.command ??= resolveCommand('agy') ?? { command: 'agy', args: [], via: 'path' };
+      const child = spawn(agy.command, [...agy.args, 'agentapi', 'send-message', conversation, text], { env: { ...process.env, ANTIGRAVITY_LS_ADDRESS: `127.0.0.1:${this.port}`, ANTIGRAVITY_CSRF_TOKEN: this.token }, stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '';
       const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`agentapi send-message took longer than ${timeoutMs / 1000} s`)); }, timeoutMs);
       child.stdout.on('data', chunk => { out += chunk; }); child.stderr.on('data', chunk => { out += chunk; });
