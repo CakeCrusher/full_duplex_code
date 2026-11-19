@@ -113,6 +113,8 @@ export class Mediator {
    * of, a video or other people, is not the conversation).
    */
   quietMs: number; quietTimer?: NodeJS.Timeout; spokeAt = 0; transcriptAt = 0;
+  /** Each time someone spoke: a quiet reading is put off by speech after its timer was set, not by the clock. */
+  spokes = 0;
   static HEARD_MS = 4000;
   /**
    * Words the operator hasn't finished saying wait undecided (they are read again, with what they add, at the next
@@ -198,8 +200,9 @@ export class Mediator {
   /** Either side spoke: the conversation is quiet once neither has for quietMs. */
   spoke() {
     this.spokeAt = Date.now();
+    const spoke = ++this.spokes;
     clearTimeout(this.quietTimer);
-    this.quietTimer = setTimeout(() => this.quiet(), this.quietMs);
+    this.quietTimer = setTimeout(() => this.quiet(spoke), this.quietMs);
     this.quietTimer.unref?.();
   }
   /** GPT Live said more: a whole word beyond a backchannel starts its answer ("Mm-hmm" while they pause doesn't). */
@@ -277,13 +280,14 @@ export class Mediator {
    * The conversation has gone quiet. What was said since the last reading is decided by one request, after any under
    * way and in the order things were said: the operator's turn, whole, with all GPT Live said in reply (decideTurn); or,
    * when they said nothing new, what GPT Live said (decideVoice). Someone speaking before it is read puts it off to the
-   * next quiet.
+   * next quiet. Speech is counted, not timed: a timer fires a millisecond early by the wall clock now and then, and
+   * read by the clock its quiet was put off with no other to come (a test waited for it in vain, Nov 19).
    */
-  quiet() {
+  quiet(spoke = this.spokes) {
     if (!this.route || this.live.state !== 'active') return;
     this.pending++;
     this.order = Promise.all([this.actionsOrder, this.order]).then(async () => {
-      if (this.live.state !== 'active' || Date.now() - this.spokeAt < this.quietMs) return;
+      if (this.live.state !== 'active' || this.spokes !== spoke) return;
       const last = this.lastWord(), request = last > this.quietRead ? this.history.request() : null;
       if (request?.fresh) await this.decideTurn(request, last); else await this.decideVoice();
     }).catch(error => this.fault(error as Error)).finally(() => { this.pending--; });
