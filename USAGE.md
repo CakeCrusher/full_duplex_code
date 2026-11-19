@@ -381,6 +381,32 @@ Refused, with the reason: `-p` / `--print` and `--mode json` or `rpc` (no intera
 
 The launcher finds every agent's command as your shell does: on your PATH, or else as an alias in your interactive shell, which it reads once and runs directly. A shell function is not followed.
 
+## Use Antigravity
+
+Put `fdc` in front of your usual Antigravity command, `agy`, in your project's folder. agy's own options work as usual:
+
+```sh
+fdc agy
+fdc agy --model gemini-3.8-flash-high --effort high
+fdc agy --conversation CONVERSATION_ID
+fdc agy --continue --mode accept-edits
+```
+
+You need the Antigravity CLI (agy 1.5 or newer), signed in; `fdc doctor agy` checks both. Its default model, Gemini 3.8 Flash with high thinking, is the one fdc was tried with; what you choose with `--model` or `/model` applies.
+
+How it connects:
+
+- agy loads a plugin of fdc's while fdc runs. The launcher writes it to a folder for your project in the system's temporary folder and adds that folder to agy's workspace (`--add-dir`); nothing is written to your project or to `~/.gemini`. agy remembers the workspace a conversation was made in, and resuming or forking it runs that folder's plugin, so the folder is the same for every session in the project: each one rewrites it (its hooks reach that session's bridge), and it is emptied when fdc stops, so agy run without fdc does none of it. A second fdc running in the same project at the same time gets a folder of its own, and a conversation it makes resumes later without fdc's hooks. agy lists workspace folders in order of their paths and works in the first one, and the temporary folder comes after your project; it is read-only, and fdc's instructions say it is not your project.
+- The plugin's hooks run fdc's relay before and after each model call, after each tool and at each turn's end. None runs as a tool starts: agy reads such a hook's empty answer as a refusal, and blocks the tool. fdc's instructions are the plugin's rules, which agy puts in the system prompt of every conversation it opens, new or resumed, and after compaction.
+- A spoken request reaches agy as your own message, labeled `[Voice request …]`. While agy works, the hook before its next model call adds it, after the tool under way. While it rests, fdc wakes the conversation through agy's language server on this computer (as a background task's end wakes it), and the hook of the turn that starts adds it the same way. fdc chooses the token that server requires as agy starts, and reads the port it listens on from agy's log, which it keeps in the run folder (`--log-file`, unless you give your own).
+- agy opens a new conversation only with a first message, and only an open one can be reached. So a new session starts with fdc's greeting, a one-word exchange ("Voice is on…", "Ready."), unless you start it with your own (`-i`). The greeting's model call also warms agy's cache for your first request. `--conversation` and `--continue` open yours, and its messages are context for GPT Live from the start. Switching conversation inside agy (`/resume`, `/fork`, or `/new` once its first message is sent) moves the companion to it.
+- The companion follows agy's transcript for your messages, its replies and what each tool answered, and its log for a tool waiting for your approval: GPT Live is told when agy needs you in its terminal. Approve or decline there. agy has no hook as a tool starts, so a tool's start is known from the reply that calls it.
+- A question asked aside, or a fork you ask for, goes to agy's own fork of the conversation, made through the main session's language server at the end of its last finished reply, and opened in the new window with `--conversation` and a first message of fdc's saying what the fork is for; the question comes with it. The fork runs the main session's plugin, whose hooks fdc hands to the fork. A fork left behind keeps running in its window until you close it.
+- A wake goes only once agy has finished starting: woken earlier, it ran a turn without its hooks. If a wake still brings no model call that takes the request, fdc tries once more and then says so; agy, woken without a request, answers "Waiting".
+- What reaches GPT Live follows the same rules as for Claude, with agy's own table: its replies stay whole, its reasoning is left out, and what a tool was asked and answered keeps its first and last 600 to 750 characters. An MCP tool is named as Claude names it (`mcp__server__tool`), so a page agy shows with Open Claude in Chrome's browser tools becomes the page the voice presents. agy needs them in its own configuration, as Codex and Pi do: `agy mcp add open-claude-in-chrome node /path/to/open-claude-in-chrome/host/mcp-server.js`. agy asks before each MCP call unless you allow the tool.
+
+Refused, with the reason: `-p` / `--print` and the other print options (no session to talk to), and `--remote-agent` (the conversation runs on another machine). `fdc agy --help`, `--version` and subcommands such as `fdc agy mcp list` run agy directly. The voice tool's learned instructions are written with a one-off `agy -p --sandbox`, in a temporary folder.
+
 ## Several sessions at once
 
 With more than one `fdc` running from this installation, one tab holds them all. A strip at the top of the page lists them: folder, agent and session, whether voice is on, ready (the microphone allowed and the page clicked), the agent not connected, or unreachable, and which are public. The tab loads every running session's page; click one to show it in place of the current one. A session you don't see keeps running: if its voice is on, it keeps listening and talking, so several sessions can talk in one tab at once (on speakers, each also hears the others; headphones avoid that). Allowing the microphone once for the tab covers every session in it. The tab belongs to the session you opened it from: if that `fdc` stops, open another's link. A page opened through `--public` lists only companions that are public too, and never another's local link.

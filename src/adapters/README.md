@@ -4,11 +4,11 @@ An adapter connects one coding agent to the companion. Everything specific to th
 
 Start from the adapter closer to yours:
 
-| | [Claude Code](claude/) | [Codex](codex/) | [Pi](pi/) |
-| --- | --- | --- | --- |
-| Requests reach it through | an MCP channel ([`channel-server.ts`](claude/channel-server.ts)) | its app server ([`app-server.ts`](codex/app-server.ts)) | the companion's extension ([`extension.ts`](pi/extension.ts)) |
-| Observed through | hooks, or its transcript | hooks and its transcript | the same extension, posting to `/hook` |
-| fdc's instructions reach its system prompt through | the channel's MCP server instructions | its SessionStart hook's answer, at startup, on resume and after compaction | a section the same extension adds before every run |
+| | [Claude Code](claude/) | [Codex](codex/) | [Pi](pi/) | [Antigravity](agy/) |
+| --- | --- | --- | --- | --- |
+| Requests reach it through | an MCP channel ([`channel-server.ts`](claude/channel-server.ts)) | its app server ([`app-server.ts`](codex/app-server.ts)) | the companion's extension ([`extension.ts`](pi/extension.ts)) | its hook before each model call, which the adapter answers ([`delivery.ts`](agy/delivery.ts)); at rest, its language server wakes it ([`server.ts`](agy/server.ts)) |
+| Observed through | hooks, or its transcript | hooks and its transcript | the same extension, posting to `/hook` | hooks, its transcript and its log |
+| fdc's instructions reach its system prompt through | the channel's MCP server instructions | its SessionStart hook's answer, at startup, on resume and after compaction | a section the same extension adds before every run | the rules of a plugin of fdc's, loaded for the session from a folder added to its workspace ([`launch.ts`](agy/launch.ts)) |
 
 ## What an adapter does
 
@@ -16,7 +16,7 @@ Start from the adapter closer to yours:
 2. **Instruct** the agent: put fdc's instructions (`session.instructions`, written once in [`prompts.ts`](../core/prompts.ts) as `agentInstructions`: how voice requests reach it, and how to make a page the voice can present) in its system prompt, by the least invasive way it offers. They must hold in a session fdc starts, one it resumes, one it never started, and after compaction: pass them through the launch, or answer the agent's hook at every session start with them (`instruct`). Leave the operator's own prompt and settings alone. [`agent-instructions.test.ts`](../../test/agent-instructions.test.ts) checks every registered adapter.
 3. **Observe** every event, from a hook or the transcript, as an `Observation`: a shared kind, the agent's own name for the event, the whole event as JSON, and the turn state after it. Refuse another session's events (`observer.ts`, built on [`agent-observer.ts`](../core/agent-observer.ts); [`transcript-tail.ts`](../core/transcript-tail.ts) follows a transcript file). A finished tool call reaches the stage as a `ToolUse` (`toolUse`), which is how fdc learns which tab the agent showed: Claude's hook shape needs nothing more, and Pi's observer pairs a call's start and end events.
 4. **Filter** what reaches GPT Live with one table of rows (`context.ts`). A row removes an event or keys, or truncates keys to a number of characters, cut from the middle. Its paths step through lists, and its conditions can name nested fields. The core already omits base64 data and the echo of a voice request, and notes any record still over about 1,200 tokens: that note shows where a row is missing. Leave out the agent's own housekeeping text that restates or predicts the conversation, such as compaction summaries, recaps and suggested next prompts: GPT Live has taken the operator's words in it for the operator speaking.
-5. **Deliver** a spoken request into the running agent, mid-turn when it can, and report whether it was sent. Never resend (`delivery.ts`). Recognize the request when the agent shows it back as a prompt (`receivedRequest`). If the agent treats the way in as external input, say through its prompt hook that a delivered request is the operator's own speech (`vouch`; Claude needs this).
+5. **Deliver** a spoken request into the running agent, mid-turn when it can, and report whether it was sent. Never resend (`delivery.ts`). An agent whose way in is its own hook answers it through the adapter (`AgentAdapter.answer`: Antigravity adds the requests waiting before its next model call). Recognize the request when the agent shows it back as a prompt (`receivedRequest`). If the agent treats the way in as external input, say through its prompt hook that a delivered request is the operator's own speech (`vouch`; Claude needs this).
 6. **Describe** the agent for prompts and the page: its names, the event that ends a turn, whether a running turn can take a request (`profile.ts`).
 7. **Register** the `AgentDefinition`, with `doctor` and help text, in `index.ts`, and add it to [`src/adapters/index.ts`](index.ts). `fdc <agent>`, `fdc doctor`, `fdc --help`, the voice prompts and the page pick it up from there.
 

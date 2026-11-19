@@ -152,7 +152,7 @@ export interface AgentDefinition {
    * piece of writing (a learned instruction): the command, its arguments, and how the prompt goes
    * in and the reply comes out. `outputFile` is a path the agent may write its reply to.
    */
-  ask?(prompt: string, outputFile: string): { command: string; args: string[]; stdin?: string; output?: 'stdout' | 'file' };
+  ask?(prompt: string, outputFile: string): { command: string; args: string[]; stdin?: string; output?: 'stdout' | 'file'; /** Where it runs, if not in the operator's project. */ cwd?: string };
   /** The exact message deliver() sends for a request, shown in the request inspector. */
   wire(request: VoiceRequest): unknown;
   create(session: AgentSession): AgentAdapter;
@@ -227,6 +227,12 @@ export interface AgentAdapter extends EventEmitter {
   readonly observations: AgentObserver;
   /** Sends one request and resolves with how far it got. */
   deliver(request: VoiceRequest): Promise<DeliveryResult>;
+  /**
+   * What the agent's command hook answers for one of this session's events, when the adapter itself has something to
+   * say (Antigravity: the requests waiting, added before its next model call). Undefined: the definition's `vouch` and
+   * `instruct` decide, as for every agent.
+   */
+  answer?(event: Record<string, any>): unknown;
   /** Observations so far, oldest first, including any restored from a resumed session. */
   history(): readonly Observation[];
   readonly sockets: Readonly<Record<string, AgentSocket>>;

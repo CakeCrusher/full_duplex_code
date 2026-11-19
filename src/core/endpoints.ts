@@ -85,11 +85,18 @@ export class Endpoints {
       const event = await body(req, MAX_HOOK_BYTES);
       // Never wait for a model or a network append before returning to the agent.
       // The observer refuses events from another agent session; a fork's go to the fork's, on its own route, and those of a fork left behind go nowhere (forks.ts).
-      const observer = !forkHook ? bridge.observer : req.url === `${bridge.forks.route}/hook` ? bridge.forks.adapter?.observations : undefined;
-      if (!observer?.hook(event)) { res.writeHead(409); return res.end('{}'); }
-      // The hook's answer: nothing, except for a voice request this bridge delivered (AgentDefinition.vouch), and fdc's
-      // instructions for an agent they reach through its hook (AgentDefinition.instruct).
-      const reply = bridge.agent.vouch?.(event, id => bridge.outbox.has(id), voiceProvenance()) ?? bridge.agent.instruct?.(event, forkHook ? bridge.forks.instructions : bridge.agentInstructions);
+      let adapter = !forkHook ? bridge.adapter : req.url === `${bridge.forks.route}/hook` ? bridge.forks.adapter : undefined;
+      if (!adapter?.observations.hook(event)) {
+        // A fork's event on the main session's route: Antigravity's fork keeps the workspace, and so the hooks, of the
+        // conversation it forks. The fork's own observer takes it, or refuses it too.
+        const fork = bridge.forks.adapter;
+        if (forkHook || !fork?.observations.hook(event)) { res.writeHead(409); return res.end('{}'); }
+        adapter = fork;
+      }
+      // The hook's answer: nothing, except what the session's adapter itself answers (AgentAdapter.answer), a voice request
+      // this bridge delivered (AgentDefinition.vouch), and fdc's instructions for an agent they reach through its hook
+      // (AgentDefinition.instruct).
+      const reply = adapter?.answer?.(event) ?? bridge.agent.vouch?.(event, id => bridge.outbox.has(id), voiceProvenance()) ?? bridge.agent.instruct?.(event, forkHook ? bridge.forks.instructions : bridge.agentInstructions);
       res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify(reply ?? {}));
     }
     // Another companion of this user, on this computer, turning this one's voice on or off.

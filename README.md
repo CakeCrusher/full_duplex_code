@@ -4,7 +4,7 @@
 
 <h1 align="center">Full-Duplex Code</h1>
 
-<p align="center">Talk to Claude Code, Codex or Pi while it works.</p>
+<p align="center">Talk to Claude Code, Codex, Pi or Antigravity while it works.</p>
 
 <p align="center"><a href="https://www.youtube.com/watch?v=mF8c93XIQw8">▶ Watch it in action: <b>I Coded From the Shower Without Looking at Claude Code</b></a></p>
 
@@ -28,7 +28,7 @@ Rates, batch sizes and prompt wording are means, never objectives. [How each obj
 
 ## Quickstart
 
-**You need** macOS (the tested setup), Node.js 22.18 or newer, Chrome, a microphone, Claude Code, Codex 0.155 or newer, or Pi 1.0, installed and signed in, and an OpenAI API key with access to GPT Live 1.
+**You need** macOS (the tested setup), Node.js 22.18 or newer, Chrome, a microphone, Claude Code, Codex 0.155 or newer, Pi 1.0, or the Antigravity CLI (agy 1.5), installed and signed in, and an OpenAI API key with access to GPT Live 1.
 
 ### 1. Install
 
@@ -52,6 +52,7 @@ cd /path/to/your/project
 fdc claude          # or: fdc claude --dangerously-skip-permissions
 fdc codex           # or: fdc codex --model gpt-5.5
 fdc pi              # or: fdc pi --continue
+fdc agy             # or: fdc agy --conversation CONVERSATION_ID
 ```
 
 ### 3. Connect and talk
@@ -93,6 +94,7 @@ With a TypeSafe key (`TYPESAFE_API_KEY` in `.env`), Jev turns their voices on an
 | `fdc claude --resume SESSION_ID` | Resume a Claude Code conversation |
 | `fdc codex resume SESSION_ID` | Resume a Codex session |
 | `fdc pi --continue` | Continue the last Pi session in this folder |
+| `fdc agy --continue` | Continue the last Antigravity conversation |
 | `fdc --public codex` | Also reach the companion from your phone |
 | `fdc --voice cedar claude` | Pick the GPT Live voice (default `marin`) |
 | `fdc doctor` | Check the setup without API spending |
@@ -104,8 +106,8 @@ With a TypeSafe key (`TYPESAFE_API_KEY` in `.env`), Jev turns their voices on an
 ![Full-Duplex Code: talk to the voice companion while Claude Code keeps working](assets/full-duplex-code.gif)
 
 - `fdc` starts a small bridge on this computer, then your agent's own command in the terminal.
-- The agent's hooks report what it does (for Pi, an extension loaded for that run). The bridge turns that into context for GPT Live.
-- Your voice goes from the browser straight to OpenAI. Requests reach the agent through Claude Code's channel, Codex's app server or that Pi extension, even mid-turn.
+- The agent's hooks report what it does (for Pi, an extension loaded for that run; for Antigravity, a plugin loaded for it). The bridge turns that into context for GPT Live.
+- Your voice goes from the browser straight to OpenAI. Requests reach the agent through Claude Code's channel, Codex's app server, that Pi extension or Antigravity's hook before each model call, even mid-turn.
 
 ## Learn more
 

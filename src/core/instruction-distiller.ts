@@ -50,10 +50,10 @@ export function parseDistilled(reply: string): Distilled {
 export function askAgent(agent: AgentDefinition, prompt: string, { cwd, timeoutMs = 90_000 }: { cwd: string; timeoutMs?: number }): Promise<string> {
   if (!agent.ask) return Promise.reject(new Error(`${agent.profile.name} has no one-off mode.`));
   const outputFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'fd-ask-')), 'reply.txt');
-  const { command, args, stdin, output } = agent.ask(prompt, outputFile);
+  const { command, args, stdin, output, cwd: own } = agent.ask(prompt, outputFile);
   const env = { ...process.env }; delete env.OPENAI_API_KEY; delete env.TYPESAFE_API_KEY;
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, env, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { cwd: own ?? cwd, env, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
     let out = '', err = '';
     const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`${agent.profile.name} took longer than ${timeoutMs / 1000} s.`)); }, timeoutMs);
     child.stdout!.on('data', chunk => { out += chunk; });

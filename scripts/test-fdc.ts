@@ -16,15 +16,18 @@ import { root, synthesize, connectVoice, until, delay } from './test-support.ts'
 // both acted on; a spoken question about the work; exit; then the
 // session resumed with the agent's own option, and a spoken question its
 // history must answer. Spends GPT Live and the agent's own usage.
-//   npm run test:fdc -- pi        (or claude, codex)
+//   npm run test:fdc -- pi        (or claude, codex, agy)
 const agent = process.argv[2];
-interface Agent { args: string[]; resume: (sessionId: string) => string[]; quit: (t: pty.IPty) => Promise<void> }
+interface Agent { args: string[]; resume: (sessionId: string) => string[]; quit: (t: pty.IPty) => Promise<void>; /** Its shell tool, as the status names it. */ shell?: string }
 const keys = async (t: pty.IPty, ...writes: string[]) => { for (const w of writes) { t.write(w); await delay(500); } };
 const AGENTS: Record<string, Agent> = {
   claude: { args: ['--permission-mode', 'acceptEdits', '--allowedTools', 'Read,Write,Edit,Bash'], resume: id => ['--resume', id, '--permission-mode', 'acceptEdits'], quit: t => keys(t, '/exit', '\r') },
   codex: { args: ['--no-alt-screen', '-s', 'workspace-write', '-a', 'never'], resume: id => ['resume', '--no-alt-screen', id], quit: t => keys(t, '\x03', '\x03') },
   pi: { args: [], resume: () => ['--continue'], quit: t => keys(t, '\x04', '\x03', '\x03') },
+  // The test project trusted for this session only (--settings is never saved), so the operator's own list stays as it was.
+  agy: { args: ['--dangerously-skip-permissions'], resume: id => ['--conversation', id, '--dangerously-skip-permissions'], quit: t => keys(t, '/exit', '\r'), shell: 'run_command' },
 };
+const shellUse = new RegExp(` is using ${AGENTS[agent]?.shell ?? 'bash'}$`, 'i');
 if (!Object.hasOwn(AGENTS, agent)) { console.error(`Usage: npm run test:fdc -- <${Object.keys(AGENTS).join('|')}>`); process.exit(2); }
 // This checkout's own fdc, as its installed command runs it: the one on the PATH may be another checkout's (a worktree
 // beside the linked one would test the linked one's code).
@@ -58,7 +61,8 @@ async function launch(name: string, args: string[]) {
   const bin = path.join(testDir, 'bin'); fs.mkdirSync(bin, { recursive: true });
   for (const name of ['open', 'osascript']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\necho "no windows in this test" >&2\nexit 1\n', { mode: 0o755 });
   env.PATH = `${bin}${path.delimiter}${env.PATH}`;
-  const terminal = pty.spawn(fdc, ['--port', '0', agent, ...args], { name: 'xterm-256color', cols: 140, rows: 45, cwd, env });
+  const trust = agent === 'agy' ? ['--settings', JSON.stringify({ trustedWorkspaces: [cwd] })] : [];
+  const terminal = pty.spawn(fdc, ['--port', '0', agent, ...trust, ...args], { name: 'xterm-256color', cols: 140, rows: 45, cwd, env });
   let raw = '', exited: number | null = null, entered = false, trusted = false, channel = false, update = false;
   terminal.onData(data => {
     fs.appendFileSync(path.join(testDir, `${name}.terminal.log`), data);
@@ -113,7 +117,7 @@ try {
   await until(() => voice!.events.some(e => e.type === 'caption' && e.role === 'intermediary'), { label: 'voice greeting', timeout: 30000 });
   // Speak just after the agent starts its next command, when its events pause:
   // events arriving while Live answers can keep it from delegating (USAGE.md).
-  const commandsStarted = () => run!.events().filter(e => e.type === 'agent.status' && / is using bash$/i.test(e.detail ?? '')).length;
+  const commandsStarted = () => run!.events().filter(e => e.type === 'agent.status' && shellUse.test(e.detail ?? '')).length;
   const started = commandsStarted();
   await until(() => commandsStarted() > started, { label: `${agent} started a long command`, timeout: 90000 });
   await delay(2500); await voice.quiet();
@@ -153,7 +157,7 @@ try {
   const again = Date.now();
   // Two short sleeps: Claude runs a long one in the background and ends its turn, or declines to wait in the foreground.
   run.terminal.write('Run the shell command `sleep 15`, then run it once more, then say READY.'); await delay(500); run.terminal.write('\r');
-  await until(() => run!.events().some(e => e.type === 'agent.status' && e.at >= again && / is using bash$/i.test(e.detail ?? '')), { label: `${agent} started the second piece of work`, timeout: 90000 });
+  await until(() => run!.events().some(e => e.type === 'agent.status' && e.at >= again && shellUse.test(e.detail ?? '')), { label: `${agent} started the second piece of work`, timeout: 90000 });
   await delay(2500); await voice.quiet();
   const spoke = Date.now();
   await voice.speak(waiting);
