@@ -39,7 +39,7 @@ const thinking = (live: any) => live.appended.filter(([kind]: string[]) => kind 
 test("the page follows the voice's words, not only turning phrases: \"getting you there\" moves it; an acknowledgment asks nothing; words of the operator's that Jev finds no command for move nothing", async t => {
   const { h, lives } = await harness(t);
   const runs = stageOf(h);
-  const moments = fakeJev(h, m => m.trigger === 'cue' ? { page: /getting you there/.test(m.latest!.text) ? { command: 'goto_matrix', more: .1 } : {} } : m.made === 'replied' ? { needsAgent: .1 } : {});
+  const moments = fakeJev(h, m => m.trigger === 'cue' ? { page: /getting you there/.test(m.latest!.text) ? { command: 'goto_matrix', more: .1 } : {} } : m.made === 'quiet' ? { needsAgent: .1 } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   await turn(h, 'Take me to the projects by approaches.');
   assert.deepEqual(runs, [], 'no command chosen for their words: nothing runs');
@@ -100,10 +100,11 @@ test("Jev failing moves nothing and sends the agent nothing about the page", asy
 test("the operator's goal is kept apart from the page: set from their words, told to the voice, read by Jev with what was shown, kept across sessions, ended when they drop it", async t => {
   const { h, lives } = await harness(t);
   stageOf(h);
+  // The goal is read in the turn's request, and set from the one made once the conversation is quiet.
   const moments = fakeJev(h, m => {
-    if (m.made === 'ended') return { standby: 0, goal: /walk me through/i.test(m.latest!.text) ? { choice: 'new' as const, p: .9 } : /enough/.test(m.latest!.text) ? { choice: 'done' as const, p: .8 } : { choice: 'keep' as const, p: .9 } };
+    if (m.trigger === 'turn') return { standby: 0, needsAgent: .1, goal: /walk me through/i.test(m.latest!.text) ? { choice: 'new' as const, p: .9 } : /enough/.test(m.latest!.text) ? { choice: 'done' as const, p: .8 } : { choice: 'keep' as const, p: .9 } };
     if (m.trigger === 'cue') return { page: /grid/.test(m.latest!.text) ? { command: 'goto_matrix', more: 0 } : {} };
-    return { needsAgent: .1 };
+    return {};
   });
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   await turn(h, 'Walk me through the projects by approach.');
@@ -149,7 +150,7 @@ test('where the operator moves the page themselves reaches the voice once they s
 test('a walkthrough goes on while the operator listens, as long as the voice carries it: a question, a pause or a cue with no move stops it', async t => {
   const { h, lives } = await harness(t);
   stageOf(h);
-  fakeJev(h, m => m.made === 'ended' ? { standby: 0, goal: { choice: 'walk' as const, p: .9 } } : { needsAgent: .1 });
+  fakeJev(h, m => m.trigger === 'turn' ? { standby: 0, needsAgent: .1, goal: { choice: 'walk' as const, p: .9 } } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   await turn(h, 'Walk me through the whole report, section by section.');
   assert.equal(h.voiceSessions.goal?.walk, true);
@@ -189,7 +190,7 @@ test("what the operator asks for that a command of the page does, the voice tool
   const runs = stageOf(h);
   const moments = fakeJev(h, m => m.made === 'ended' ? { page: { command: 'goto_waves', more: .8, asked: .9 } }
     : m.trigger === 'step' ? { page: m.page!.commands.some(c => c.id === 'page_split_campaigns') && !m.done!.some(c => c.id === 'page_split_campaigns') ? { command: 'page_split_campaigns', more: .9 } : {} }
-    : m.made === 'replied' ? { needsAgent: .1, ready: .9 } : {});
+    : m.made === 'quiet' ? { needsAgent: .1, ready: .9 } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const decided = await turn(h, 'Go to the waves and split the FDC row there.');
   assert.deepEqual(runs, [{ ids: ['goto_waves'], fast: true }, { ids: ['page_split_campaigns'], fast: true }], 'the command for the first part, then the page read again and the next');
@@ -197,10 +198,10 @@ test("what the operator asks for that a command of the page does, the voice tool
   assert.equal(steps.length, 2, 'asked again after each command, until Jev wants no more');
   assert.equal(steps[0].latest!.role, 'operator', "the steps go on from the operator's own words");
   assert.deepEqual(steps[1].done!.map(c => c.id), ['goto_waves', 'page_split_campaigns']);
-  assert.match(decided.actions!.did!.told, /^The voice tool did what the operator asked on the page \(Go to the section "FDC waves"; Split the FDC row into its campaigns\); on screen now: FDC split into five rows: before the loop, waves one to four\. \(FDC waves, section 3 of 3\)\. Its controls can now also: Split the FDC row into its campaigns$/);
+  assert.match(decided.did!.told, /^The voice tool did what the operator asked on the page \(Go to the section "FDC waves"; Split the FDC row into its campaigns\); on screen now: FDC split into five rows: before the loop, waves one to four\. \(FDC waves, section 3 of 3\)\. Its controls can now also: Split the FDC row into its campaigns$/);
   assert.equal(decided.send, false);
   assert.equal(decided.settled, true, 'done on the page: these words never go by themselves');
-  assert.deepEqual(moments.find(m => m.made === 'replied')!.done!.map(c => c.id), ['goto_waves', 'page_split_campaigns'], 'the job delegation reads what was done: whether anything is left for the agent');
+  assert.deepEqual(moments.find(m => m.made === 'quiet')!.done!.map(c => c.id), ['goto_waves', 'page_split_campaigns'], 'the job delegation reads what was done: whether anything is left for the agent');
   // The voice then confirms: its words don't run the same command again, and a bare acknowledgment asks nothing.
   h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: 'Go to the waves and split the FDC row there.', start_ms: 0, end_ms: 900 });
   h.presenter.heard(' On it.');
@@ -220,7 +221,7 @@ test("only what they ask for: a remark about the page, a question, or \"walk me 
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const decided = await turn(h, 'The projects by approaches part was the interesting one.');
   assert.deepEqual(runs, []);
-  assert.equal(decided.actions!.did, undefined);
+  assert.equal(decided.did, undefined);
   assert.equal(decided.settled, undefined);
 });
 

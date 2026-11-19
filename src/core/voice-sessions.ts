@@ -6,11 +6,11 @@ import { requestIds, type OutboxEntry } from './outbox.ts';
 import type { Page } from './pages.ts';
 import { LiveSession, type CloseResult } from './live-session.ts';
 import { Mediator } from './mediator.ts';
-import { jobTurn, routeActions } from './turn.ts';
+import { pageTurn, quietTurn, voiceTurn } from './turn.ts';
 import { AudioAudit } from './audio-audit.ts';
 import { recentHistory } from './recent-history.ts';
 import { forkable, planFor, ResumeStore, seedInput, wakePlanFor, WAKE_FORK_BACKOFF_MS, type ResumePlan, type ResumeRecord, type SavedInstruction } from './voice-resume.ts';
-import { agentsOwn, attachment, catchUp, disregardInstruction, goalState, greeting, heldWords, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, sentWords, standbyNews, standbyWake, uncertainWords, viewerMoved, walkOn } from './prompts.ts';
+import { notForTheAgent, pageChanged, attachment, catchUp, disregardInstruction, goalState, greeting, heldWords, historyIntro, liveInstructions, pageState, reconnectGreeting, resumeGreeting, sentWords, standbyNews, standbyWake, uncertainWords, viewerMoved, walkOn } from './prompts.ts';
 import { focusLine, placeOf, Stage, type StageCommand, type StageHere, type StageView } from './stage.ts';
 import type { LearnedInstruction } from './instruction-learner.ts';
 import { Activity, LIVE_SPEECH_RMS, priceFor } from './activity.ts';
@@ -58,6 +58,11 @@ export function changedChars(a: string, b: string) {
   while (start < a.length && start < b.length && a[start] === b[start]) start++;
   while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
   return Math.max(a.length, b.length) - start - end;
+}
+/** The page a signature (pageFor's) was told of: its address and title. */
+export function toldPage(signature: string | undefined) {
+  try { const [where, , , state] = JSON.parse(signature ?? ''); return typeof where === 'string' ? { address: where, title: /"([^"]*)"/.exec(String(state))?.[1] ?? where } : undefined; }
+  catch { return undefined; }
 }
 /** Whether GPT Live was told this page state already (pageFor's signatures): the same pages and parts, and nearly the same text. */
 export function sameStage(told: string | undefined, now: string) {
@@ -530,11 +535,12 @@ export class VoiceSessions {
     this.mediator?.stop();
     // A fork's context already holds its source's records: numbering continues after them.
     const mediator: Mediator = this.mediator = new Mediator({ live, observer: bridge.forks.observer(), agent, deliver: task => { this.senders.set(task.id, mediator); bridge.deliver(task); }, log, publish: event => publish(event), clean,
-      audit: bridge.handOffAudit, route: bridge.jev ? { actions: (request, spoken, waiting) => routeActions(bridge, request, spoken, waiting), job: (request, spoken, reply, actions, waiting) => jobTurn(bridge, request, spoken, reply, actions, waiting) } : undefined,
+      audit: bridge.handOffAudit, route: bridge.jev ? { page: (request, spoken, waiting) => pageTurn(bridge, request, spoken, waiting), quiet: (request, spoken, reply, since, early, waiting) => quietTurn(bridge, request, spoken, reply, bridge.presenter.ranSince(since), early, waiting),
+        voice: (spoken, waiting) => voiceTurn(bridge, spoken, waiting) } : undefined,
       read: bridge.jev ? (trigger, spoken, record) => bridge.read({ trigger, spoken, ...record }) : undefined, consider: (reading, id) => bridge.consider(reading, id),
       tuning: bridge.tuning, firstRecordId: plan === 'fork' ? record.lastRecordId ?? 0 : 0, replays: Boolean(wake?.operator),
       // Requests are cut from the record Jev reads and the voice was given, from the session's own place in it.
-      conversation: { text: (from, until) => perceivedText(record, mediator.history.spoken(), until, HISTORY_BYTES, from, agentsOwn(agent)), cursor: () => bridge.forks.cursors[bridge.forks.focus],
+      conversation: { text: (from, until) => perceivedText(record, mediator.history.spoken(), until, HISTORY_BYTES, from, notForTheAgent(agent)), cursor: () => bridge.forks.cursors[bridge.forks.focus],
         move: (at, back) => { const { cursors, focus } = bridge.forks; cursors[focus] = back ? Math.min(cursors[focus], at) : at; } } });
     const run: Run = this.run = { live, plan, page, automatic, mediator, record, recordId, startup: [...this.additionalInstructions], inherited: plan === 'fork' ? record.inForce ?? [] : [], inForce: new Map(), requested: attempt.requested ?? { at: Date.now(), plan }, wake, perceivedInput };
     // A fork knows the page state its source was told, and how full its context is; a new session, the page it starts with.
@@ -682,13 +688,18 @@ export class VoiceSessions {
     if (seen) this.bridge.presenter.speechCues.set(seen.cues);
     // A fork was told the page by its source: the controls it knows are the page's as it stands.
     if (!again && sameStage(run.briefed, seen?.signature ?? NO_PAGE)) { run.controls ??= new Set(view ? ownOf(view).map(c => c.told) : []); return; }
+    // Another page now (the agent showed one, or a link in the page led to another): said as news before what it is. Told
+    // only "the page open beside the operator now", in the long text of the page, the voice said three times that it was
+    // still on the same page as the operator asked "what even happened to our page", and then "prove it" (Nov 18).
+    const before = toldPage(run.briefed), after = seen ? toldPage(seen.signature) : undefined;
+    const changed = before && after && before.address !== after.address ? `${pageChanged(before.title, after.title)}\n` : '';
     run.briefed = seen?.signature ?? NO_PAGE;
     run.controls = new Set(view ? ownOf(view).map(c => c.told) : []);
     this.bridge.log({ type: 'stage.briefed', url: view?.url ?? null, names: seen?.cues.filter(c => c.listed).map(c => c.label) ?? [], parts: view?.parts.length ?? 0, again: again || undefined });
     run.toldWhere = view?.where;
     // Through the same queue as the agent's work: it waits while the operator talks.
-    run.mediator.context.add('thinking', seen?.state ?? pageState());
-    this.bridge.pageAudit.told(seen?.state ?? pageState());
+    run.mediator.context.add('thinking', changed + (seen?.state ?? pageState()));
+    this.bridge.pageAudit.told(changed + (seen?.state ?? pageState()));
   }
   /**
    * The page's controls GPT Live hasn't been told of yet, as the page is now: after a move it hears those the move brought
@@ -892,7 +903,7 @@ export class VoiceSessions {
     task.confirmationSent = true;
     // Never replayed in a new voice session. GPT Live hears it quietly: sent as speech (commentary), it was said aloud even
     // with the operator's own instruction not to (Oct 18, again every request on Oct 19).
-    live.append('thinking', sentWords(this.bridge.agent, task.said, task.target === 'fork'), task.delegationId ?? null).catch(error => {
+    live.append('thinking', sentWords(this.bridge.agent, task.said, task.target === 'fork', task.own), task.delegationId ?? null).catch(error => {
       if (this.live === live && live.state === 'active') this.bridge.fault(new Error(`The request was sent, but telling the voice failed: ${error.message}`));
     });
   }

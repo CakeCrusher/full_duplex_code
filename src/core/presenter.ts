@@ -20,7 +20,7 @@ import type { Harness } from './bridge.ts';
 import { CueMatcher, unglue, type SpeechCue } from './speech-cues.ts';
 import { StageError, StageNothing, type StageCommand, type StageRun, type StageView } from './stage.ts';
 import type { PageActor, PageCause } from './page-audit.ts';
-import { chosenCommand, GAVE_UP, PAGE_MORE, type Reading } from './jev.ts';
+import { chosenCommand, PAGE_MORE, type Reading } from './jev.ts';
 import type { Spoken } from './voice-history.ts';
 import { askedDoneNote, cueFailedNote, cueMovedNote, cueShown, cueStep, pageAnswered, pageDid, pageMissed } from './prompts.ts';
 
@@ -56,6 +56,17 @@ export class Presenter {
   busy: Promise<unknown> = Promise.resolve();
   /** The commands last run for a request of the operator's, and when. */
   asked?: { at: number; ids: string[] };
+  /**
+   * The commands that ran on the page in the last two minutes, with what it answered and whether the operator asked for
+   * them: the turn's request, once the conversation has gone quiet, tells Jev what was done there (turn.ts), so that
+   * the companion saying it shows something is told from the page showing it.
+   */
+  ran: { at: number; command: StageCommand & { shown?: string }; asked: boolean }[] = [];
+  note(done: (StageCommand & { shown?: string })[], asked: boolean, shown?: string) {
+    const at = Date.now();
+    this.ran = [...this.ran.filter(r => at - r.at < 120000), ...done.map(command => ({ at, command: { ...command, shown: command.shown ?? shown }, asked }))];
+  }
+  ranSince(at: number) { return this.ran.filter(r => r.at >= at); }
   /** The command that last put the page where it is: when, on which page, and when the voice last spoke of that place. */
   landed?: { id: string; at: number; seen: number; page: string };
   constructor(bridge: Harness) { this.bridge = bridge; }
@@ -125,9 +136,6 @@ export class Presenter {
     const spoken: Spoken[] = [...bridge.mediator?.history.spoken() ?? [], { role: 'intermediary', text: said, at: Date.now() }];
     const first = await bridge.read({ trigger: 'cue', spoken, page: view }).catch(error => { bridge.log({ type: 'jev.error', message: (error as Error).message }); return undefined; });
     if (!first) return;
-    // The voice says it can't answer or find what the operator asked: their words that stayed with it are read again,
-    // with what it has said since, and go to the agent if they need it (mediator.ts).
-    if ((first.page?.gaveUp ?? 0) >= GAVE_UP) { bridge.log({ type: 'voice.gave_up', said: said.slice(-160), p: first.page!.gaveUp }); bridge.mediator?.reconsider(); }
     // What the voice tool has just done for the operator's request, the voice's words about it don't do again.
     const justDone = this.asked && Date.now() - this.asked.at < JUST_DONE_MS ? this.asked.ids : [];
     const { done, last, error, there } = await this.steps(spoken, view, first, { said, most: MOST_STEPS, without: justDone });
@@ -158,6 +166,7 @@ export class Presenter {
       // Nothing ran, or a control is broken: their words go by the usual rules, and the agent hears of the failure with them.
       if (!last || (error && !(error instanceof StageNothing))) return undefined;
       this.asked = { at: Date.now(), ids: done.map(c => c.id) };
+      this.note(done, true);
       this.land(done.at(-1)!.id, last.here?.url);
       // The agent hears of it with their words, should they still go to it, and doesn't do it again.
       const history = bridge.mediator?.history;
@@ -248,6 +257,7 @@ export class Presenter {
    */
   async shown(run: StageRun, done: StageCommand[]) {
     const bridge = this.bridge;
+    this.note(done, false, run.onScreen);
     bridge.publish({ type: 'stage', done: done.map(c => c.name ?? c.say), onScreen: run.onScreen, cue: true });
     bridge.voiceSessions.shown(run.here, done);
     this.tell(cueShown(run.onScreen, run.here?.focus, await this.newControls()), run.action);

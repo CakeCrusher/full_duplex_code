@@ -7,6 +7,7 @@ import path from 'node:path';
 import { JevAudit, type JevCall } from '../src/core/jev-audit.ts';
 import type { StageView } from '../src/core/stage.ts';
 import { harness, page, settle, turn, until } from './live-fake.ts';
+import { quietTurn } from '../src/core/turn.ts';
 
 const KEY = 'tsk-test-secret-0123456789';
 const lines = (file: string) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
@@ -24,16 +25,18 @@ test('each Jev call of a turn is recorded with what fdc asked, what Jev answered
   const { h, lives, root, file, calls } = await audited(t, () => ({ answers: all }));
   const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); };
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  // GPT Live begins to answer within the quiet time: the turn's request is made then, for the page, and at the quiet.
+  h.voiceSessions.mediator!.quietMs = 1000;
   lives[0].say('operator', 'Fix the header, please.', 0);
   lives[0].say('intermediary', ` Got it, passing that on. ${KEY}`, 900);
   await until(() => delivered.length === 1 && calls().length === 2);
-  const turnCall = calls().find(c => c.made === 'ended')!, jobCall = calls().find(c => c.made === 'replied')!;
+  const turnCall = calls().find(c => c.made === 'ended')!, jobCall = calls().find(c => c.made === 'quiet')!;
   assert.equal(jobCall.requestId, delivered[0].id, 'the request the words went to the agent by');
-  assert.equal(turnCall.requestId, delivered[0].id);
-  assert.deepEqual(jobCall.config, { url: 'https://api.typesafe.ai/v1/systemone', model: 'jev-latest', timeoutMs: 3000, features: ['instructions'], thresholds: { needs_agent: .35, ready: .2, companion_only: .85, goal: .6, tangent: .5, behave: .6, design_talk: .5 } });
-  assert.deepEqual([turnCall.trigger, jobCall.trigger], ['turn', 'turn'], "one request, made as the turn ended and again once the companion's reply was in");
+  assert.ok(turnCall.requestId && turnCall.requestId !== jobCall.requestId, "the first request's own: the quiet's is cut from all that was said by then");
+  assert.deepEqual(jobCall.config, { url: 'https://api.typesafe.ai/v1/systemone', model: 'jev-latest', timeoutMs: 3000, features: ['instructions'], thresholds: { needs_agent: .35, ready: .2, companion_only: .85, goal: .6, behave: .6, design_talk: .5 } }, 'no fork question: the session has no conversation of its own to fork yet');
+  assert.deepEqual([turnCall.trigger, jobCall.trigger], ['turn', 'turn'], 'one request, made as GPT Live began to answer and again once the conversation had gone quiet');
   assert.deepEqual(turnCall.questions, jobCall.questions, 'the same questions both times');
-  assert.deepEqual({ ...turnCall.state, voice_reply: '' }, { ...jobCall.state, voice_reply: '' }, 'over the same state, but for what the companion had said by then');
+  assert.deepEqual({ ...turnCall.state, voice_reply: '', why: '' }, { ...jobCall.state, voice_reply: '', why: '' }, 'over the same state, but for what the companion had said by then, and why it is asked');
   assert.equal(jobCall.state.latest, 'user: Fix the header, please.');
   assert.match(jobCall.state.setting, /^An operator talks by voice/);
   assert.match(jobCall.state.voice_reply, /^Got it, passing that on\. \[redacted\]$/, 'written without the secrets fdc knows');
@@ -41,10 +44,10 @@ test('each Jev call of a turn is recorded with what fdc asked, what Jev answered
   assert.deepEqual(jobCall.answers, all, 'the answers as returned');
   assert.equal(jobCall.status, 200);
   assert.ok(jobCall.ms >= 0);
-  assert.deepEqual(jobCall.decision, { outcome: 'send', needed: true, finished: true });
+  assert.deepEqual(jobCall.decision, { outcome: 'send', needed: true, companionOnly: false, finished: true, learned: false }, "from the quiet's request, whether the words went, the voice tool's own actions and the learner's");
   assert.deepEqual(turnCall.config, jobCall.config);
   assert.deepEqual(turnCall.answers, all);
-  assert.deepEqual(turnCall.decision, { companionOnly: false, learned: false }, "from the first, the voice tool's own actions, then the learner's; from the second, whether the words went");
+  assert.deepEqual(turnCall.decision, {}, 'from the first, only the page: here there is none');
   const text = fs.readFileSync(file, 'utf8');
   assert.ok(!text.includes(KEY) && !text.includes('Bearer'));
   assert.deepEqual(lines(path.join(h.runDir, 'events.jsonl')).filter(e => e.type === 'jev.read').map(e => e.id).sort(), [turnCall.id, jobCall.id].sort(), "events.jsonl's line for each call has its ID");
@@ -71,17 +74,16 @@ test('a call that fails is recorded at once with why; the words still go to the 
   assert.deepEqual(unsent.decision, { learned: false });
 });
 
-test("the turn's first request records what the voice tool did itself: the instruction learned, the settings chosen", async t => {
+test("the quiet's request records what the voice tool did itself: the instruction learned, the settings chosen", async t => {
   const { h, calls } = await audited(t, () => ({ answers: { needs_agent: { noul: .1 }, ready: { noul: .9 },
     standby: { noul: .9 }, companion_only: { noul: .9 }, behave: { noul: .9 }, design_talk: { noul: .1 }, lasting: { choice: 'always' }, wakeThreshold: { choice: 'level_100', probabilities: { level_100: .8, level_50: .1 } } } }), { features: ['instructions', 'configuration'] });
   h.ask = async () => { throw new Error('no harness in tests'); };
-  const decision = await turn(h, 'Stop waking up for every little thing from now on. Bye for now.');
-  h.consider(decision.actions!.reading!);
-  const turnCall = calls().find(c => c.made === 'ended')!;
-  assert.deepEqual(turnCall.decision, { companionOnly: true, learned: 'always', settings: [{ name: 'wakeThreshold', from: 50, to: 100 }] });
-  assert.deepEqual(turnCall.config.features, ['instructions', 'configuration']);
-  assert.ok('earlier_sessions' in turnCall.state && 'current_settings' in turnCall.state, "the tuner's state, as sent");
-  assert.deepEqual(calls().find(c => c.made === 'replied')!.decision, { outcome: 'keep', needed: false, companionOnly: true, finished: true }, "only about how the companion behaves: not the agent's, whatever the job delegation reads");
+  await turn(h, 'Stop waking up for every little thing from now on. Bye for now.');
+  const quietCall = calls().find(c => c.made === 'quiet')!;
+  assert.deepEqual(quietCall.decision, { outcome: 'keep', needed: false, companionOnly: true, finished: true, learned: 'always', settings: [{ name: 'wakeThreshold', from: 50, to: 100 }] }, "only about how the companion behaves: not the agent's, whatever the job delegation reads; the learner and the tuner act on it");
+  assert.deepEqual(quietCall.config.features, ['instructions', 'configuration']);
+  assert.ok('earlier_sessions' in quietCall.state && 'current_settings' in quietCall.state, "the tuner's state, as sent");
+  assert.deepEqual(calls().find(c => c.made === 'ended')!.decision, {}, 'the same questions as GPT Live began to answer, acted on only for the page');
 });
 
 test("the page command Jev chose for the voice's words is recorded, and so is none", async t => {
@@ -94,17 +96,18 @@ test("the page command Jev chose for the voice's words is recorded, and so is no
   await h.presenter.show('The options are where it gets interesting.');
   await h.presenter.show('The repeat visit is a separate story.');
   assert.deepEqual(ran, [['goto_options']]);
-  assert.deepEqual(calls().map(c => [c.trigger, c.decision, c.config.thresholds]), [['cue', { command: 'goto_options', step: 0, more: false }, { page_command: .45, page_more: .5, gave_up: .7 }], ['cue', { command: null, step: 0 }, { page_command: .45, page_more: .5, gave_up: .7 }]]);
+  assert.deepEqual(calls().map(c => [c.trigger, c.decision, c.config.thresholds]), [['cue', { command: 'goto_options', step: 0, more: false }, { page_command: .45, page_more: .5 }], ['cue', { command: null, step: 0 }, { page_command: .45, page_more: .5 }]]);
 });
 
 test('a reading fdc has not finished acting on is recorded as it is when fdc stops, or 30 s after the call', async t => {
   const { h, calls } = await audited(t, () => ({ answers: { needs_agent: { noul: .1 }, ready: { noul: .9 }, standby: { noul: .2 } } }));
-  await turn(h, 'Just thinking out loud here.');
-  assert.deepEqual(calls().map(c => c.made), ['replied'], "the turn's first request waits for the learner, which the mediator asks");
+  const said = 'Just thinking out loud here.';
+  await quietTurn(h, { utterances: [{ role: 'operator', text: said, endMs: 0 }], through: 0, seqs: [0], fresh: said }, [{ role: 'operator', text: said, at: Date.now() }], undefined);
+  assert.deepEqual(calls(), [], "the quiet's request waits for the learner, which the mediator asks");
   await h.close();
-  assert.deepEqual(calls().find(c => c.made === 'ended')?.decision, { companionOnly: false });
+  assert.deepEqual(calls().find(c => c.made === 'quiet')?.decision, { outcome: 'keep', needed: false, companionOnly: false, finished: true });
   const file = path.join(h.runDir, 'unit.jsonl'), audit = new JevAudit({ file, waitMs: 20 });
-  const call = (id: string, more: Partial<JevCall> = {}): JevCall => ({ id, at: 0, trigger: 'turn', made: 'replied', config: { url: '', model: '', timeoutMs: 0, features: [], thresholds: {} }, state: {}, questions: {}, ms: 0, answers: {}, ...more });
+  const call = (id: string, more: Partial<JevCall> = {}): JevCall => ({ id, at: 0, trigger: 'turn', made: 'quiet', config: { url: '', model: '', timeoutMs: 0, features: [], thresholds: {} }, state: {}, questions: {}, ms: 0, answers: {}, ...more });
   audit.called(call('late'));
   audit.called(call('failed', { answers: undefined, error: 'timed out' }));
   assert.deepEqual(lines(file).map(c => c.id), ['failed'], 'a failed call at once');
@@ -113,23 +116,24 @@ test('a reading fdc has not finished acting on is recorded as it is when fdc sto
   assert.deepEqual(lines(file).map(c => [c.id, c.decision]), [['failed', undefined], ['late', undefined]], 'once written, a record is not written again');
 });
 
-test("words the operator goes on with before the job delegation decides wait for the rest, through fdc's own wiring", async t => {
+test("words the operator goes on with while the quiet's request is read wait for the rest, through fdc's own wiring", async t => {
   const { h, lives, calls } = await audited(t, () => ({ answers: { needs_agent: { noul: .9 }, ready: { noul: .9 }, standby: { noul: .05 } } }));
+  // The first quiet's reading takes a while, and the operator goes on meanwhile.
+  let reading = false;
+  const answer = h.jev!.fetch;
+  h.jev!.fetch = async (url, init) => { if (/neither the operator nor the voice companion has spoken/.test(String(init.body)) && !reading) { reading = true; await settle(300); } return answer(url, init); };
   const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); };
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const live = lives[0], mediator = h.voiceSessions.mediator!;
-  Object.assign(mediator, { replyMs: 3000, replyStartMs: 1000, operatorQuietMs: 60000 });
+  mediator.quietMs = 150;
   live.say('operator', 'Fix the header', 0);
   live.say('intermediary', ' Got it, the header', 900);
-  await until(() => calls().some(c => c.made === 'ended'));
+  await until(() => reading);
   live.say('operator', ' and the footer too.', 2500);
-  await until(() => calls().some(c => c.made === 'replied'));
-  await settle(50);
-  assert.equal(delivered.length, 0, 'not sent in pieces');
-  assert.deepEqual(calls().find(c => c.made === 'replied')!.decision, { outcome: 'wait', needed: true, finished: true, continued: true });
-  mediator.replyStartMs = 50;
-  mediator.turnEnded('turn');
   await until(() => delivered.length === 1);
-  assert.match(delivered[0].content, /Fix the header.*and the footer too\./s, 'sent once, whole');
-  assert.deepEqual(calls().filter(c => c.made === 'replied').at(-1)!.decision, { outcome: 'send', needed: true, finished: true, neededBefore: true });
+  await settle(100);
+  assert.deepEqual(calls().find(c => c.made === 'quiet')!.decision, { outcome: 'wait', needed: true, companionOnly: false, finished: true, continued: true, learned: false }, 'what was read went on meanwhile: it waits');
+  assert.equal(delivered.length, 1, 'not sent in pieces');
+  assert.match(delivered[0].content, /Fix the header.*and the footer too\./s, 'sent once, whole, at the next quiet');
+  assert.deepEqual(calls().filter(c => c.made === 'quiet').at(-1)!.decision, { outcome: 'send', needed: true, companionOnly: false, finished: true, neededBefore: true, learned: false });
 });

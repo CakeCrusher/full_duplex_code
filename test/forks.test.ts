@@ -18,7 +18,7 @@ import { Jev } from '../src/core/jev.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { codex } from '../src/adapters/codex/index.ts';
 import { perceivedText } from '../src/core/perceived.ts';
-import { routeActions } from '../src/core/turn.ts';
+import { pageTurn } from '../src/core/turn.ts';
 import { fakeJev, harness, page, turn, until } from './live-fake.ts';
 
 const settle = (ms = 30) => new Promise(resolve => setTimeout(resolve, ms));
@@ -29,6 +29,9 @@ const relay = (url: string, token: string, event: Record<string, unknown>) => ne
   child.on('close', () => resolve(complaint));
   child.stdin.end(JSON.stringify(event));
 });
+
+/** The main session has a conversation to fork (forks.ts, possible): a message of its own, as after its first turn. */
+const conversed = <H extends { observer: { observations: any[] } }>(h: H) => { h.observer.observations.push({ kind: 'text', name: 'MessageDisplay', text: JSON.stringify({ hook_event_name: 'MessageDisplay', delta: 'Started on the parser.' }), at: Date.now() }); return h; };
 
 test("a fork keeps the operator's options for how Claude works, not their choice of session or first prompt", () => {
   assert.deepEqual(forkArgs(['--dangerously-skip-permissions', '--resume', 'main', '--model', 'opus', '--add-dir', 'a', 'b', '-c', '--name', 'x', 'Explain this']),
@@ -86,7 +89,7 @@ test("the turn's request asks whether the words belong in a fork while one can o
   const asked = () => Object.keys(bodies.at(-1).questions).filter(name => name === 'tangent' || name === 'settled').sort();
   const latest = { role: 'operator' as const, text: 'By the way, what does CNS mean?' };
   // The main session in focus, here at work: a fork opens as the words are sent (turn.ts), and the request is the same both times.
-  assert.equal((await jev.read({ trigger: 'turn', made: 'replied', latest, working: 5000, fork: 'main' })).tangent, .9);
+  assert.equal((await jev.read({ trigger: 'turn', made: 'quiet', latest, working: 5000, fork: 'main' })).tangent, .9);
   assert.deepEqual(asked(), ['tangent']);
   await jev.read({ trigger: 'turn', made: 'ended', latest, working: 5000, fork: 'main' });
   assert.deepEqual(asked(), ['tangent'], 'as the turn ends too: the same request');
@@ -94,12 +97,12 @@ test("the turn's request asks whether the words belong in a fork while one can o
   const inFork = await jev.read({ trigger: 'turn', latest: { role: 'operator', text: 'Okay, got it.' }, fork: 'fork' });
   assert.deepEqual(asked(), ['settled', 'tangent']);
   assert.deepEqual([inFork.settled, inFork.tangent], [.2, .9]);
-  await jev.read({ trigger: 'turn', made: 'replied', latest });
+  await jev.read({ trigger: 'turn', made: 'quiet', latest });
   assert.deepEqual(asked(), [], 'no fork can open (the agent can\'t fork): neither');
 });
 
 test("a fork opens in a window of its own: Claude's fork of the session, with its hooks and channel on routes of its own; requests and the voice follow the focus; on the way back the fork is left behind", async t => {
-  const { h, lives, sessionId } = await harness(t, { features: ['instructions'] });
+  const { h, lives, sessionId } = await harness(t, { features: ['instructions'] }); conversed(h);
   const scripts: string[] = []; h.forks.open = script => { scripts.push(script); return 'Terminal'; };
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const mediator = h.voiceSessions.mediator!;
@@ -189,7 +192,7 @@ test("a fork opens in a window of its own: Claude's fork of the session, with it
 });
 
 test('a question that is sent opens a fork and goes to it, whether the main session is working or between turns; nothing sent, or an agent that can\'t fork: no fork', async t => {
-  const { h } = await harness(t, { features: ['instructions'] });
+  const { h } = await harness(t, { features: ['instructions'] }); conversed(h);
   const opened: string[] = []; h.forks.open = script => { opened.push(script); return 'Terminal'; };
   const sent: string[] = []; h.deliver = ((request: any) => { sent.push(h.forks.focus); }) as any;
   const moments = fakeJev(h, moment => ({ tangent: .9, needsAgent: moment.latest?.text.includes('CNS') ? .9 : .1, ready: .9 }));
@@ -206,14 +209,14 @@ test('a question that is sent opens a fork and goes to it, whether the main sess
   decision = await turn(h, 'By the way, what does CNS mean?');
   assert.deepEqual([decision.send, decision.later, opened.length, h.forks.focus], [true, false, 2, 'fork']);
   assert.match(decision.told!, /^<fork started> The operator turned aside, to ask something or for a fork: it goes to a fork of Claude Code's session/);
-  // The voice tool's own reading opens nothing, whichever signal ended the turn: a fork opens as words are sent.
-  const { h: asked } = await harness(t, { features: ['instructions'] });
+  // The request made as GPT Live begins to answer opens nothing: a fork opens as words are sent, once the conversation is quiet.
+  const { h: asked } = await harness(t, { features: ['instructions'] }); conversed(asked);
   const windows: string[] = []; asked.forks.open = script => { windows.push(script); return 'Terminal'; };
-  fakeJev(asked, () => ({ tangent: .9 })); asked.workingSince = Date.now();
+  fakeJev(asked, () => ({ tangent: .9, needsAgent: .9, ready: .9 })); asked.workingSince = Date.now();
   const request = { utterances: [], through: 0, seqs: [0], fresh: 'What does CNS mean?' }, spoken = [{ role: 'operator' as const, text: request.fresh, at: Date.now() }];
-  assert.equal((await routeActions(asked, request, spoken)).told, undefined);
+  assert.deepEqual(await pageTurn(asked, request, spoken), { view: undefined, did: undefined });
   assert.equal(windows.length, 0);
-  const { h: other } = await harness(t, { agent: { ...codex, canFork: false } });
+  const { h: other } = await harness(t, { agent: { ...codex, canFork: false } }); conversed(other);
   const none: string[] = []; other.forks.open = script => { none.push(script); return 'Terminal'; };
   fakeJev(other, () => ({ tangent: .9, needsAgent: .9, ready: .9 })); other.workingSince = Date.now();
   await turn(other, 'By the way, what does CNS mean?');
@@ -221,7 +224,7 @@ test('a question that is sent opens a fork and goes to it, whether the main sess
 });
 
 test('with a fork in focus, words that are no question move the focus back: once the operator has left its matter (not while its answer is on the way), or as they are sent; a question stays', async t => {
-  const { h } = await harness(t, { features: ['instructions'] });
+  const { h } = await harness(t, { features: ['instructions'] }); conversed(h);
   h.forks.open = () => 'Terminal'; h.deliver = (() => {}) as any;
   let answers: Record<string, number> = {};
   fakeJev(h, () => ({ needsAgent: .1, ready: .9, ...answers }));
@@ -248,13 +251,13 @@ test('with a fork in focus, words that are no question move the focus back: once
   const work = await turn(h, 'Add a legend to the chart.');
   assert.deepEqual([work.send, h.forks.focus], [true, 'main']);
   assert.match(work.told!, /Back to the main session of Claude Code \(work goes to the main session\)/);
-  // Words that moved the focus back don't open a new fork in the same turn.
+  // Words that move the focus back, read with the fork in focus, open no new fork in the same turn.
   await open(); h.forks.answered = Date.now() + 10;
-  answers = { settled: .9, tangent: .2, needsAgent: .9 };
-  const moments = fakeJev(h, moment => ({ needsAgent: .9, ready: .9, settled: .9, tangent: moment.made === 'replied' ? .9 : .2 }));
+  const before = h.forks.count;
+  const moments = fakeJev(h, () => ({ needsAgent: .9, ready: .9, settled: .9, tangent: .2 }));
   await turn(h, 'Thanks. What does the main session say?');
-  assert.equal(h.forks.focus, 'main');
-  assert.equal(moments.find(m => m.made === 'replied')!.fork, undefined);
+  assert.deepEqual([h.forks.focus, h.forks.count], ['main', before]);
+  assert.equal(moments.find(m => m.made === 'quiet')!.fork, 'fork', 'read with the fork in focus: whether they have left it');
   // The conversation goes quiet (Standby begins): a fork that has answered gives the focus back, one still answering keeps it.
   await open(); h.forks.asked = Date.now() + 20;
   h.forks.quiet();
@@ -266,17 +269,19 @@ test('with a fork in focus, words that are no question move the focus back: once
 });
 
 test('a fork takes only words Jev read; waiting work follows the same rules, and how sure Jev must be is a setting', async t => {
-  const { h } = await harness(t, { features: ['instructions'] });
+  const { h } = await harness(t, { features: ['instructions'] }); conversed(h);
   const opened: string[] = []; h.forks.open = script => { opened.push(script); return 'Terminal'; }; h.deliver = (() => {}) as any;
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const history = h.voiceSessions.mediator!.history;
   h.workingSince = Date.now();
-  // The operator goes on speaking while Jev reads the question: what they add is unread and would go with it, so no fork.
+  // The operator goes on speaking while Jev reads the question: what they add is unread, so nothing goes yet and no fork
+  // opens; the next quiet reads it all.
   let during = () => {};
   let answers: Record<string, number> = { tangent: .9, needsAgent: .9, ready: .9 };
-  fakeJev(h, moment => { if (moment.made === 'replied') during(); return answers; });
+  fakeJev(h, moment => { if (moment.made === 'quiet') during(); return answers; });
   during = () => history.add({ type: 'session.input_transcript.delta', delta: 'and also add a legend', start_ms: 0, end_ms: 900 });
-  assert.equal((await turn(h, 'What does CNS mean?')).send, true);
+  const went = await turn(h, 'What does CNS mean?');
+  assert.deepEqual([went.send, went.wait], [false, true]);
   assert.deepEqual([opened.length, h.forks.focus], [0, 'main']);
   during = () => {};
   await turn(h, 'What does CNS mean?');
@@ -305,7 +310,7 @@ test('a fork takes only words Jev read; waiting work follows the same rules, and
 });
 
 test("the fork's answer is on the way until its turn ends: a permission prompt is no answer, and a fork that reports nothing for minutes no longer holds the focus", async t => {
-  const { h } = await harness(t, { features: ['instructions'] });
+  const { h } = await harness(t, { features: ['instructions'] }); conversed(h);
   h.forks.open = () => 'Terminal';
   await h.forks.start('What does CNS mean?');
   const post = (event: Record<string, unknown>) => fetch(h.baseUrl + '/fork/1/hook', { method: 'POST', headers: { Authorization: `Bearer ${h.agentToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: 'fork-session', ...event }) });
@@ -329,7 +334,7 @@ test("the fork's answer is on the way until its turn ends: a permission prompt i
 });
 
 test('one record: the fork tags are in what the voice is given and Jev reads, and each session gets the record since its own last request', async t => {
-  const { h } = await harness(t, { features: ['instructions'] });
+  const { h } = await harness(t, { features: ['instructions'] }); conversed(h);
   h.forks.open = () => 'Terminal';
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const mediator = h.voiceSessions.mediator!, sent: { id: string; content: string; to: string }[] = [];

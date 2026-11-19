@@ -6,6 +6,7 @@ import { claude } from '../src/adapters/claude/index.ts';
 import { recentHistory } from '../src/core/recent-history.ts';
 import { Mediator } from '../src/core/mediator.ts';
 import { decides } from './live-fake.ts';
+import { DEFAULT_TUNING } from '../src/core/tuning.ts';
 import type { VoiceRequest } from '../src/core/adapter.ts';
 
 type Append = { kind: string; content: string; delegationId?: string | null };
@@ -37,7 +38,7 @@ test('hooks are primary: all raw hooks, including assistant batches, are quiet t
   assert.doesNotMatch(content(f, 'commentary'), /Stop/);
   assert.ok(f.appends.every(e => e.delegationId === null));
   assert.equal(f.mediator.history.fragments.length, 0);
-  f.mediator.decide('unexpected-delegation');
+  f.mediator.early('unexpected-delegation');
   assert.equal(f.deliveries.length, 0, 'observed input never triggers a new channel request');
 });
 
@@ -72,8 +73,8 @@ test('voice startup and restart send only new observations; earlier work goes to
 test('a delegation sends ordinary user text once, without asking Claude to use companion tools', async t => {
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
-  f.mediator.decide('work');
-  f.mediator.decide('duplicate');
+  f.mediator.early('work');
+  f.mediator.early('duplicate');
   await flush();
   assert.equal(f.deliveries.length, 1);
   assert.match(f.deliveries[0].content, /^User request \(transcribed speech\): .+\n\nuser: Make the button blue\.$/);
@@ -83,7 +84,7 @@ test('a delegation sends ordinary user text once, without asking Claude to use c
 test('when voice ends, speech not yet passed on goes to the agent, tagged with why', async t => {
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
-  f.mediator.decide('work');
+  f.mediator.early('work');
   await flush();
   f.live.emit('event', { type: 'session.output_transcript.delta', delta: 'Sure, passing that on.', start_ms: 1200, end_ms: 2000 });
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'And then make the header', start_ms: 5000, end_ms: 6000 });
@@ -100,7 +101,7 @@ test('when voice ends, speech not yet passed on goes to the agent, tagged with w
 test('when voice ends with everything already passed on, nothing more is sent', async t => {
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the button blue.', start_ms: 0, end_ms: 1000 });
-  f.mediator.decide('work');
+  f.mediator.early('work');
   f.live.emit('event', { type: 'session.output_transcript.delta', delta: 'Done.', start_ms: 1200, end_ms: 1600 });
   f.mediator.handOff('requested');
   await flush();
@@ -180,7 +181,7 @@ test('a failed delegation is factual context for the conversation, without a com
   const f = fixture(t);
   f.live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the page blue.', start_ms: 0, end_ms: 1000 });
   f.mediator.deliver = () => { throw new Error('channel unavailable'); };
-  f.mediator.decide('failed-request'); await flush();
+  f.mediator.early('failed-request'); await flush();
   assert.match(content(f, 'thinking'), /request was not delivered/);
   assert.equal(content(f, 'commentary'), '');
 });
@@ -219,35 +220,50 @@ test("a connection the operator's voice woke starts with their held words: what 
   assert.equal(reconnected.appends.length, 1, 'any other connection gets it at its start');
 });
 
-test("the operator's turn ends when GPT Live starts answering, or after a moment's quiet; a backchannel doesn't end it, and the same words are read once", async t => {
+test("the operator's turn is decided once neither side has spoken for the quiet time, with all GPT Live said in reply; the page is read as it begins to answer; what GPT Live says alone is read at the quiet too", async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const observer = new ClaudeObserver({ sessionId: 'test' });
   const live: any = new EventEmitter(); live.state = 'active'; live.close = () => {}; live.append = async () => {};
-  const read: string[] = [];
-  const m = new Mediator({ live, observer, deliver: () => {}, log: () => {}, publish: () => {}, clean: String, hold: null, route: decides(async request => { read.push(request.fresh); return { send: false }; }) });
+  const paged: string[] = [], read: [string, string | undefined, boolean | undefined][] = [], own: string[] = [];
+  const m = new Mediator({ live, observer, deliver: () => {}, log: () => {}, publish: () => {}, clean: String, hold: null, tuning: { ...DEFAULT_TUNING, quietMs: 1500 }, route: {
+    page: async (_request, spoken) => { paged.push(spoken.at(-1)!.text); return {}; },
+    quiet: async (_request, spoken, reply, _since, early) => { read.push([spoken.at(-1)!.text, reply, early.read]); return { send: false }; },
+    voice: async spoken => { own.push(spoken.at(-1)!.text); return { send: false }; } } });
   t.after(() => { m.stop(); observer.close(); });
   const settle = async (ms: number) => { for (let i = 0; i < ms / 100; i++) { t.mock.timers.tick(100); await new Promise(resolve => setImmediate(resolve)); } };
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Make the header blue.', start_ms: 0, end_ms: 900 });
   live.emit('event', { type: 'session.output_transcript.delta', delta: ' Mm-hmm. ' });
-  await settle(1000);
-  assert.deepEqual(read, [], 'a backchannel while they pause is not an answer');
+  await settle(1400);
+  assert.deepEqual([paged, read], [[], []], 'a backchannel while they pause is not an answer, and the conversation is not quiet yet');
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ' And the footer.', start_ms: 1400, end_ms: 2200 });
   live.emit('event', { type: 'session.output_transcript.delta', delta: " Sure, I'll look. " });
   await settle(1000);
-  assert.deepEqual(read, ['Make the header blue.'], 'GPT Live answering ends their turn, once their last words are in');
+  assert.deepEqual([paged, read], [['Make the header blue. And the footer.'], []], 'GPT Live beginning to answer has the page read, once their last words are in; nothing is decided while it talks');
+  live.emit('event', { type: 'session.output_transcript.delta', delta: ' It is the second file. ' });
+  await settle(1400);
+  assert.equal(read.length, 0, 'its going on keeps the conversation from being quiet');
+  await settle(200);
+  assert.deepEqual(read, [['Make the header blue. And the footer.', "Mm-hmm. Sure, I'll look. It is the second file.", true]], 'quiet for 1.5 s: their turn is decided, whole, with all it said in reply; the page was read already');
   await settle(5000);
-  assert.deepEqual(read, ['Make the header blue.'], 'the quiet after it reads nothing again');
-  live.emit('event', { type: 'session.input_transcript.delta', delta: 'And the footer.', start_ms: 9000, end_ms: 9800 });
+  assert.deepEqual([paged.length, read.length, own.length], [1, 1, 0], 'the quiet that follows reads nothing again');
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Never mind the footer.', start_ms: 9000, end_ms: 9800 });
+  await settle(1400);
+  assert.equal(read.length, 1);
+  await settle(200);
+  assert.deepEqual(read[1], ['Never mind the footer.', undefined, false], "when GPT Live doesn't answer, the quiet's request is the first to read their words, for the page too");
+  live.emit('event', { type: 'session.output_transcript.delta', delta: ' For this, a drawing would help: one that shows both files. ' });
+  await settle(1600);
+  assert.deepEqual([read.length, own], [2, ['For this, a drawing would help: one that shows both files.']], 'GPT Live speaking alone: what it said is read for the agent');
   await settle(3000);
-  assert.equal(read.length, 1, 'a pause under 4 s is no end');
-  await settle(1500);
-  assert.deepEqual(read, ['Make the header blue.', 'And the footer.'], "a moment's quiet ends it when GPT Live doesn't answer");
+  assert.equal(own.length, 1, 'once');
 });
 
 test("with Jev, GPT Live is told the voice tool passes requests on; without it, GPT Live delegates them, as before", async () => {
   const { liveInstructions } = await import('../src/core/prompts.ts');
   const own = liveInstructions(claude, { jev: true }), delegating = liveInstructions(claude);
   assert.doesNotMatch(own, /SpawnThinking/);
-  assert.match(own, /It passes nothing on itself, and never asks the operator to: when they finish speaking, the voice tool reads their words, does what the page's controls can do, and sends Claude whatever needs it/);
+  assert.match(own, /once the operator and the companion have both stopped talking, it sends Claude whatever needs it, be it what the operator asked for or what the companion said Claude should do/);
+  assert.match(own, /The companion never asks the operator to pass anything on\./);
+  assert.match(own, /Say plainly what Claude should do to get it done, whether the operator asked or you judge it would help them/);
   assert.match(delegating, /Generate <\|SpawnThinking\|> when:/);
-  assert.ok(own.length < delegating.length);
 });

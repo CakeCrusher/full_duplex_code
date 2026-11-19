@@ -310,10 +310,11 @@ export class Harness {
   read({ spoken = [], ...moment }: Omit<Moment, 'latest' | 'history' | 'instructions' | 'learn' | 'tune'> & { spoken?: Spoken[] }, timeoutMs?: number): Promise<Reading> {
     if (!this.jev) return Promise.reject(new Error('Jev is not configured'));
     const words = ['turn', 'unsent'].includes(moment.trigger), tune = this.jevTuning && (words || moment.trigger === 'settings');
-    // The turn's second request asks the same questions, but its settings are not acted on (turn.ts): it doesn't supersede the first.
-    const ask = tune && moment.made !== 'replied' ? ++this.tuneAsks : 0, latest = spoken.at(-1), record = this.voiceSessions.run?.record ?? this.voiceSessions.current();
-    // When the conversation has gone quiet (voice-sessions.ts), the history runs to now: what fdc sent since the last words is part of what Jev judges.
-    return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(perceivedText(record, spoken.slice(0, -1), moment.trigger === 'quiet' ? Date.now() : latest.at, HISTORY_BYTES)) },
+    // The turn's first request asks the same questions, but its settings are not acted on (turn.ts): the quiet's are.
+    const ask = tune && moment.made !== 'ended' ? ++this.tuneAsks : 0, latest = spoken.at(-1), record = this.voiceSessions.run?.record ?? this.voiceSessions.current();
+    // When the conversation has gone quiet after the companion spoke (Standby, voice-sessions.ts; its own words, turn.ts), the
+    // history runs to now: what fdc sent since the last words (that a request went, among it) is part of what Jev judges.
+    return this.jev.read({ ...moment, ...latest && { latest: { role: latest.role, text: this.clean(latest.text) }, history: this.clean(perceivedText(record, spoken.slice(0, -1), moment.trigger === 'quiet' || moment.trigger === 'voice' ? Date.now() : latest.at, HISTORY_BYTES)) },
       goal: moment.goal ?? this.voiceSessions.goalLine(),
       instructions: this.voiceSessions.additionalInstructions.map(item => item.text), learn: (words && this.features.has('instructions')) || undefined,
       removable: words && this.features.has('instructions') ? this.voiceSessions.learnedInForce() : undefined,

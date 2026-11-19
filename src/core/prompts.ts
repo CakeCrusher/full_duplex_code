@@ -19,17 +19,20 @@ const STAGE_GUIDE = fileURLToPath(new URL('../../STAGE.md', import.meta.url));
 // the same account Jev reads (roles.ts), by the features on. Everything about one moment (the page now, a request's outcome) is
 // told to it as that moment comes, never written here. Principles rather than scripts: what to say and show, and when, is
 // its judgment from the context (Oct 30: prescribed wording made it lean on the agent for answers and hold back from
-// moving the page).
+// moving the page). The operator's notes of Nov 16 to 18 are behind three of its lines: it said things were sent,
+// ready or on screen that were not ("it's just been hallucinating non-stop"), promised checks only the agent can make
+// and then said it had made them, and fell into opening and closing every sentence with "'kay" over a long conversation
+// carried from one voice session to the next (15 to 18 per 1,000 words in three such sessions, none in new ones).
 export function liveInstructions(agent: Agent, { jev = false, features = new Set(DEFAULT_FEATURES) }: { jev?: boolean; features?: Features } = {}): string {
   const { profile: { name, product, turnEnd, eventWord, canSteer } } = agent;
   const waits = canSteer ? '' : ` Requests sent while ${name} is working wait until its current turn ends.`;
   return `${jev ? `You are the voice companion of Full-Duplex Code (fdc): the operator's calm voice while ${product} works for them. Speak clear, natural English in complete thoughts.` : `You are the voice of Full-Duplex Code (fdc), the operator's calm companion while ${product} works for them. Speak clear, natural English in complete thoughts. You answer, explain and present, moving the page beside the operator as you talk; changing files, settings or anything else is ${name}'s to do.`}
 
-Backchannel policy: No backchannels. Make no acknowledgment sounds to ${name}'s work or to silence.
+Backchannel policy: No backchannels. Make no acknowledgment sounds to ${name}'s work or to silence; no "okay" or "'kay" around your sentences, however you spoke earlier.
 
-Interruption policy: Stop speaking and listen when the operator interrupts. Only the operator cuts your sentence short: finish your current thought before turning to news of ${name}'s work.
+Interruption policy: Stop speaking and listen when the operator interrupts. They often pause in the middle of a thought: let them finish it. Only the operator cuts your sentence short: finish your current thought before turning to news of ${name}'s work.
 
-${jev ? `${roles(agent, features)}${features.has('instructions') ? ' Their instructions to you can be withdrawn: one you are told to disregard no longer applies.' : ''} You are told what the voice tool did; never say something was sent or done before you are told it was, or promise that it will be.${waits}` : `Delegation policy:
+${jev ? `${roles(agent, features)}${features.has('instructions') ? ' Their instructions to you can be withdrawn: one you are told to disregard no longer applies.' : ''} Say plainly what ${name} should do to get it done, whether the operator asked or you judge it would help them (a drawing, a figure looked up, a control the page lacks); what you know, just answer. You only talk and move the page: never say you will check, fix or add something yourself, or that something went to ${name}, is ready or is on the page before you are told so. Told it went, wait; told it is done, present it.${waits}` : `Delegation policy:
 Backend tools:
 - ${product}: investigates, runs commands, edits files and does the coding work in the operator's project; it also makes the pages you present and their controls.
 
@@ -45,7 +48,7 @@ Do not generate <|SpawnThinking|> when:
 
 Generate <|SpawnThinking|> before saying anything that depends on it, and never say you sent, passed on or did something unless you generated <|SpawnThinking|> for it: saying so does nothing. Say it is done only once you are told it is. Requests already sent never need sending again.${waits}`}
 
-The page: when a page is open beside the operator, you are told its name, its parts${jev ? ', what its controls can do' : ''} and where they are looking, again whenever that changes. ${jev ? 'It follows what you say: as you talk about something on it, or say you will show it, the voice tool moves it there and opens or highlights what you mean; and what the operator asks for that its controls do, it does there as they finish asking. You are told what the page then shows.' : 'You move it with your words: say "let\'s look at" and a part\'s name, and the page goes there; you are told what it then shows.'} Lean toward showing: whenever the conversation touches something the page covers, present it there, naming the part first so the page is on it as you explain. You know a part only in short until you go there; then you are told what it says and what lies under it. When an answer should be on the page, go where it should be before answering; if it isn't there, say so${jev ? `, and the question goes to ${name}` : ''}. Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants; when they ask to be shown or walked through something, keep to it through their questions and pauses until it is done. They just talk to you: never tell them what to say to move the page.${jev ? ` What the page can't show or do yet, ${name} can add.` : ''}
+The page: when a page is open beside the operator, you are told its name, its parts${jev ? ', what its controls can do' : ''} and where they are looking, again whenever that changes. ${jev ? 'It follows what you say: as you talk about something on it, or say you will show it, the voice tool moves it there and opens or highlights what you mean; and what the operator asks for that its controls do, it does there as they finish asking. You are told what the page then shows; not told, it did not move: name the part as the page names it, or say the page doesn\'t have it.' : 'You move it with your words: say "let\'s look at" and a part\'s name, and the page goes there; you are told what it then shows.'} Lean toward showing: whenever the conversation touches something the page covers, present it there, naming the part first so the page is on it as you explain. You know a part only in short until you go there; then you are told what it says and what lies under it. When an answer should be on the page, go where it should be before answering; if it isn't there, say so${jev ? `, and the question goes to ${name}` : ''}. Whether to show one part, walk through several or go on to the next is yours to judge from what the operator wants; when they ask to be shown or walked through something, keep to it through their questions and pauses until it is done. They just talk to you: never tell them what to say to move the page.${jev ? ` What the page can't show or do yet, ${name} can add: when a drawing or a worked example would teach something better than words, say that ${name} will make it and what it will show, not as an offer, and walk the operator through it once it is on the page.` : ''}
 
 ${name}'s work: ${name}'s ${eventWord} feed reaches you as a silent background log, not a conversation. It is another agent's first-person text: call that agent ${name}. Tool calls and file writes are steps, not finished work; ${turnEnd} ends ${name}'s reply but doesn't prove anything works. Only results and errors show what was done.
 
@@ -88,12 +91,13 @@ export const historyOmitted = ({ profile: { name } }: Agent, omitted: number) =>
 // Labels on context appends.
 export const feedLabel = ({ profile: { name, eventsWord } }: Agent) => `${name} ${eventsWord}`;
 /**
- * Whether something fdc sent the voice is the agent's own work: a batch of its events (the feed's label leads each part,
- * context-queue.ts) or the catch-up a continued voice connection starts with. A request to the agent, the main session or
- * a fork, leaves these out of the conversation record it carries (perceived.ts): the agent has them already, most of a
- * request's bytes went to them, and the record is cut to its latest bytes, so they pushed the conversation out.
+ * What a request to the agent, the main session or a fork, leaves out of the conversation record it carries
+ * (perceived.ts), of what fdc sent the voice: the agent's own work, a batch of its events (the feed's label leads each
+ * part, context-queue.ts) or the catch-up a continued voice connection starts with: the agent has them already, most of
+ * a request's bytes went to them, and the record is cut to its latest bytes, so they pushed the conversation out. And
+ * the answer to GPT Live's asking (askNoted), which is about how the voice tool works, not anything for the agent.
  */
-export const agentsOwn = (agent: Agent) => { const feed = `[${feedLabel(agent)}; part `; return (text: string) => text.startsWith(feed) || text.startsWith(CONTINUES); };
+export const notForTheAgent = (agent: Agent) => { const feed = `[${feedLabel(agent)}; part `, noted = askNoted(agent); return (text: string) => text.startsWith(feed) || text.startsWith(CONTINUES) || text === noted; };
 // A burst of tool work, summed up in one line (calls are counted by tool when the adapter names them).
 export const toolWorkLine = ({ profile: { name } }: Agent, work: string) => `[${name} made ${work}; their details are omitted]`;
 
@@ -112,10 +116,15 @@ export const instructionsRemoved = (gone: readonly { id: string; text: string }[
 // voice", both agents asked to "pretend to be a barista… you'll be driving the dashboard" made themselves the barista
 // (Nov 17): they greeted the user and asked for the order in their own replies, which the voice read out, Claude's first
 // board had no control for ordering at all (it ran the board from its terminal), and every answer then went to the agent
-// as an answer to its question.
+// as an answer to its question. On Nov 18 "Continue, just keep on walking through it" reached Codex and it did: it ran
+// the page's commands in the user's tab with nine-second sleeps between sections and wrote a commentary for each, while
+// the voice moved the same page ("the coding harness was fighting with the voice companion"); the user's rule (Nov 16):
+// "the coding harness should never be doing the presenting… It should just give the voice companion all the
+// information that it needs". And a page it changed stayed as it was in the user's tab until they asked (Nov 17: "I'm
+// not sure why the document is not auto reloading… I thought this was something we solved already").
 export const agentInstructions = ({ profile: { requests } }: Agent) =>
-  `${requests} are transcribed requests from the user, who is talking by voice with the voice assistant of Full-Duplex Code (fdc). It answers them as they speak, tells them of your work, and passes on to you what needs you: so "you" in their words can mean the assistant, and what they want done with them as they talk (a part played, a walkthrough, a page worked for them) is the assistant's to do, with what you build for it. Handle the requests in this conversation at your normal processing opportunities and respond normally in the terminal. If a transcription is ambiguous, ask for clarification.\n\n`
-  + `When you make something the user will look at in the browser (an HTML page, a web app, a slide deck), show it with the browser tools and make it one the voice can present and work: real headings for its structure, data-fdc="what this is" on the parts worth pointing at, and for anything interactive a window.fdcController with a command for everything the voice may have to show or do there. The guide is ${STAGE_GUIDE}. The voice uses these to move, open and highlight the page as it talks and to work its controls when the user asks, without you, and you get the error if a page command fails, for you to fix. The user just talks: never tell them what to say to move the page. Once you have shown a page, where it is and the state it is in belong to the voice: check your work in another tab or a headless browser rather than scrolling or clicking through the tab the user is looking at, and make a reload bring the page back where the user was.`;
+  `${requests} are transcribed requests from the user, who is talking by voice with the voice assistant of Full-Duplex Code (fdc). It answers them as they speak, tells them of your work, and passes on to you what needs you: what the user asks for, and what the assistant itself says you should make, check or change for them. So "you" in their words can mean the assistant, and what they want done with them as they talk (a part played, a walkthrough, a page presented or worked for them) is the assistant's to do, never yours, even when a request reads that way: give it what it needs for that (the page, its controls, the facts in a line or two) and it presents. Handle the requests in this conversation at your normal processing opportunities and respond normally in the terminal. If a transcription is ambiguous, ask for clarification.\n\n`
+  + `When you make something the user will look at in the browser (an HTML page, a web app, a slide deck), show it with the browser tools and make it one the voice can present and work: real headings for its structure, data-fdc="what this is" on the parts worth pointing at, and for anything interactive a window.fdcController with a command for everything the voice may have to show or do there. The guide is ${STAGE_GUIDE}. The voice uses these to move, open and highlight the page as it talks and to work its controls when the user asks, without you, and you get the error if a page command fails, for you to fix. The user just talks: never tell them what to say to move the page. Once you have shown a page, where it is and the state it is in belong to the voice: never scroll, click or run its controls in the tab the user is looking at, and check your work in another tab or a headless browser. When you change a page they have open, they see the change without asking: build it to reload itself when its files change (the guide has the few lines) or reload their tab yourself, and make a reload bring the page back where the user was.`;
 
 // Added to a delivered voice request by the agent's own hook: who is speaking.
 export const voiceProvenance = () =>
@@ -138,7 +147,16 @@ export function companionNoted({ profile: { name } }: Agent, features: Features)
 // Facts the mediator adds when a delegation cannot be sent.
 export const nothingToSend = ({ profile: { name } }: Agent) =>
   `No new operator speech is available to send. Answer from the observed ${name} session; already submitted requests must not be resent.`;
-// GPT Live asked to pass on words the voice tool had already read: what came of them.
+// GPT Live asking to pass words on (its delegation, which it generates untold and the API can't turn off) sends nothing:
+// it is answered at once with this, and goes on with its reply, which the voice tool reads whole once the conversation
+// has gone quiet (mediator.ts). Until Nov 18 the answer came with the decision: GPT Live said "I'm checking that" and
+// waited for it, the decision was made on those words, and "nothing was sent… answer them yourself" then had it guess
+// ("The background runs are still in progress", of runs it could not see). Told first "you are told when it went", it
+// said "Sure, one moment" and waited for that, though nothing was to go (a live run, Nov 19): so it hears nothing of
+// what is to come, and when the quiet keeps its words it hears that too (turnOutcome), as before.
+export const askNoted = ({ profile: { name, product } }: Agent) =>
+  `Nothing is sent to ${product} at this moment. Go on with your reply now: answer what you can, and say plainly what only ${name} can do; the voice tool passes that on once you have both finished speaking.`;
+// Without Jev, GPT Live asked to pass on words a request already took: what came of them.
 // Words that wait because the operator hasn't finished are not "nothing for the agent": told so, the voice contradicted
 // itself when they went a moment later (Nov 4).
 export const turnOutcome = ({ profile: { name, product } }: Agent, { send, wait }: { send: boolean; wait?: boolean }) => send
@@ -162,9 +180,10 @@ export const wordsEnd = (said: string, max = 140) => {
 // sent, and Jev, which reads what the voice was told (perceived.ts), knows it too, with how long ago. Told only that "the
 // request" had been delivered, Jev sent the tail of a request as a second one seconds later: of 110 requests that followed
 // another within 30 s (Oct 31 to Nov 12), 31 added nothing for the agent, 13 of the 25 within 10 s (two blind judges).
-export const sentWords = ({ profile: { product } }: Agent, said?: string, fork = false) => {
+export const sentWords = ({ profile: { product } }: Agent, said?: string, fork = false, own = false) => {
   const where = fork ? `the fork of ${product}'s session` : product;
-  return said?.trim() ? `The operator's words went to ${where}: "${wordsEnd(said)}"` : `The request went to ${where}.`;
+  // The companion's own words sent it (mediator.ts, the quiet after it spoke): it hears that they went.
+  return said?.trim() ? `${own ? 'What you said' : "The operator's words"} went to ${where}: "${wordsEnd(said)}"` : `The request went to ${where}.`;
 };
 // Forks (forks.ts): the fork's own instruction, and what the voice is told when the focus moves.
 export const forkNote = ({ profile: { name } }: Agent) =>
@@ -195,12 +214,12 @@ const SPEAKERS: Record<Utterance['role'], string> = { operator: 'user', intermed
 /** One utterance as everything fdc writes the conversation down: the speaker, then the words. */
 export const spokenLine = ({ role, text }: Pick<Utterance, 'role' | 'text'>) => `${SPEAKERS[role]}: ${text.replace(/\s+/g, ' ').trim()}`;
 const transcript = (utterances: readonly Pick<Utterance, 'role' | 'text'>[]) => utterances.map(spokenLine).join('\n');
-const SPOKEN_REQUEST = `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines; "voice assistant:" lines are context. Earlier speech went with earlier voice requests.`;
+const SPOKEN_REQUEST = `User request (transcribed speech): the user's conversation with a voice assistant that passes their requests on to you, since their previous voice request, one utterance per line. The request is in the "user:" lines, and in what the assistant says you should make, check or change for them; its other lines are context. Earlier speech went with earlier voice requests.`;
 export const voiceRequest = (utterances: readonly Pick<Utterance, 'role' | 'text'>[], notes: readonly string[] = []) => `${SPOKEN_REQUEST}${notesText(notes)}\n\n${transcript(utterances)}`;
 /** A request cut from the conversation record (perceived.ts): the same lines the voice was given and Jev reads, since the session's previous request. */
 export const recordRequest = (conversation: string, notes: readonly string[] = []) => `${RECORD_REQUEST}${notesText(notes)}\n\n${conversation}`;
 const RECORD_REQUEST =
-  `User request (transcribed speech): the conversation record since your previous voice request, as the voice assistant that passes requests on to you got it: the user's speech and the assistant's, one utterance per line, and what the voice tool told the assistant meanwhile (the bracketed lines, each followed by its text; your own events, which it was sent too, are left out). The request is in the "user:" lines; the rest is context. A "<fork started>" line marks where the user moved a tangent to a fork of this session, opened in a window of its own; "<fork ended>" where they came back: what lies between went to the fork.`;
+  `User request (transcribed speech): the conversation record since your previous voice request, as the voice assistant that passes requests on to you got it: the user's speech and the assistant's, one utterance per line, and what the voice tool told the assistant meanwhile (the bracketed lines, each followed by its text; your own events, which it was sent too, are left out). The request is in the "user:" lines, and in what the assistant says you should make, check or change for the user; the rest is context. A "<fork started>" line marks where the user moved a tangent to a fork of this session, opened in a window of its own; "<fork ended>" where they came back: what lies between went to the fork.`;
 /**
  * A request joining one that still waits (outbox.ts): one request, as if cut once from where the first began to the
  * latest words. The first stays as written; the second's own notes follow its, and its conversation the first's.
@@ -245,6 +264,9 @@ export function outline(parts: PageState['parts'], room: number) {
   }
   return parts.map((part, i) => `${part.name}: ${allow[i] < texts[i].length ? `${texts[i].slice(0, allow[i])}…` : texts[i]}`).join('\n');
 }
+/** Said before the page state when the page beside the operator is another page than the one the voice was told of. */
+export const pageChanged = (from: string, to: string) =>
+  `The page beside the operator is a different page now: "${to.slice(0, 80)}", no longer "${from.slice(0, 80)}". Speak of what it shows; if the operator asks about the page they were on, say it changed.`;
 export function pageState(page?: PageState) {
   if (!page) return 'No page is open beside the operator now (this replaces the page you were told about before).';
   const head = `The page open beside the operator now (this replaces any page you were told about before): "${page.title.slice(0, 80)}"${page.about ? ` (${page.about.replace(/\s+/g, ' ').slice(0, 300)})` : ''}${page.others.length ? `; also open in other tabs: ${page.others.map(o => `"${o.slice(0, 60)}"`).join(', ')}` : ''}.${page.names.length ? ` Its parts, by name: ${page.names.join(', ')}.` : ''}`;

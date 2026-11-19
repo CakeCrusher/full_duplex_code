@@ -26,18 +26,18 @@ test("Jev's history leaves out words carried over from the connection before (it
 
 test('after the voice connection ends and another starts, Jev still reads the earlier conversation', async t => {
   const { h } = await harness(t);
-  const moments = fakeJev(h, m => m.made === 'replied' ? { needsAgent: .1, ready: .9 } : {});
+  const moments = fakeJev(h, m => m.made === 'quiet' ? { needsAgent: .1, ready: .9 } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
-  Object.assign(h.voiceSessions.mediator!, { operatorQuietMs: 50, replyStartMs: 30, replyMs: 60 });
+  h.voiceSessions.mediator!.quietMs = 50;
   h.live!.emit('event', { type: 'session.input_transcript.delta', delta: 'Keep the soft shapes one in mind for later.', start_ms: 0, end_ms: 900 });
-  await until(() => moments.some(m => m.made === 'replied'));
+  await until(() => moments.some(m => m.made === 'quiet'));
   await h.live!.close('operator ended voice');
   await h.startLive(undefined, page('p'), 'resume');
-  Object.assign(h.voiceSessions.mediator!, { operatorQuietMs: 50, replyStartMs: 30, replyMs: 60 });
+  h.voiceSessions.mediator!.quietMs = 50;
   const before = moments.length;
   h.live!.emit('event', { type: 'session.input_transcript.delta', delta: 'Go back to that one.', start_ms: 0, end_ms: 700 });
-  await until(() => moments.slice(before).some(m => m.made === 'replied'));
-  const job = moments.slice(before).find(m => m.made === 'replied')!;
+  await until(() => moments.slice(before).some(m => m.made === 'quiet'));
+  const job = moments.slice(before).find(m => m.made === 'quiet')!;
   assert.equal(job.latest?.text, 'Go back to that one.');
   assert.match(job.history ?? '', /user: Keep the soft shapes one in mind for later\./, "the connection before this one's words are in Jev's history");
 });

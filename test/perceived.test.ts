@@ -8,7 +8,7 @@ import path from 'node:path';
 import { claude } from '../src/adapters/claude/index.ts';
 import { HISTORY_BYTES, Jev } from '../src/core/jev.ts';
 import { beginPerceived, perceive, perceivedText } from '../src/core/perceived.ts';
-import { agentsOwn, catchUp, liveInstructions } from '../src/core/prompts.ts';
+import { notForTheAgent, catchUp, liveInstructions } from '../src/core/prompts.ts';
 import { DEFAULT_FEATURES, featuresFrom } from '../src/core/features.ts';
 import { ResumeStore, type ResumeRecord } from '../src/core/voice-resume.ts';
 import { fakeJev, harness, learn, page, settle, turn } from './live-fake.ts';
@@ -23,7 +23,7 @@ test("Jev's history is what GPT Live was sent and heard, word for word and in or
   const hook = (command: string) => h.observer.hook({ session_id: sessionId, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command }, tool_response: { stdout: 'ok' } });
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const live = lives[0], mediator = h.voiceSessions.mediator!;
-  mediator.operatorQuietMs = 60000;
+  mediator.quietMs = 60000;
   hook('npm test'); mediator.feed.flush();
   await settle();
   live.say('intermediary', 'Tests are running.', 1000);
@@ -33,7 +33,7 @@ test("Jev's history is what GPT Live was sent and heard, word for word and in or
   const before = live.appended.length;
   hook('git commit'); mediator.feed.flush();
   await settle();
-  await h.read({ trigger: 'turn', made: 'replied', spoken: mediator.history.spoken() });
+  await h.read({ trigger: 'turn', made: 'quiet', spoken: mediator.history.spoken() });
   const { history, latest } = moments.at(-1)!;
   assert.equal(latest!.text, 'Then commit it.');
   const startup = live.options.input.map((item: any) => `[sent by fdc at the start of the voice connection]\n${item.content[0].text}`);
@@ -48,15 +48,15 @@ test("Jev's history is what GPT Live was sent and heard, word for word and in or
 test('a fork of the last voice session continues what GPT Live perceived; a new session starts it again from its own startup input', async t => {
   const { h, lives } = await harness(t);
   const moments = fakeJev(h);
-  const read = async () => { await h.read({ trigger: 'turn', made: 'replied', spoken: h.voiceSessions.mediator!.history.spoken() }); return moments.at(-1)!.history!; };
+  const read = async () => { await h.read({ trigger: 'turn', made: 'quiet', spoken: h.voiceSessions.mediator!.history.spoken() }); return moments.at(-1)!.history!; };
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
-  h.voiceSessions.mediator!.operatorQuietMs = 60000;
+  h.voiceSessions.mediator!.quietMs = 60000;
   lives[0].say('operator', 'Keep the soft shapes one in mind for later.', 0);
   await settle(5);
   await lives[0].close('operator ended voice');
   await h.startLive(undefined, page('p'), 'resume');
   assert.equal(h.voiceSessions.run!.plan, 'fork');
-  h.voiceSessions.mediator!.operatorQuietMs = 60000;
+  h.voiceSessions.mediator!.quietMs = 60000;
   lives[1].say('operator', 'Go back to that one.', 0);
   await settle(5);
   const forked = await read();
@@ -65,7 +65,7 @@ test('a fork of the last voice session continues what GPT Live perceived; a new 
   assert.match(forked, /\[sent by fdc for the companion to say, \d+ s earlier\]\nVoice connection reopened/, "the fork's own greeting");
   await lives[1].close('operator ended voice');
   await h.startLive(undefined, page('p'), 'fresh');
-  h.voiceSessions.mediator!.operatorQuietMs = 60000;
+  h.voiceSessions.mediator!.quietMs = 60000;
   lives[2].say('operator', 'Start over.', 0);
   await settle(5);
   const fresh = await read();
@@ -93,7 +93,7 @@ test("a request to the agent leaves out the agent's own work, which the voice wa
   assert.match(request, /\[sent by fdc as silent context[^\]]*\]\nThe operator moved the page themselves; they are looking at the chart\.\n[\s\S]*voice assistant: Tests are running\.\n[\s\S]*user: Then commit it\./, 'what the voice tool told the voice, and the conversation, in order');
   const all = perceivedText(record, mediator.history.spoken(), Date.now(), HISTORY_BYTES);
   assert.match(all, /\[Claude hooks; part 1\/1\]\n.*npm test/s); assert.match(all, /ran the linter/);
-  const own = agentsOwn(claude);
+  const own = notForTheAgent(claude);
   assert.deepEqual([own('[Claude hooks; part 2/3]\n{"id":4}'), own('[Codex events; part 1/1]\n{}'), own('The request has been delivered to Claude Code.'), own('<fork started> A fork is open.')], [true, false, false, false]);
 });
 
@@ -139,12 +139,12 @@ test("every reading of Jev has the operator's instructions to the companion in f
   const moments = fakeJev(h);
   await h.voiceSessions.appendInstruction("Don't pass on questions you can answer yourself.");
   await learn(h, 'Talk me through the results yourself.');
-  await h.read({ trigger: 'turn', made: 'replied', spoken: [{ role: 'operator', text: 'Explain the chart.', at: Date.now() }] });
+  await h.read({ trigger: 'turn', made: 'quiet', spoken: [{ role: 'operator', text: 'Explain the chart.', at: Date.now() }] });
   assert.deepEqual(moments.at(-1)!.instructions, ["Don't pass on questions you can answer yourself.", 'I1: Talk me through the results yourself.']);
   assert.ok(h.voiceSessions.instructions().includes("Additional operator instructions:\nDon't pass on questions you can answer yourself.\n\nI1: Talk me through the results yourself."), "GPT Live's");
   let sent: any;
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { sent = JSON.parse(String(init.body)); return { ok: true, status: 200, json: async () => ({ answers: {} }) }; } });
-  await jev.read({ trigger: 'turn', made: 'replied', latest: { role: 'operator', text: 'Explain the chart.' }, instructions: ['I1: Talk me through the results yourself.'] });
+  await jev.read({ trigger: 'turn', made: 'quiet', latest: { role: 'operator', text: 'Explain the chart.' }, instructions: ['I1: Talk me through the results yourself.'] });
   assert.equal(sent.state.operator_instructions, 'I1: Talk me through the results yourself.');
   assert.equal(sent.state.current_settings, undefined);
   assert.match(sent.state.setting, /`operator_instructions` are the operator's instructions to the companion in force now; they hold for your reading too/);
@@ -161,7 +161,7 @@ test("with orchestration off (the default), Jev isn't asked about sessions, none
   const { h } = await harness(t);
   let listed = 0;
   h.sessionSwitch.sessions = async () => { listed++; return []; };
-  const moments = fakeJev(h, m => m.made === 'replied' ? { needsAgent: .1, ready: .9 } : {});
+  const moments = fakeJev(h, m => m.made === 'quiet' ? { needsAgent: .1, ready: .9 } : {});
   await turn(h, 'Turn off this session.');
   assert.equal(listed, 0);
   assert.equal(moments.find(m => m.made === 'ended')!.sessions, undefined);

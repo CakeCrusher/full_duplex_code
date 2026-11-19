@@ -15,28 +15,32 @@ const view: StageView = { tabId: 7, title: 'Briefing', url: 'http://localhost/b.
   commands: [{ id: 'next_section', say: 'Go to the next section' }, { id: 'goto_options', say: 'Go to the section "Options"' }], parts: [] };
 const stage = (h: any) => { h.stage = { tabId: 7, view, pages: new Map(), describe: async () => view, run: async () => ({ done: [], onScreen: '' }), follow: async () => null, observe() {}, close() {} }; };
 
-test("one request for the operator's turn, the same as it ends and once the voice has replied: whether their words go to the agent, what a command of the page does for them, their goal and the rest, with what is so at that moment", async () => {
+test("one request for the operator's turn, the same as GPT Live begins to answer and once the conversation has gone quiet: whether their words go to the agent, what a command of the page does for them, their goal and the rest, with what is so at that moment; and the companion's own words, when it spoke alone", async () => {
   const bodies: any[] = [];
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { bodies.push(JSON.parse(String(init.body))); return { ok: true, status: 200, json: async () => ({ answers: { needs_agent: { noul: .8 }, ready: { noul: .6 } } }) }; } });
   const latest = { role: 'operator' as const, text: 'Can the page show me the error bars?' };
   const ended = await jev.read({ trigger: 'turn', made: 'ended', latest, page: view, learn: true });
-  const replied = await jev.read({ trigger: 'turn', made: 'replied', latest, reply: "I can't show that; Claude would have to add it.", page: view, learn: true });
+  const replied = await jev.read({ trigger: 'turn', made: 'quiet', latest, reply: "I can't show that; Claude would have to add it.", page: view, learn: true });
   assert.deepEqual(bodies[1].questions, bodies[0].questions, 'the same questions both times');
-  const { voice_reply: before, ...first } = bodies[0].state, { voice_reply: after, ...second } = bodies[1].state;
+  const { voice_reply: before, why: early, ...first } = bodies[0].state, { voice_reply: after, why: quiet, ...second } = bodies[1].state;
   assert.deepEqual(second, first, 'over the same state');
   assert.deepEqual([before, after], ['(the companion has not replied)', "I can't show that; Claude would have to add it."], 'with what the companion has said by then');
+  assert.match(early, /the voice companion has replied to them \(`voice_reply`, what it has said so far\)/);
+  assert.match(quiet, /^The conversation has gone quiet: neither the operator nor the voice companion has spoken for a moment\. `voice_reply` is everything the companion said in reply/, 'and why it is asked: the quiet is when what goes to the agent is decided');
+  assert.equal(first.page_done, '(none)', 'with a page open, what ran on it for these words: nothing, so the companion saying it shows something is only saying so');
   assert.deepEqual(Object.keys(bodies[0]).sort(), ['model', 'questions', 'state'], 'which of the two it is stays in the record: Jev is not told');
   for (const name of ['needs_agent', 'ready', 'companion_only', 'goal', 'page_command', 'page_asked', 'page_more', 'behave', 'design_talk', 'lasting']) assert.ok(name in bodies[0].questions, name);
   assert.ok(!('standby' in bodies[0].questions), 'Standby is read later, once the conversation has gone quiet');
   assert.match(bodies[0].state.page_commands, /^- Go to the next section\n- Go to the section "Options"$/);
-  assert.match(bodies[0].state.why, /the voice companion has replied to them \(`voice_reply`, what it has said so far\)/);
-  assert.match(bodies[0].questions.needs_agent.instructions, /^Do the latest words need the coding agent, now that the voice companion has replied/);
+  assert.match(bodies[0].questions.needs_agent.instructions, /^Do the latest words need the coding agent, now that the voice companion has said all it had to say \(`voice_reply`\)\?$/);
+  assert.match(bodies[0].questions.needs_agent.criteria.true, /it promises what it cannot deliver by talking or with the page's commands .* and gives no answer itself; or it says it is showing or doing something on the page that no command did \(`page_done`\)\.$/, "what the companion's reply leaves with the agent goes to it");
+  assert.match(bodies[0].questions.needs_agent.criteria.false, /being shown, walked or talked through something that exists, which the companion does, never the agent/);
   assert.match(bodies[0].questions.page_command.instructions, /does what the operator asks for in the latest words/, 'with a page open, what they ask of it: its commands do that without the agent');
   assert.match(bodies[0].questions.page_asked.instructions, /ask for something to be done or shown on the page right now/, 'only what they ask for: a remark or a question runs nothing');
   assert.ok(!('withheld' in bodies[0].questions), 'no instructions in force, nothing for them to keep from the agent');
   assert.equal(bodies[0].state.saying, undefined, 'no words waiting from before');
   assert.deepEqual([ended.needsAgent, ended.ready, replied.needsAgent, replied.ready], [.8, .6, .8, .6]);
-  const silent = await jev.read({ trigger: 'turn', made: 'replied', latest });
+  const silent = await jev.read({ trigger: 'turn', made: 'quiet', latest });
   assert.equal(bodies[2].state.voice_reply, '(the companion has not replied)');
   assert.equal(bodies[2].state.page_commands, undefined, 'no page, no commands');
   assert.equal(silent.needsAgent, .8);
@@ -45,7 +49,7 @@ test("one request for the operator's turn, the same as it ends and once the voic
   const kept = await jev.read({ trigger: 'turn', latest, instructions: ["I1: Don't delegate everything to Claude; make adjustments yourself when you can."] });
   assert.match(bodies[3].questions.withheld.instructions, /keep the latest words from the coding agent/, "with instructions in force, whether they keep these words from the agent");
   assert.equal(kept.withheld, 0, 'as Jev answered');
-  const done = await jev.read({ trigger: 'turn', made: 'replied', latest, page: view, done: [{ id: 'goto_options', say: 'Go to the section "Options"', shown: 'Options: three ways forward.' }] });
+  const done = await jev.read({ trigger: 'turn', made: 'quiet', latest, page: view, done: [{ id: 'goto_options', say: 'Go to the section "Options"', shown: 'Options: three ways forward.' }] });
   assert.equal(bodies[4].state.page_done, '1. Go to the section "Options" → Options: three ways forward.', 'what the voice tool did on the page for these words, for reading whether anything is left for the agent');
   assert.equal(done.needsAgent, .8);
   // Words of an earlier turn that still wait (the operator hadn't finished): the questions about sending read all they are
@@ -53,83 +57,93 @@ test("one request for the operator's turn, the same as it ends and once the voic
   await jev.read({ trigger: 'turn', latest: { role: 'operator', text: 'and add a legend to it.' }, saying: 'Make a chart of the scores and add a legend to it.', sent: { ago: 3000, said: 'Open the report.' }, working: 4000, fork: 'main' });
   const whole = bodies[5];
   assert.deepEqual([whole.state.latest, whole.state.saying], ['user: and add a legend to it.', 'user: Make a chart of the scores and add a legend to it.']);
-  assert.match(whole.questions.needs_agent.instructions, /^Does what the operator is saying \(`saying`: all they have said that is not decided yet, ending with the latest words\) need the coding agent, now that the voice companion has replied/);
+  assert.match(whole.questions.needs_agent.instructions, /^Does what the operator is saying \(`saying`: all they have said that is not decided yet, ending with the latest words\) need the coding agent, now that the voice companion has said all it had to say/);
   assert.match(whole.questions.ready.instructions, /^Have the operator finished saying what they want for now \(`saying`: all they have said that is not decided yet, ending with the latest words\), so that a good listener/);
   assert.match(whole.questions.now.instructions, /Must what the operator is saying \(`saying`\) reach it now/);
   assert.match(whole.questions.adds.instructions, /Does what the operator is saying \(`saying`\) give the agent anything it needs beyond that request\?$/);
   assert.match(whole.questions.tangent.instructions, /^Does what the operator is saying \(`saying`\) belong in a fork of the coding agent's session .*: does it turn aside to ask something .*, or ask for a fork\?$/);
   assert.match(whole.questions.goal.instructions, /^Do the latest words set what the operator wants/, 'the goal, like the page and the learner, from the new words');
+  // The companion spoke and the operator said nothing new: whether what it said leaves something with the agent.
+  const own = await jev.read({ trigger: 'voice', latest: { role: 'intermediary', text: 'For this, a drawing would help: one that shows both files.' }, sent: { ago: 3000, said: 'Open the report.' } });
+  assert.deepEqual(Object.keys(bodies[6].questions), ['needs_agent', 'adds'], 'that, and moments after a request, whether it adds to it');
+  assert.equal(bodies[6].state.latest, 'voice assistant: For this, a drawing would help: one that shows both files.');
+  assert.match(bodies[6].state.why, /^The conversation has gone quiet after the voice companion spoke/);
+  assert.match(bodies[6].questions.needs_agent.instructions, /Do the companion's words leave something with the coding agent that has not gone to it yet\?$/);
+  assert.equal(own.needsAgent, .8);
 });
 
-test("the job delegation waits past the voice's acknowledgments for what it makes of the words, or until it stops", async t => {
+test("what goes to the agent is decided once neither side has spoken for the quiet time: with all the voice said, however long it went on", async t => {
   const { h } = await harness(t);
-  const moments = fakeJev(h, m => m.made === 'replied' ? { needsAgent: /don't know/.test(m.reply ?? '') ? .9 : .1, ready: .9 } : { page: pageReading() });
+  const moments = fakeJev(h, m => m.made === 'quiet' ? { needsAgent: /don't know/.test(m.reply ?? '') ? .9 : .1, ready: .9 } : { page: pageReading() });
   stage(h);
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const mediator = h.voiceSessions.mediator!;
-  Object.assign(mediator, { replyMs: 4000, replyStartMs: 1000, replyPauseMs: 1500, operatorQuietMs: 60000 });
+  mediator.quietMs = 1500;
   const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); };
   const live = h.voiceSessions.live!;
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'What does the dashed divider mean?', start_ms: 0, end_ms: 900 });
-  // GPT Live starting to answer ends the operator's turn: the voice tool's own reading is made at once.
+  // GPT Live starting to answer: the page is read at once for what the operator asks of it.
   live.emit('event', { type: 'session.output_transcript.delta', delta: ' Good question.' });
   await until(() => moments.some(m => m.made === 'ended'));
   await settle(300);
-  assert.ok(!moments.some(m => m.made === 'replied'), 'an acknowledgment says nothing of what the voice makes of the words');
+  assert.ok(!moments.some(m => m.made === 'quiet'), 'an acknowledgment says nothing of what the voice makes of the words: nothing is decided while it may go on');
   live.emit('event', { type: 'session.output_transcript.delta', delta: " I don't know that one; Claude would have to check what the dashed divider means. " });
+  const stopped = Date.now();
   await until(() => delivered.length === 1);
-  assert.equal(moments.find(m => m.made === 'replied')!.reply, "Good question. I don't know that one; Claude would have to check what the dashed divider means.");
+  assert.ok(Date.now() - stopped >= 1400, 'decided once it has been quiet for the quiet time');
+  assert.equal(moments.find(m => m.made === 'quiet')!.reply, "Good question. I don't know that one; Claude would have to check what the dashed divider means.", 'with all it said');
   assert.match(delivered[0].content, /What does the dashed divider mean\?/);
-  // A short answer and then quiet: it stopped, and that is its reply.
+  // A short answer and then quiet: that is its reply.
   await settle(1600);
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'And the legend?', start_ms: 5000, end_ms: 5600 });
   live.emit('event', { type: 'session.output_transcript.delta', delta: " It's the key." });
   const asked = Date.now();
-  await until(() => moments.filter(m => m.made === 'replied').length === 2);
+  await until(() => moments.filter(m => m.made === 'quiet').length === 2);
   const waited = Date.now() - asked;
   assert.ok(waited >= 1400 && waited < 3500, `decided ${waited} ms after the voice stopped`);
-  assert.equal(moments.filter(m => m.made === 'replied')[1].reply, "It's the key.");
+  assert.equal(moments.filter(m => m.made === 'quiet')[1].reply, "It's the key.");
 });
 
-test('with no reply, the job delegation reads after a short wait; a word of the operator ends the wait at once', async t => {
+test("with no reply, the quiet's request is the only one; the operator saying more before it puts it off, and it reads all they said", async t => {
   const { h } = await harness(t);
-  const moments = fakeJev(h, m => m.made === 'replied' ? { needsAgent: .1 } : {});
+  const moments = fakeJev(h, m => m.made === 'quiet' ? { needsAgent: .1 } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const mediator = h.voiceSessions.mediator!;
-  Object.assign(mediator, { replyMs: 5000, replyStartMs: 400, operatorQuietMs: 50 });
+  mediator.quietMs = 400;
   const live = h.voiceSessions.live!;
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Hmm, so that is the plan.', start_ms: 0, end_ms: 900 });
   const started = Date.now();
-  await until(() => moments.some(m => m.made === 'replied'));
+  await until(() => moments.some(m => m.made === 'quiet'));
   const waited = Date.now() - started;
-  assert.ok(waited >= 400 && waited < 2500, `waited ${waited} ms for a reply that never came`);
-  assert.equal(moments.find(m => m.made === 'replied')!.reply, undefined);
-  // A long wait for a reply, cut short when the operator says more.
-  Object.assign(mediator, { replyStartMs: 60000, replyMs: 60000 });
+  assert.ok(waited >= 350 && waited < 2500, `read ${waited} ms after their last word, GPT Live having said nothing`);
+  assert.equal(moments.find(m => m.made === 'quiet')!.reply, undefined);
+  assert.ok(!moments.some(m => m.made === 'ended'), 'GPT Live never began to answer: no request before the quiet');
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'And the next part.', start_ms: 3000, end_ms: 3800 });
-  await until(() => moments.filter(m => m.made === 'ended').length === 2);
-  live.emit('event', { type: 'session.input_transcript.delta', delta: ' Wait.', start_ms: 4500, end_ms: 4800 });
-  await until(() => moments.filter(m => m.made === 'replied').length >= 2);
+  await settle(250);
+  live.emit('event', { type: 'session.input_transcript.delta', delta: ' Wait.', start_ms: 4000, end_ms: 4300 });
+  const again = Date.now();
+  await until(() => moments.filter(m => m.made === 'quiet').length === 2);
+  assert.ok(Date.now() - again >= 350, 'the quiet counts from their last word');
+  assert.equal(moments.filter(m => m.made === 'quiet')[1].latest!.text, 'And the next part. Wait.', 'one reading, of all they said');
 });
 
 test('moments after a request reached the agent, Jev is asked whether the next words add to it: its tail stays with the voice, an addition goes', async t => {
   const bodies: any[] = [];
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url, init) => { bodies.push(JSON.parse(String(init.body))); return { ok: true, status: 200, json: async () => ({ answers: { needs_agent: { noul: .6 }, ready: { noul: .8 }, adds: { noul: .2 } } }) }; } });
-  const tail = await jev.read({ trigger: 'turn', made: 'replied', latest: { role: 'operator', text: 'Okay' }, sent: { ago: 4200, said: "We don't need test mode. Go ahead and launch it." } });
+  const tail = await jev.read({ trigger: 'turn', made: 'quiet', latest: { role: 'operator', text: 'Okay' }, sent: { ago: 4200, said: "We don't need test mode. Go ahead and launch it." } });
   assert.deepEqual(Object.keys(bodies[0].questions).sort(), ['adds', 'goal', 'needs_agent', 'ready']);
   assert.ok(!('just_sent' in bodies[0].state), 'what was sent is in the history the voice got, not a field of its own');
   assert.match(bodies[0].questions.adds.instructions, /the latest such line in `history` says which/);
   assert.equal(tail.adds, .2);
-  await jev.read({ trigger: 'turn', made: 'replied', latest: { role: 'operator', text: 'Okay' } });
+  await jev.read({ trigger: 'turn', made: 'quiet', latest: { role: 'operator', text: 'Okay' } });
   assert.ok(!('adds' in bodies[1].questions), 'asked only when a request went moments before');
 
   const { h } = await harness(t);
-  const moments = fakeJev(h, m => m.made === 'replied' ? { needsAgent: .7, ready: .9, ...m.sent && { adds: /blue/.test(m.latest!.text) ? .9 : .1 } } : {});
+  const moments = fakeJev(h, m => m.made === 'quiet' ? { needsAgent: .7, ready: .9, ...m.sent && { adds: /blue/.test(m.latest!.text) ? .9 : .1 } } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const mediator = h.voiceSessions.mediator!;
-  Object.assign(mediator, { replyStartMs: 50, operatorQuietMs: 50 });
   const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); };
-  const live = h.voiceSessions.live!, jobs = () => moments.filter(m => m.made === 'replied');
+  const live = h.voiceSessions.live!, jobs = () => moments.filter(m => m.made === 'quiet');
   live.emit('event', { type: 'session.input_transcript.delta', delta: "We don't need test mode. Go ahead and launch it.", start_ms: 0, end_ms: 900 });
   await until(() => delivered.length === 1);
   assert.equal(jobs()[0].sent, undefined, 'nothing had been sent before it');
@@ -154,17 +168,17 @@ test("with a page open, the job delegation knows what its controls can do, and t
   const { h } = await harness(t);
   stage(h);
   const runs: string[][] = []; h.stage.run = async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: '' }; };
-  const moments = fakeJev(h, m => m.made === 'replied' ? { needsAgent: .9, ready: .9 } : {});
+  const moments = fakeJev(h, m => m.made === 'quiet' ? { needsAgent: .9, ready: .9 } : {});
   const decided = await turn(h, 'Show me the error bars on that chart.');
   assert.equal(decided.send, true);
   assert.match(decided.note!, /^When they said it, the user was looking at "Briefing" \(http:\/\/localhost\/b\.html\) in the browser, at: section "Intro"\.$/);
-  assert.equal(moments.find(m => m.made === 'replied')!.page, view, "the job delegation reads the page's commands: what they can't do goes to the agent, to add");
+  assert.equal(moments.find(m => m.made === 'quiet')!.page, view, "the job delegation reads the page's commands: what they can't do goes to the agent, to add");
   assert.equal(moments.find(m => m.made === 'ended')!.page, view, "the voice tool's own reading has the page too: what they ask for that a command does, it does there");
   assert.deepEqual(runs, [], 'Jev chose no command: nothing runs');
 });
 
-test("the turn's request is made as it ends and again once the reply is in, the same both times; GPT Live asking to pass the operator's words on is one more signal that their turn has ended: the requests it leads to are those their quiet leads to, word for word, and nothing goes that Jev doesn't send", async t => {
-  // The same words, with a page open and an instruction in force: one turn ended by the operator's quiet, the other by GPT Live's delegation.
+test("GPT Live asking to pass the operator's words on sends nothing and is answered at once: the page is read then, as when it begins to answer, and the quiet's request is the one their quiet alone leads to, word for word; nothing goes that Jev doesn't send", async t => {
+  // The same words, with a page open and an instruction in force: once with nothing but the operator's quiet, once with GPT Live asking.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-live-'));
   const ended = async (by: 'quiet' | 'delegation', needs: number) => {
     const { h, lives } = await harness(t, { jevKey: 'tsk-test' }, root);
@@ -175,83 +189,92 @@ test("the turn's request is made as it ends and again once the reply is in, the 
     learn(h, 'Answer my questions yourself.');
     const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); };
     const live = h.voiceSessions.live!, mediator = h.voiceSessions.mediator!;
-    mediator.operatorQuietMs = 30; mediator.replyStartMs = 30;
+    mediator.quietMs = 1200;
     live.emit('event', { type: 'session.input_transcript.delta', delta: 'What does the second option cost?', start_ms: 0, end_ms: 900 });
     if (by === 'delegation') live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' }, offset_ms: 1000 });
-    await until(() => bodies.some(body => body.questions.needs_agent)); await settle(60);
-    return { bodies, delivered, told: lives[0].appended.filter(([kind]) => kind === 'thinking').map(([, text]) => text) };
+    await until(() => bodies.some(body => /gone quiet/.test(body.state.why))); await settle(60);
+    return { bodies: bodies.filter(body => body.questions.needs_agent), delivered, told: lives[0].appended.filter(([kind]) => kind === 'thinking').map(([, text]) => text) };
   };
   const quiet = await ended('quiet', .2), asked = await ended('delegation', .2);
-  assert.deepEqual(asked.bodies, quiet.bodies, 'the same two requests, state and questions: nothing tells Jev which signal ended the turn');
-  assert.equal(quiet.bodies.length, 2, "as the turn ends, and once the companion's reply is in (here, its silence)");
-  assert.deepEqual(quiet.bodies[1], quiet.bodies[0], 'the same request both times: nothing changed between them');
+  assert.equal(quiet.bodies.length, 1, "their quiet alone: one request, once the conversation has gone quiet");
+  assert.equal(asked.bodies.length, 2, 'GPT Live asking: the page is read then, and the rest at the quiet');
+  assert.deepEqual(asked.bodies[1], quiet.bodies[0], "the quiet's request is the same, state and questions: nothing tells Jev that GPT Live asked");
+  const { why: early, ...first } = asked.bodies[0].state, { why: late, ...second } = asked.bodies[1].state;
+  assert.deepEqual([asked.bodies[0].questions, first], [asked.bodies[1].questions, second], 'the same request both times, but for why it is asked');
   for (const name of ['needs_agent', 'ready', 'withheld', 'page_command', 'page_asked', 'goal', 'behave']) assert.ok(name in quiet.bodies[0].questions, `${name}: everything is asked, with the instruction and the page as at any turn`);
   assert.deepEqual([quiet.delivered.length, asked.delivered.length], [0, 0], "Jev kept them: GPT Live's asking sends nothing");
+  const noted = 'Nothing is sent to Claude Code at this moment. Go on with your reply now: answer what you can, and say plainly what only Claude can do; the voice tool passes that on once you have both finished speaking.';
+  assert.deepEqual([quiet.told.includes(noted), asked.told.includes(noted)], [false, true], 'its asking is answered at once, so that it goes on with its reply');
   const kept = "Nothing was sent to Claude Code: the voice tool found the operator's words need nothing from Claude. Answer them yourself; whatever they ask Claude to do goes to it when they say so.";
-  assert.deepEqual([quiet.told.includes(kept), asked.told.includes(kept)], [false, true], 'GPT Live hears what came of its asking');
+  assert.deepEqual([quiet.told.includes(kept), asked.told.includes(kept)], [false, true], 'and once the quiet keeps its words, what came of them: told to answer them itself (it did not ask in the other)');
   const sentQuiet = await ended('quiet', .8), sentAsked = await ended('delegation', .8);
-  assert.deepEqual(sentAsked.bodies, sentQuiet.bodies);
+  assert.deepEqual(sentAsked.bodies[1], sentQuiet.bodies[0]);
   assert.deepEqual([sentQuiet.delivered.length, sentAsked.delivered.length], [1, 1], 'Jev sends them, either way');
   assert.equal(sentAsked.delivered[0].content, sentQuiet.delivered[0].content, 'as the same request');
-  assert.deepEqual([sentQuiet.delivered[0].delegationId, sentAsked.delivered[0].delegationId], [null, 'd1'], 'and GPT Live is told they went as the answer to its asking');
 });
 
-test("each decision is acted on once: what the voice tool does itself from the request made as the turn ends, whether the words go to the agent from the one made once the reply is in", async t => {
+test("each decision is acted on once: what the operator asks of the page from the request made as GPT Live begins to answer; their goal, and whether their words go to the agent, from the one made once the conversation is quiet", async t => {
   const { h } = await harness(t);
-  // Jev answers the same both times: the words need the agent, and the operator sets a goal.
-  const moments = fakeJev(h, () => ({ needsAgent: .9, ready: .9, goal: { choice: 'new' as const, p: .9 } }));
+  stage(h);
+  const runs: string[][] = []; h.stage.run = async (ids: string[]) => { runs.push(ids); return { done: ids.map(id => view.commands.find(c => c.id === id)!), onScreen: 'Options: three ways forward.' }; };
+  // Jev answers the same both times: a command of the page does part of it, the words need the agent, and the operator sets a goal.
+  const moments = fakeJev(h, m => m.trigger === 'turn' ? { needsAgent: .9, ready: .9, goal: { choice: 'new' as const, p: .9 }, page: { command: 'goto_options', more: .1, asked: .9 } } : {});
   const goals: (string | undefined)[] = [], setGoal = h.voiceSessions.setGoal.bind(h.voiceSessions);
   h.voiceSessions.setGoal = ((text: string | undefined, options: any) => { goals.push(text); return setGoal(text, options); }) as typeof h.voiceSessions.setGoal;
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const mediator = h.voiceSessions.mediator!;
-  Object.assign(mediator, { operatorQuietMs: 30, replyStartMs: 500, replyMs: 5000 });
+  mediator.quietMs = 1200;
   const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); };
-  h.voiceSessions.live!.emit('event', { type: 'session.input_transcript.delta', delta: 'Explain the retry logic to me, and fix the header.', start_ms: 0, end_ms: 900 });
+  const live = h.voiceSessions.live!;
+  live.emit('event', { type: 'session.input_transcript.delta', delta: 'Take me to the options, explain them, and fix the header.', start_ms: 0, end_ms: 900 });
+  live.emit('event', { type: 'session.output_transcript.delta', delta: ' Sure, taking you there.' });
   const made = () => moments.filter(m => m.trigger === 'turn').map(m => m.made);
-  await until(() => made().length === 1);
-  await settle(150);
-  assert.deepEqual([made(), delivered.length, goals.length], [['ended'], 0, 1], 'as the turn ends: the goal is set, and nothing goes yet though Jev finds the words need the agent');
+  await until(() => runs.length === 1);
+  assert.deepEqual([made(), delivered.length, goals.length], [['ended'], 0, 0], 'as GPT Live begins to answer: the page goes where they asked, and nothing else is decided though Jev finds the words need the agent');
   await until(() => delivered.length === 1);
-  assert.deepEqual([made(), goals.length], [['ended', 'replied'], 1], 'once the reply is in (here, the wait for one is over): the words go, and the goal is not set again');
+  assert.deepEqual([made(), goals, runs.length], [['ended', 'quiet'], ['Take me to the options, explain them, and fix the header.'], 1], 'once the conversation is quiet: the goal is set from their whole turn, the words go, and the page is not moved again');
+  assert.deepEqual(moments.find(m => m.made === 'quiet')!.done!.map(c => c.id), ['goto_options'], 'the quiet\'s request reads what was done on the page');
 });
 
-test("GPT Live asking to pass on words the voice tool carried out on the page sends nothing: Jev's reading of its reply decides, as for any turn, and they don't go when voice ends", async t => {
+test("GPT Live asking to pass on words the voice tool carried out on the page sends nothing: Jev's reading at the quiet decides, as for any turn, and they don't go when voice ends", async t => {
   const { h, lives } = await harness(t);
   stage(h);
   const runs: string[][] = []; h.stage.run = async (ids: string[]) => { runs.push(ids); return { done: ids.map(id => view.commands.find(c => c.id === id)!), onScreen: 'Options: three ways forward.' }; };
   // Jev answers the same at both of the turn's requests: the page's command is run from the first only.
   const moments = fakeJev(h, m => m.trigger === 'turn' ? { page: { command: 'goto_options', more: .1, asked: .9 }, needsAgent: .1, ready: .9 } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  h.voiceSessions.mediator!.quietMs = 1200;
   const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); };
   const live = h.voiceSessions.live!;
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'Take me to the options.', start_ms: 0, end_ms: 900 });
   live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' }, offset_ms: 1000 });
-  await until(() => moments.some(m => m.made === 'replied'));
+  await until(() => moments.some(m => m.made === 'quiet'));
   await settle(50);
   assert.deepEqual(runs, [['goto_options']], 'what they asked for, done on the page, once');
-  assert.deepEqual(moments.find(m => m.made === 'replied')!.done!.map(c => c.id), ['goto_options'], 'the job delegation reads what was done');
+  assert.deepEqual(moments.find(m => m.made === 'quiet')!.done!.map(c => c.id), ['goto_options'], "the quiet's request reads what was done");
   assert.deepEqual(delivered, [], "GPT Live's asking sends nothing, and Jev finds nothing left for the agent");
   const thinking = lives[0].appended.filter(([kind]) => kind === 'thinking').map(([, text]) => text);
   assert.ok(thinking.some(text => text.startsWith('The voice tool did what the operator asked on the page (Go to the section "Options"); on screen now: Options: three ways forward.')), 'GPT Live hears what was done');
-  assert.ok(!thinking.some(text => text.startsWith('Nothing was sent')), 'and nothing else about its ask');
+  assert.ok(!thinking.some(text => text.startsWith('Nothing was sent')), 'and nothing else about its ask but that it sends nothing');
   h.voiceSessions.mediator!.handOff('operator ended voice');
   await settle(50);
   assert.deepEqual(delivered, [], 'done on the page: nothing to hand over when voice ends');
 });
 
-test("while the operator's instructions keep words from the agent and Jev keeps them, GPT Live, asking to pass them on, hears why nothing went; work, and what they ask of the agent by name, goes on Jev's reading", async t => {
+test("while the operator's instructions keep words from the agent and Jev keeps them, they are settled: they never go by themselves; work, and what they ask of the agent by name, goes on Jev's reading", async t => {
   const { h, lives } = await harness(t);
-  const moments = fakeJev(h, m => m.made === 'ended' ? { withheld: /tell Claude/i.test(m.latest!.text) ? .1 : .9 } : m.made === 'replied' ? { needsAgent: /histograms|tell Claude/i.test(m.latest!.text) ? .8 : .2, ready: .9 } : {});
+  const moments = fakeJev(h, m => m.made === 'quiet' ? { withheld: /tell Claude/i.test(m.latest!.text) ? .1 : .9, needsAgent: /histograms|tell Claude/i.test(m.latest!.text) ? .8 : .2, ready: .9 } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  h.voiceSessions.mediator!.quietMs = 800;
   const delivered: any[] = []; h.deliver = (request: any) => { delivered.push(request); h.voiceSessions.mediator!.delivered(request.id); };
-  const live = h.voiceSessions.live!, jobs = () => moments.filter(m => m.made === 'replied');
+  const live = h.voiceSessions.live!, jobs = () => moments.filter(m => m.made === 'quiet');
   const thinking = () => lives[0].appended.filter(([kind]) => kind === 'thinking').map(([, text]) => text);
   // An order the operator has told the companion to take itself: GPT Live asks, Jev reads, nothing goes.
   live.emit('event', { type: 'session.input_transcript.delta', delta: 'I want it with vanilla and decaf.', start_ms: 0, end_ms: 900 });
   live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd1', target: 'client' }, offset_ms: 1000 });
   await until(() => jobs().length === 1);
   await until(() => thinking().some(text => text === "Nothing was sent to Claude Code: the operator's instructions keep this from Claude. It goes only when they ask for Claude themselves."));
-  assert.equal(delivered.length, 0);
+  assert.equal(delivered.length, 0, 'GPT Live, asking to pass it on, hears why nothing went');
   // Work only the agent can do: Jev's own reading sends it, as ever.
   live.emit('event', { type: 'session.input_transcript.delta', delta: ' I need two histograms of the scores.', start_ms: 5000, end_ms: 5900 });
   live.emit('event', { type: 'session.delegation.created', delegation: { id: 'd2', target: 'client' }, offset_ms: 6000 });
@@ -266,7 +289,7 @@ test("while the operator's instructions keep words from the agent and Jev keeps 
 
 test("words that are only about how the companion behaves don't go to the agent on Jev's own reading either", async t => {
   const { h } = await harness(t);
-  fakeJev(h, m => m.made === 'ended' ? { companionOnly: .9 } : { needsAgent: .5, ready: .9 });
+  fakeJev(h, m => m.made === 'quiet' ? { companionOnly: .9, needsAgent: .5, ready: .9 } : {});
   const decided = await turn(h, "I want you to be in full control. I don't want you delegating to Claude Code.");
   assert.equal(decided.send, false);
   assert.match(decided.told!, /^The operator told you how you should behave/);
@@ -274,7 +297,7 @@ test("words that are only about how the companion behaves don't go to the agent 
 
 test("the voice answers what it can with moderate confidence, asks when in doubt, and leaves to the agent only what it can't do: the same account in its instructions and in Jev's", () => {
   const text = liveInstructions(claude, { jev: true }), shared = roles(claude, new Set(DEFAULT_FEATURES));
-  assert.match(shared, /It answers whatever it can with moderate confidence, from what it knows and what it was told \(this conversation, Claude's work, the page\); when in doubt about what the operator means, it asks; .* the voice tool reads their words, does what the page's controls can do, and sends Claude whatever needs it; .* Only a request that is fully stated and that neither the companion nor the page can do is Claude's\./);
+  assert.match(shared, /It answers whatever it can with moderate confidence, from what it knows and what it was told \(this conversation, Claude's work, the page\); when in doubt about what the operator means, it asks; .* Claude does the work .* and never presents\. .* what the page's controls can do, it does there as the operator asks; once the operator and the companion have both stopped talking, it sends Claude whatever needs it, be it what the operator asked for or what the companion said Claude should do; .* Only what is fully stated and that neither the companion nor the page can do is Claude's\./);
   assert.ok(text.includes(shared), "in the voice companion's instructions");
   assert.ok(new Jev({ apiKey: 'k', log: () => {}, agent: claude }).setting.includes(shared), "and in what Jev reads: written apart, Jev's account had drifted");
   assert.doesNotMatch(text, /never guess|would have to check|What you can answer/, 'no script for not knowing: it leaned on the agent');

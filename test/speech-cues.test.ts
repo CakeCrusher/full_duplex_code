@@ -73,7 +73,7 @@ test("the voice moves the page: a part's name at once, other turning words throu
   const { h, lives } = await harness(t);
   const runs: string[][] = [];
   h.stage = { tabId: 1, view, pages: new Map(), describe: async () => view, run: async (ids: string[]) => { runs.push(ids); return { done: [], onScreen: `at ${ids[0]}` }; }, follow: async () => null, observe() {}, close() {} } as any;
-  const moments = fakeJev(h, m => m.trigger === 'cue' ? { page: pageReading({ command: 'page_next_slide' }) } : m.made === 'replied' ? { needsAgent: .1 } : {});
+  const moments = fakeJev(h, m => m.trigger === 'cue' ? { page: pageReading({ command: 'page_next_slide' }) } : m.made === 'quiet' ? { needsAgent: .1 } : {});
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   h.presenter.speechCues.set(Stage.cues(view));
   await turn(h, 'take me to the sessions');
@@ -123,4 +123,12 @@ test("GPT Live is briefed on the page once it can be read: a new tab's blank pag
   await new Promise(resolve => setTimeout(resolve, 1700));
   assert.ok(lives[0].appended.some(([kind, text]) => kind === 'thinking' && /The page open beside the operator now \(this replaces any page you were told about before\): "Deck"/.test(text)), 'briefed on the second read');
   assert.ok(reads >= 2);
+  assert.ok(!lives[0].appended.some(([, text]) => /a different page now/.test(text)), 'the first page is no change of page');
+  // A link in the page leads to another one: the voice hears that it is a different page, before what it shows.
+  const other = { ...view, url: 'http://localhost/other.html', title: 'Teaching to completion' };
+  h.stage.describe = (async () => other) as any;
+  await h.voiceSessions.briefStage();
+  const told = lives[0].appended.map(([, text]) => text).filter(text => /a different page now/.test(text));
+  assert.equal(told.length, 1);
+  assert.match(told[0], /^The page beside the operator is a different page now: "Teaching to completion", no longer "Deck"\. Speak of what it shows; if the operator asks about the page they were on, say it changed\.\nThe page open beside the operator now/);
 });

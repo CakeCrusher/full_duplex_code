@@ -87,9 +87,9 @@ test('the record is one owner-only file beside the run\'s events, and holds what
   assert.match(told.text, /^You moved the page; on screen now: heading in "Options": Options — Three ways forward/);
 });
 
-test("each step of a move reaches the voice and Jev's next reading; the voice saying it can't answer has the operator's kept words read again", async t => {
+test("each step of a move reaches the voice and Jev's next reading", async t => {
   const { h, lives } = await harness(t);
-  const moments = fakeJev(h, m => m.trigger === 'cue' ? { page: pageReading({ command: 'goto_options', more: .9, gaveUp: /can't find/.test(m.latest!.text) ? .9 : .1 }) }
+  const moments = fakeJev(h, m => m.trigger === 'cue' ? { page: pageReading({ command: 'goto_options', more: .9 }) }
     : m.trigger === 'step' ? { page: pageReading({ command: 'row_fdc', more: 0 }) } : {});
   const answers = ['heading : Options — Three ways forward. Under it: FDC; Editor.', 'item in "Options": FDC — 231 reply loops'];
   let ran = 0;
@@ -97,7 +97,6 @@ test("each step of a move reaches the voice and Jev's next reading; the voice sa
     : { said: [answers[ran++ % 2]], before: place('section "Intro"', null), here: place('section "Options"', 'FDC') }, close() {} } as any;
   h.stage.tabId = 7;
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
-  let reconsidered = 0; h.mediator!.reconsider = () => { reconsidered++; };
   await h.presenter.show('Here are the options, starting with FDC.');
   const step = moments.find(m => m.trigger === 'step')!;
   assert.deepEqual(step.done!.map(c => [c.id, c.shown]), [['goto_options', answers[0]]], 'Jev chooses the next step knowing what the first one landed on');
@@ -105,9 +104,6 @@ test("each step of a move reaches the voice and Jev's next reading; the voice sa
   await until(() => told().length === 2);
   assert.equal(told()[0], `The page is on its way; it has reached: ${answers[0]}`, 'a step on the way, in short');
   assert.match(told()[1], /^You moved the page; on screen now: item in "Options": FDC — 231 reply loops/);
-  assert.equal(reconsidered, 0);
-  await h.presenter.show("I can't find the March numbers on this page.");
-  assert.equal(reconsidered, 1, 'the words that stayed with the voice are read again for the agent');
 });
 
 test('one command runs once for the same words, a step included; and a part already on screen is not moved to again for the next sentence about it', async t => {

@@ -276,14 +276,16 @@ try {
   await startVoice();
 
   // 1. A new report: a walkthrough asked for, pointing, switching the view, a side question, keep going.
-  await say(1, 'Hi. Please walk me through this report, section by section, starting with the projects by approaches grid.', { what: 'the page goes to the grid; the goal is kept', check: s => ran(s, 'page_go_grid_section') && !!harness.voiceSessions.goal });
+  // The goal is set once the conversation goes quiet, after the voice's first part of the walk, which can run long.
+  await say(1, 'Hi. Please walk me through this report, section by section, starting with the projects by approaches grid.', { what: 'the page goes to the grid; the goal is kept', check: s => ran(s, 'page_go_grid_section') && !!harness.voiceSessions.goal }, { wait: 60000 });
   await say(1, 'Which approach worked best for FDC? Point it out for me.', { what: 'a row or column of the grid is highlighted', check: s => ran(s, 'page_row_', 'page_col_') });
   await say(1, 'Can you switch the grid to likes per post?', { what: 'the grid shows likes per post', check: s => ran(s, 'page_show_lpp') });
   await say(1, 'Wait, what is a reply loop, exactly?', { what: 'a side question keeps the goal', check: () => !!harness.voiceSessions.goal });
   await say(1, "Okay, got it. Let's keep going.", { what: 'the walkthrough goes on: the page moves to another section', check: s => s.moves.length > 0 });
 
   // 2. A step-through box inside a section: the section, then the box's own steps.
-  await say(2, 'Now take me to the timing rule and walk me through its steps one at a time.', { what: 'the timing rule (its first step shows with it; with the walk on, the next steps follow)', check: s => ran(s, 'page_go_timing', 'goto_timing') });
+  // A walk that went on by itself may be on the timing rule already: then its first step is what shows it.
+  await say(2, 'Now take me to the timing rule and walk me through its steps one at a time.', { what: 'the timing rule (its first step shows with it; with the walk on, the next steps follow)', check: s => ran(s, 'page_go_timing', 'goto_timing') || (ran(s, 'page_rule_step_1') && /Timing rule/.test(s.where ?? '')) });
   await say(2, 'Okay, what is the next step?', { what: 'the next step of the rule', check: s => ran(s, 'page_rule_') });
 
   // 3. Voice ended and started again; then Standby and a wake.

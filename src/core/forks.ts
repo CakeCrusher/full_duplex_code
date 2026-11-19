@@ -38,8 +38,13 @@ export class Forks {
   get busy() { return this.asked > this.answered && Date.now() - Math.max(this.asked, this.active) < QUIET_TURN_MS; }
   open: typeof openWindow;
   constructor(bridge: Harness, { open = openWindow }: { open?: typeof openWindow } = {}) { this.bridge = bridge; this.open = open; }
-  /** Words can go to a fork: always, when the agent can fork and the main session has an ID; Jev decides which. */
-  get possible() { const b = this.bridge; return Boolean(b.agent.canFork) && Boolean(b.sessionId); }
+  /**
+   * Words can go to a fork when the agent can fork and the main session has a conversation to fork: a turn of its own, or
+   * one it resumed (its prompts and messages are observed). A new session has none until its first turn: asked aside
+   * as the operator's first words (forks open whether the agent works or not, since Nov 18), Claude found "no
+   * conversation" to fork and its window closed at once (Nov 19). Jev decides which words.
+   */
+  get possible() { const b = this.bridge; return Boolean(b.agent.canFork) && Boolean(b.sessionId) && b.observer.observations.some(o => o.kind === 'prompt' || o.kind === 'text'); }
   /**
    * Where each session is in the conversation record: when its last request was cut from it (mediator.ts, send). A fork
    * starts where the main session is; the main session, back from it, goes on from its own place, so its next request

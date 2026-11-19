@@ -18,6 +18,8 @@ export interface Tuning {
   holdLongestMs: number;
   thinkMs: number;
   pauseMs: number;
+  /** How long neither the operator nor GPT Live must have spoken before the voice tool decides what goes to the agent (ms; mediator.ts, quiet). */
+  quietMs: number;
   compactTokens: number;
   standbyAfterMs: number;
   wakeThreshold: number;
@@ -85,6 +87,18 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
     levels: [
     { value: 0, consequence: 'Updates wait the whole time the operator talks (default): requests reach the agent fastest and GPT Live talks over the operator least.' },
     { value: 700, consequence: 'About three times as many updates land while the operator talks, for operators who want updates as they speak; some requests reach the agent a few seconds later and GPT Live talks over them a little more.' },
+  ] },
+  // The operator's rule (Nov 18): what goes to the agent is decided once "neither the person nor the voice companion is
+  // talking for x amount of time", not after the reply's first sentence. Measured on the 402 turns of Nov 17 and 18
+  // (.scratch/quiet-nov18/timing.py), where that decision came a median of 3.3 s after the operator's last word, having
+  // read 7 words of the reply.
+  quietMs: { min: 500, max: 10000, asked: true, describe:
+    "How long neither the operator nor the voice companion must have spoken before the voice tool decides what goes to the coding agent (ms). It then reads the operator's turn whole, with all the companion said in reply; and when only the companion spoke, whether what it said leaves something with the agent. Lower: requests go sooner, more often before the companion has finished (it pauses inside a reply) or begun its reply, and what it says after that is read at the next quiet. Higher: the reply is whole more often, and every request waits that much longer. This one is the operator's to choose: change it only when they ask for it.",
+    levels: [
+    { value: 1000, consequence: 'Fastest: requests that went were decided a median of 2.5 s after the operator\'s last word. The companion pauses that long inside a reply 189 times in 2,305 pauses, and had not begun its reply yet in 71 of 402 turns.' },
+    { value: 1500, consequence: 'The default: a median of 3.8 s (6 s over all turns, as the reply is heard out), having read 12 words of the reply instead of 7. The companion pauses that long inside a reply 29 times in 2,305, and had not begun its reply yet in 37 of 402 turns.' },
+    { value: 2000, consequence: 'A median of 5.9 s for requests that went. The companion pauses that long inside a reply 11 times in 2,305, and had not begun its reply yet in 21 of 402 turns.' },
+    { value: 3000, consequence: 'Slowest: a median of 8.2 s for requests that went; the reply is almost always whole (1 pause in 2,305 is longer).' },
   ] },
   compactTokens: { min: 0, max: 1000000, describe:
     "When one batch's tool work (calls and their outputs) is over this many tokens, it becomes a single line saying which tools ran; the agent's own words, failures, prompts and turn ends still arrive whole. On the same 5.5 minutes of a real session, compacting at 900 halved GPT Live's unprompted talk (147 words instead of 304; 76 s of speech instead of 137) and it never started talking over the operator (twice without compaction), for 14% fewer tokens received. It can only cost questions whose answer is in tool details: 19 of the 55 real operator questions answerable from the session (36 need only the agent's own words). It also makes answers more accurate: replaying 19 real questions, GPT Live answered as many itself either way and was wrong less often with compaction (3 against 8); a text reader on 30 real questions was wrong 6 times at 900, 8 at 300, 13 at 2000 and 10 without compaction (10 with only the agent's words): too little detail and too much both cost accuracy. 1000000 never compacts.",
@@ -242,7 +256,7 @@ export const KNOBS: Record<keyof Tuning, Knob> = {
 };
 
 // Standby's defaults are the operator's choice in the Standby sandbox (Oct 18).
-export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, compactTokens: 900, standbyAfterMs: 20000, wakeThreshold: 50, wakeVoiceMs: 1000, standbyQuickMs: 5000, standbyQuickAfterMs: 60000, standbyFrom: 0.5,
+export const DEFAULT_TUNING: Tuning = { holdFirstMs: 1000, holdPerUpdateMs: 1000, holdLongestMs: 10000, thinkMs: 2000, pauseMs: 0, quietMs: 1500, compactTokens: 900, standbyAfterMs: 20000, wakeThreshold: 50, wakeVoiceMs: 1000, standbyQuickMs: 5000, standbyQuickAfterMs: 60000, standbyFrom: 0.5,
   speechPrice: 20, liveSpeechPrice: 20, toolPrice: 1, promptPrice: 1, messagePrice: 10, turnEndPrice: 50, failurePrice: 50, approvalPrice: 100, requestPrice: 100, forkFrom: 0.5 };
 
 /** Settings from partial overrides: unknown names and values out of range are refused. */

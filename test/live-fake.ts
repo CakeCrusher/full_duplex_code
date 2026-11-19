@@ -12,14 +12,17 @@ import { Harness } from '../src/core/bridge.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import type { Moment, PageJudgment, Reading } from '../src/core/jev.ts';
 import { routeTurn } from '../src/core/turn.ts';
-import { Mediator, type Decision, type Route } from '../src/core/mediator.ts';
+import { type Decision, type Route } from '../src/core/mediator.ts';
+import { DEFAULT_TUNING } from '../src/core/tuning.ts';
 import type { Spoken, SpokenRequest } from '../src/core/voice-history.ts';
 
-// The job delegation decides at once in tests that don't wait on GPT Live's reply (those set the mediator's own).
-Mediator.REPLY_MS = 0; Mediator.REPLY_START_MS = 0;
+// The conversation counts as quiet at once in tests: what is said in one go is decided together on the next tick.
+// Those that tell the turn's two requests apart, or wait on GPT Live's reply, set the mediator's own quietMs.
+DEFAULT_TUNING.quietMs = 0;
 
 export const settle = (ms = 20) => new Promise(resolve => setTimeout(resolve, ms));
-export const until = async <T>(check: () => T) => { for (let i = 0; i < 300; i++) { const v = check(); if (v) return v; await settle(); } throw new Error('timed out'); };
+// Fifteen seconds: what takes a moment alone can take several seconds on a busy machine (the whole suite runs files in parallel).
+export const until = async <T>(check: () => T) => { for (let i = 0; i < 750; i++) { const v = check(); if (v) return v; await settle(); } throw new Error('timed out'); };
 
 export class Live extends EventEmitter {
   state = 'new'; id?: string; reservation: string; transport = 'webrtc'; usageSeconds = 0; instructions: string;
@@ -117,11 +120,6 @@ export function fakeJev(h: Harness, reading: (moment: Moment) => Partial<Reading
 export const turn = (h: Harness, said: string, { cued }: { cued?: boolean } = {}) =>
   routeTurn(h, { utterances: [{ role: 'operator', text: said, endMs: 0 }], through: 0, seqs: [0], fresh: said, ...cued && { cued } }, [{ role: 'operator', text: said, at: Date.now() }]);
 
-/** A voice tool that decides a turn in one step (for the mediator's tests): its decision, as its two readings make it (turn.ts). */
-export const decides = (decide: (request: SpokenRequest, spoken: Spoken[]) => Promise<Decision>): Route => {
-  const made = new Map<SpokenRequest, Decision>();
-  return {
-    actions: async (request, spoken) => { const d = await decide(request, spoken); made.set(request, d); return { reading: d.actions?.reading, told: d.told, note: d.note, keptNote: d.send ? undefined : d.note }; },
-    job: async request => { const { told, ...d } = made.get(request)!; return d; },
-  };
-};
+/** A voice tool that decides a turn in one step (for the mediator's tests): its decision once the conversation is quiet (turn.ts); the page asks nothing, and GPT Live's own words send nothing unless `voice` says so. */
+export const decides = (decide: (request: SpokenRequest, spoken: Spoken[], reply?: string) => Promise<Decision>, voice: (spoken: Spoken[]) => Promise<Decision> = async () => ({ send: false })): Route =>
+  ({ page: async () => ({}), quiet: (request, spoken, reply) => decide(request, spoken, reply), voice });

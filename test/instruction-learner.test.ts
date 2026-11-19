@@ -96,7 +96,7 @@ test('without the turn reading, Jev reads each request sent to the harness, in t
   live.emit('event', { type: 'session.input_transcript.delta', delta: "From now on, don't read paths out loud.", start_ms: 1000, end_ms: 2500 });
   t.mock.timers.tick(10000); await new Promise(resolve => setImmediate(resolve));
   assert.equal(asked.length, 0, 'a pause alone asks nothing');
-  mediator.decide('d1');
+  mediator.early('d1');
   for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
   assert.equal(delivered.length, 1);
   assert.deepEqual(asked.map(({ trigger, spoken }) => [trigger, spoken.map(({ role, text }: any) => [role, text])]), [['unsent', [['intermediary', 'Claude finished the edit.'], ['operator', "From now on, don't read paths out loud."]]]]);

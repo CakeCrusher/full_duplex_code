@@ -71,7 +71,7 @@ export function perceive(record: ResumeRecord, entry: PerceivedEntry) {
  * in this conversation's voice connections before this one (record.turns, since the session that started it), and what
  * was said in this one (`spoken`: the words before the latest, as the caller reads them). Whole entries, but for the oldest,
  * cut to its end when only part of it fits. Jev reads all of it; a request to the agent is cut from `from` and leaves out
- * the agent's own work (prompts.ts, agentsOwn).
+ * the agent's own work (prompts.ts, notForTheAgent).
  */
 export function perceivedText(record: ResumeRecord, spoken: readonly Spoken[], until: number, maxBytes: number, from = -Infinity, leaveOut?: (text: string) => boolean): string {
   const since = record.perceivedSince ?? 0, thisConnection = spoken[0]?.at ?? Infinity;

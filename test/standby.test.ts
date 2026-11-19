@@ -595,12 +595,12 @@ test("Standby on Jev's word never begins with a request on its way to the agent,
 test("words the job delegation put off because the operator hadn't finished go to the agent when Standby comes, rather than at the next wake", async t => {
   const { fakeJev } = await import('./live-fake.ts');
   const f = await harness(t, { tuning: { standbyAfterMs: WINDOW, wakeThreshold: 10, wakeVoiceMs: 300 } });
-  fakeJev(f.h, m => m.made === 'replied' ? { needsAgent: .9, ready: .05 } : {});
+  fakeJev(f.h, m => m.made === 'quiet' ? { needsAgent: .9, ready: .05 } : {});
   const voicePage = page('voice-page');
   Object.assign(voicePage.ws, { terminate() {}, close() {}, on() {} });
   f.h.pages.all.set(voicePage.ws, voicePage);
   await f.h.startLive(undefined, voicePage, 'fresh');
-  Object.assign(f.h.voiceSessions.mediator!, { operatorQuietMs: 50, replyStartMs: 30, replyMs: 60 });
+  f.h.voiceSessions.mediator!.quietMs = 50;
   const delivered: any[] = []; f.h.deliver = (request: any) => { delivered.push(request); };
   f.lives[0].say('operator', 'Add a dark mode toggle, and also', 0);
   await until(() => f.h.voiceSessions.mediator!.undecided());

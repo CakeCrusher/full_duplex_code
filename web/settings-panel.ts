@@ -7,7 +7,8 @@ interface Status { tuning?: Record<string, number>; tuningPinned?: string[]; tun
 
 const GROUPS: [title: string, names: string[]][] = [
   ['How agent updates reach GPT Live', ['holdFirstMs', 'holdPerUpdateMs', 'holdLongestMs', 'thinkMs', 'pauseMs', 'compactTokens']],
-  ['Standby', ['standbyAfterMs', 'standbyFrom', 'wakeThreshold', 'standbyQuickMs', 'standbyQuickAfterMs']],
+  ['What goes to the agent', ['quietMs']],
+  ['Standby', ['standbyAfterMs', 'standbyFrom', 'wakeThreshold', 'wakeVoiceMs', 'standbyQuickMs', 'standbyQuickAfterMs']],
   ['Standby prices', ['speechPrice', 'liveSpeechPrice', 'toolPrice', 'promptPrice', 'messagePrice', 'turnEndPrice', 'failurePrice', 'approvalPrice', 'requestPrice']],
   ['Forks', ['forkFrom']],
 ];

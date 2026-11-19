@@ -88,8 +88,8 @@ export interface VoiceRequest {
   delegationId?: string | null;
   voiceSessionId?: string;
   queuedAt?: number;
-  /** The operator's own words in it: what the voice is told was sent (prompts.ts, sentWords). */
-  said?: string;
+  /** The operator's own words in it: what the voice is told was sent (prompts.ts, sentWords). The voice companion's, when what it said sent the request (own). */
+  said?: string; own?: boolean;
   /** It can wait for the end of the turn the agent is running: fdc holds it until then (outbox.ts). Otherwise it is steered into the turn. */
   followUp?: boolean;
   /** The session it goes to: the one in focus when it was sent (forks.ts). */

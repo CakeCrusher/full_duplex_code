@@ -154,6 +154,20 @@ Rules that make it work well:
 - **Keep the user's place.** Keep the view in the address (`#waves/2`) or `sessionStorage` and restore
   it on load, so a reload after your edit brings the page back where the user was, with any view or
   toggle they had on.
+- **Show your changes.** When you change a page the user has open, they should see it without asking. Have the page
+  reload itself when its files change, which with their place kept lands where they were:
+  ```js
+  // Any static server sends Last-Modified; list every file the page is built from.
+  const files = [location.pathname, 'data.js', 'page.controller.js'], seen = {};
+  setInterval(async () => {
+    for (const file of files) {
+      const stamp = (await fetch(file, { method: 'HEAD', cache: 'no-store' })).headers.get('last-modified');
+      if (seen[file] && stamp !== seen[file]) return location.reload();
+      seen[file] = stamp;
+    }
+  }, 2000);
+  ```
+  Where that can't work (a page opened from a file), reload their tab yourself after each change.
 - **Grow it.** When a request shows the user wanted to see something the page has no command for, add one (or a
   name, an annotation) in the controller's file, so the voice can show it next time.
 - **Change the page, change its controller.** Every edit that adds, removes, renames or reorders parts
