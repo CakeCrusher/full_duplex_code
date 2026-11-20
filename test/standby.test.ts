@@ -240,6 +240,39 @@ test("the agent's news wakes it, a few tool calls don't, and what it did meanwhi
   assert.ok(news >= 0 && news < appended.length - 1, 'the cue comes after the work it is about');
 });
 
+test("a fork's answer that comes on Standby wakes it and arrives as it would have live: before the way back, and the main session's work only from there", async t => {
+  const { h, lives, sent, goQuiet } = await quiet(t);
+  // The main session has a conversation to fork, and the operator turned aside: the fork has their question.
+  h.observer.observations.push({ kind: 'text', name: 'MessageDisplay', text: JSON.stringify({ hook_event_name: 'MessageDisplay', delta: 'Started on the toggle.' }), raw: {}, at: Date.now(), state: 'turn_finished', child: false });
+  h.forks.open = () => 'Terminal'; h.forks.shut = async () => 'closed';
+  await h.forks.start('By the way, why is the build slow?');
+  const fork = (data: Record<string, unknown>) => (h.forks.adapter!.observations as any).observe({ session_id: 'fork-session', ...data });
+  fork({ hook_event_name: 'SessionStart' });
+  h.forks.asked = Date.now();
+  await goQuiet();
+  assert.equal(h.forks.focus, 'fork', 'its answer is on the way: the fork keeps the focus into Standby');
+  // The main session works meanwhile: the voice hears none of it while the fork is in focus.
+  agent(h, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'npm run lint' }, tool_response: { stdout: 'main session busy meanwhile' } });
+  // The fork answers on Standby. Until Nov 20 that answer never reached the voice: 20 of 25 Codex forks' answers since Nov 19.
+  fork({ hook_event_name: 'UserPromptSubmit', prompt: 'Why is the build slow?' });
+  fork({ hook_event_name: 'MessageDisplay', message_id: 'f1', index: 0, final: true, delta: 'The build is slow because of the source maps.' });
+  fork({ hook_event_name: 'Stop', last_assistant_message: 'The build is slow because of the source maps.' });
+  h.voiceSessions.checkStandby();
+  assert.equal(h.forks.focus, 'main', 'it has answered: back to the main session');
+  assert.deepEqual(sent('voice_wake').map(e => e.reason), ['turn_end'], 'its answer wakes the voice');
+  // From the way back, the main session's work is the voice's again.
+  agent(h, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_response: { stdout: 'main session after the fork' } });
+  await h.startLive(undefined, h.voiceSessions.standby!.page, 'resume', true);
+  await until(() => lives[1]?.state === 'active');
+  await until(() => lives[1].appended.some(([, text]) => /main session after the fork/.test(text)));
+  const appended = lives[1].appended.map(([kind, text]) => `${kind}: ${text}`), at = (pattern: RegExp) => appended.findIndex(a => pattern.test(a));
+  const answer = at(/The build is slow because of the source maps/), back = at(/<fork ended> Back to the main session of Claude Code \(the conversation went quiet\)/), after = at(/main session after the fork/);
+  assert.ok(answer >= 0, "the fork's answer reaches the voice");
+  assert.ok(answer < back && back < after, `in the order it came: the answer, the way back, the main session's work since: ${appended.join(' | ')}`);
+  assert.equal(at(/main session busy meanwhile/), -1, "the main session's work while the fork was in focus weighs nothing for the voice, as live");
+  assert.match(appended.at(-1)!, /^commentary: Tell the operator now, in a sentence or two, what Claude has done since/, 'then the cue to report it');
+});
+
 test('ten tool calls in the window add up to a wake', async t => {
   const { h, sent, goQuiet } = await quiet(t);
   await goQuiet();

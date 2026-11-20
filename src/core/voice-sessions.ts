@@ -505,15 +505,17 @@ export class VoiceSessions {
     }
   }
   async connect(sdp: string | undefined, page: Page | undefined, plan: ResumePlan, automatic: boolean, attempt: { live?: LiveSession; requested?: Run['requested']; wake?: Wake } = {}) {
-    const bridge = this.bridge, { agent, observer, log, publish, fault, clean } = bridge, { name } = agent.profile;
+    // The session the voice hears (forks.ts): the fork in focus, or the main session.
+    const bridge = this.bridge, { agent, log, publish, fault, clean } = bridge, { name } = agent.profile, observer = bridge.forks.observer();
     const record = this.current(), recordId = this.recordFor, sourceId = plan === 'fork' ? record.liveSessionId : undefined;
     // Waking, GPT Live is told at the start that the conversation continues, rather than by an append after it starts.
     const startup = attachment(agent, bridge.cwd, observer.state) + (attempt.wake ? `\n\n${standbyWake(agent, attempt.wake.operator)}` : '');
     // A fork already has its source's startup input and conversation; it catches up on the work GPT Live had not received.
     const since = record.deliveredThrough ?? record.endedAt ?? 0;
     // Waking from Standby, the work from before it is history; the work during it arrives as it would have live (below).
+    // Either is the work the voice heard, or would have, live: each session's in its time in focus, a fork's too (forks.ts, heard).
     const wake = attempt.wake;
-    const observations = plan === 'fork' ? bridge.adapter.history().filter(o => o.at > since) : wake ? bridge.adapter.history().filter(o => o.at <= wake.since) : bridge.adapter.history();
+    const observations = plan === 'fork' ? bridge.forks.heard(since) : wake ? bridge.forks.heard(0, wake.since) : bridge.forks.heard();
     const history = recentHistory(agent, observations, Math.max(0, 7600 - Buffer.byteLength(startup)));
     // A new session starts knowing the page on the stage, last in its startup input: appended once it had started, the page
     // took GPT Live's timeline from the operator (after a wake, their first words reached it 6-25 s late, their beginning
@@ -549,16 +551,23 @@ export class VoiceSessions {
     // A dropped or moved session's unsent speech: this session takes it if it starts; meanwhile it isn't handed off.
     // The copies are now the ones to carry or hand off: if this connection fails to start, they go on from here.
     if (this.carried) { clearTimeout(this.carried.timer); mediator.history.carry(this.carried.mediator.history); this.carried.mediator = mediator; }
-    // The way back from a fork made as voice went on Standby (forks.ts): told now, and so in the record.
-    if (bridge.forks.untold) mediator.context.add('thinking', bridge.forks.untold);
-    // Instead of a greeting, a waking session gets the agent's work it missed as it would have live: a fork, all since its
-    // source last had it; a new session (told at its start that the conversation continues), what came during Standby.
+    // The way back from a fork made as voice went on Standby (forks.ts): told now, and so in the record, where it was made,
+    // after what the fork did before it.
+    const untold = bridge.forks.untold;
+    // Instead of a greeting, a waking session gets the agent's work it missed as it would have live (forks.ts, heard: each
+    // session's in its time in focus, so a fork's answer that came on Standby is news): a fork, all since its source last
+    // had it; a new session (told at its start that the conversation continues), what came during Standby.
     if (wake) {
-      const missed = plan === 'fork' ? since : wake.since;
-      for (const observation of bridge.adapter.history().filter(o => o.at > missed)) mediator.feed.add(observation);
+      const missed = bridge.forks.missed(plan === 'fork' ? since : wake.since);
+      for (const observation of missed.before) mediator.feed.add(observation);
+      if (untold) { mediator.feed.flush(); mediator.context.add('thinking', untold.text); }
+      for (const observation of missed.after) mediator.feed.add(observation);
       // Woken by the agent's news: after it, the cue to report it if it calls for that. Woken by the operator, their words are the cue.
       if (!wake.operator) { mediator.feed.flush(); mediator.context.add('commentary', standbyNews(agent)); }
-    } else if (plan === 'fork') mediator.context.add('thinking', catchUp(agent, bridge.cwd, observer.state) + (history.text ? historyIntro(agent) + history.text : ''), null, '', since);
+    } else {
+      if (plan === 'fork') mediator.context.add('thinking', catchUp(agent, bridge.cwd, observer.state) + (history.text ? historyIntro(agent) + history.text : ''), null, '', since);
+      if (untold) mediator.context.add('thinking', untold.text);
+    }
     log({ type: 'voice.starting', plan, automatic, from: sourceId, seededTurns: plan === 'seed' ? input.length - (history.text ? 2 : 1) : undefined, store: this.store, wake: wake?.reason,
       context: plan === 'fork' ? record.context : undefined, seeded: wake && plan !== 'fork' ? attempt.requested?.seeded ?? 'its fork failed' : undefined });
     publish(bridge.status());

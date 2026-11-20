@@ -402,7 +402,7 @@ test('with a fork in focus, words that are no question move the focus back: once
   h.forks.answered = Date.now() + 30;
   h.forks.quiet();
   assert.equal(h.forks.focus, 'main');
-  assert.match(h.forks.untold!, /the conversation went quiet/);
+  assert.match(h.forks.untold!.text, /the conversation went quiet/);
 });
 
 test('a fork takes only words Jev read; waiting work follows the same rules, and how sure Jev must be is a setting', async t => {
@@ -496,4 +496,24 @@ test('one record: the fork tags are in what the voice is given and Jev reads, an
   // Jev reads the same record, tags included.
   const record = h.voiceSessions.run!.record;
   assert.match(perceivedText(record, mediator.history.spoken(), Date.now(), 14000), /<fork started>[\s\S]*<fork ended>/);
+});
+
+test("a voice connection that continues an earlier one, with a fork in focus, catches up on the fork's work, not the main session's meanwhile", async t => {
+  const { h, lives, sessionId } = await harness(t); conversed(h);
+  h.forks.open = () => 'Terminal'; h.forks.shut = async () => 'closed';
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  await h.forks.start('By the way, why is the build slow?');
+  const fork = (data: Record<string, unknown>) => (h.forks.adapter!.observations as any).observe({ session_id: 'fork-session', ...data });
+  fork({ hook_event_name: 'SessionStart' });
+  await lives[0].close('operator ended voice');
+  // With no voice connected, the fork answers and the main session works.
+  (h.observer as any).observe({ session_id: sessionId, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'npm run lint' }, tool_response: { stdout: 'main session busy meanwhile' } });
+  fork({ hook_event_name: 'MessageDisplay', message_id: 'f1', index: 0, final: true, delta: 'The build is slow because of the source maps.' });
+  fork({ hook_event_name: 'Stop', last_assistant_message: 'The build is slow because of the source maps.' });
+  await h.startLive(undefined, page('p'), 'resume');
+  assert.equal(h.voiceSessions.run!.plan, 'fork');
+  await until(() => lives[1].appended.some(([, text]) => /continues an earlier one/.test(text)));
+  const caught = lives[1].appended.find(([, text]) => /continues an earlier one/.test(text))![1];
+  assert.match(caught, /The build is slow because of the source maps/, "the fork's work, which the voice hears while it is in focus");
+  assert.doesNotMatch(caught, /main session busy meanwhile/, "not the main session's, which weighs nothing for it then");
 });
