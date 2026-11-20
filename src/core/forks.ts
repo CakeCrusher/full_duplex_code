@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentAdapter, Observation } from './adapter.ts';
 import { QUIET_TURN_MS, TURN_ENDS, type Harness } from './bridge.ts';
 import { forkBack, forkFailed, forkNote, forkOpened } from './prompts.ts';
-import { openWindow, windowAlive, writeScript } from './window.ts';
+import { closeWindow, openWindow, windowAlive, writeScript } from './window.ts';
 import { perceive } from './perceived.ts';
 
 /** The tags the conversation record (perceived.ts) carries where a fork began and ended: the voice, Jev and both sessions read them as they are. */
@@ -16,7 +16,7 @@ export const FORK_STARTED = '<fork started>', FORK_ENDED = '<fork ended>';
 // Delegation doesn't change: the conversation from the cursor to the latest words goes to whichever session is in focus,
 // and GPT Live carries what it learns in either. The voice hears the focused session's work; the main session's weighs
 // nothing for it (nor for Standby) meanwhile. A fork doesn't last: on the way back to the main session fdc stops following
-// it (its window stays the operator's), and the next words for a fork open a new one. One fork at a time: a fork of a fork
+// it and closes its window (the agent there ends; its conversation is saved), and the next words for a fork open a new one. One fork at a time: a fork of a fork
 // is not offered.
 
 export type Focus = 'main' | 'fork';
@@ -26,7 +26,7 @@ export class Forks {
   focus: Focus = 'main';
   /** The fork in focus, if one is (fdc follows no other), whether its channel is connected, and how many forks this run opened. */
   adapter?: AgentAdapter; ready = false; count = 0;
-  /** Where the fork in focus is served on the bridge: each fork has its own, so one left behind (its window still open) can't take the next one's place. */
+  /** Where the fork in focus is served on the bridge: each fork has its own, so one left behind (its window, should it stay open) can't take the next one's place. */
   route = '';
   /** What the fork in focus is told as it starts: fdc's instructions and that it is a fork (an agent that takes them through its hook gets these there: endpoints.ts). */
   instructions = '';
@@ -36,8 +36,10 @@ export class Forks {
   asked = 0; answered = 0; active = 0;
   /** Its answer is on the way: not for ever, when it reports no end and does nothing (as for the main session's turn, bridge.ts). */
   get busy() { return this.asked > this.answered && Date.now() - Math.max(this.asked, this.active) < QUIET_TURN_MS; }
-  open: typeof openWindow;
-  constructor(bridge: Harness, { open = openWindow }: { open?: typeof openWindow } = {}) { this.bridge = bridge; this.open = open; }
+  open: typeof openWindow; shut: typeof closeWindow;
+  /** The window of the fork in focus: its script, and the app that opened it. */
+  window?: { script: string; how: string };
+  constructor(bridge: Harness, { open = openWindow, shut = closeWindow }: { open?: typeof openWindow; shut?: typeof closeWindow } = {}) { this.bridge = bridge; this.open = open; this.shut = shut; }
   /**
    * Words can go to a fork when the agent can fork and the main session has a conversation to fork: a turn of its own, or
    * one it resumed (its prompts and messages are observed). A new session has none until its first turn: asked aside
@@ -66,6 +68,7 @@ export class Forks {
       this.adapter = adapter; this.ready = false; this.wire(adapter, n);
       const launch = await adapter.launch({ baseUrl: b.baseUrl, token: b.agentToken });
       const how = this.open(writeScript(script, launch, b.cwd));
+      this.window = { script, how };
       this.watch(adapter, script);
       this.focus = 'fork'; this.cursors.fork = this.cursors.main; this.asked = this.answered = this.active = 0;
       // A fork that doesn't start (its window waits for the operator, or the agent failed there) gives the focus, and what was sent to it, back to the main session.
@@ -81,13 +84,14 @@ export class Forks {
       return forkFailed(b.agent, (error as Error).message);
     }
   }
-  /** Back to the main session: requests go to it again, the voice hears its work from its latest, and the fork is left behind. */
+  /** Back to the main session: requests go to it again, the voice hears its work from its latest, and the fork is left behind, its window closed. */
   back(why: string, record = true): string | undefined {
     const b = this.bridge;
     if (this.focus !== 'fork') return;
     this.focus = 'main';
     b.log({ type: 'fork.back', n: this.count, why });
-    const untaken = this.retire();
+    const untaken = this.retire(), window = this.window; this.window = undefined;
+    if (window) void this.shut(window.script, window.how).then(closed => b.log({ type: 'fork.closed', n: this.count, closed }), error => b.log({ type: 'fork.closed', n: this.count, error: (error as Error).message }));
     b.focusChanged();
     const text = `${FORK_ENDED} ${forkBack(b.agent, b.observer.state, why)}`, told = record ? this.record(text) : text;
     // What the fork hadn't taken goes to the main session now, after the decisions under way (which may send it themselves).
@@ -146,7 +150,7 @@ export class Forks {
   /** Into the record at once, before the turn's words are sent; the voice is told the same text (perceive keeps it once). */
   record(text: string) { const run = this.bridge.voiceSessions.run; if (run) perceive(run.record, { at: Date.now(), kind: 'thinking', text }); return text; }
   /**
-   * Stops following the fork (its window, if open, stays the operator's). A request the fork hadn't confirmed is taken
+   * Stops following the fork (the way back closes its window). A request the fork hadn't confirmed is taken
    * back as one whose delivery is uncertain (its words are free again, and the voice, told they went, hears so): the way
    * back then sends them to the main session, cut from its own place in the record. Never nowhere.
    */

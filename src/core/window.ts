@@ -45,7 +45,9 @@ export function writeScript(file: string, launch: { command: string; args: reado
   const lines = ['#!/bin/sh', `cd ${quote(cwd)} || exit 1`, ...env.PATH ? [`export PATH=${quote(env.PATH)}`] : [],
     ...Object.entries(launch.env).map(([name, value]) => `export ${name}=${quote(value)}`),
     // The agent's process ID (exec keeps the shell's), for fdc to see when it ends or its window closes (forks.ts).
-    `echo $$ > ${quote(`${file}.pid`)}`, `exec ${(answered ? [expect, '-f', answered, '--', launch.confirm!, ...command] : command).map(quote).join(' ')}`];
+    `echo $$ > ${quote(`${file}.pid`)}`,
+    // And its terminal, which names the window, for fdc to close it on the way back to the main session (closeWindow).
+    `tty > ${quote(`${file}.tty`)} 2>/dev/null`, `exec ${(answered ? [expect, '-f', answered, '--', launch.confirm!, ...command] : command).map(quote).join(' ')}`];
   fs.writeFileSync(file, `${lines.join('\n')}\n`, { mode: 0o700 });
   return file;
 }
@@ -77,4 +79,38 @@ export function openWindow(script: string, env: NodeJS.ProcessEnv = process.env,
   }
   if (process.platform === 'linux') return attempt('a terminal window', 'x-terminal-emulator', ['-e', script]);
   throw new Error(`fdc can't open a terminal window on ${process.platform}: run ${script} in a terminal`);
+}
+
+const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const running = (pid: number) => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; } };
+
+/**
+ * Closes a fork's window (forks.ts, on the way back to the main session): the agent there is hung up on, as closing the
+ * window by hand would (its conversation is saved as it goes, and can be resumed), then the window itself is closed, by
+ * its terminal, in the app that opened it. A window whose agent won't end is left open, never closed over a running
+ * process. Says what was done.
+ */
+export async function closeWindow(script: string, how: string, run: Run = (command, args) => spawnSync(command, args, { encoding: 'utf8', timeout: 10000 })): Promise<string> {
+  let pid: number | undefined, tty = '';
+  try { pid = Number(fs.readFileSync(`${script}.pid`, 'utf8')); } catch {}
+  try { tty = fs.readFileSync(`${script}.tty`, 'utf8').trim(); } catch {}
+  if (pid && pid !== process.pid && pid !== process.ppid && running(pid)) {
+    for (const [signal, ms] of [['SIGHUP', 3000], ['SIGTERM', 3000]] as const) {
+      try { process.kill(pid, signal); } catch {}
+      for (let waited = 0; waited < ms && running(pid); waited += 100) await pause(100);
+      if (!running(pid)) break;
+    }
+    if (running(pid)) return 'the agent did not end: its window is left open';
+  }
+  // Ghostty and a Linux terminal close the window as its program ends; iTerm and Terminal may keep it, ended, until closed.
+  if (!/^\/dev\/ttys?\w+$/.test(tty) || process.platform !== 'darwin') return 'ended';
+  // The window whose terminal it is, if any is still open (the app asked only if it runs).
+  const find = how === 'iTerm' ? 'repeat with w in windows\nrepeat with t in tabs of w\nrepeat with s in sessions of t\nif tty of s is wanted then\nclose w\nreturn\nend if\nend repeat\nend repeat\nend repeat'
+    : how === 'Terminal' ? 'repeat with w in windows\nrepeat with t in tabs of w\nif tty of t is wanted then\nclose w\nreturn\nend if\nend repeat\nend repeat' : undefined;
+  const close = find && `set wanted to "${tty}"\nif application "${how}" is running then\ntell application "${how}"\n${find}\nend tell\nend if`;
+  if (!close) return 'ended';
+  // Its shell may still be finishing as the agent ends: a moment for it, so that Terminal doesn't ask about it.
+  await pause(500);
+  const result = run('osascript', ['-e', close]);
+  return result.error || result.status !== 0 ? `ended; ${how} did not close its window: ${result.error?.message ?? String(result.stderr ?? '').trim()}` : 'closed';
 }

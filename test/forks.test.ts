@@ -12,7 +12,7 @@ import { forkArgs } from '../src/adapters/claude/arguments.ts';
 import { piForkArgs } from '../src/adapters/pi/arguments.ts';
 import { codexForkArgs } from '../src/adapters/codex/arguments.ts';
 import { pi } from '../src/adapters/pi/index.ts';
-import { openWindow, writeScript } from '../src/core/window.ts';
+import { closeWindow, openWindow, writeScript } from '../src/core/window.ts';
 import { Forks } from '../src/core/forks.ts';
 import { Jev } from '../src/core/jev.ts';
 import { claude } from '../src/adapters/claude/index.ts';
@@ -63,7 +63,7 @@ test("the fork's window runs the agent by its full path, in the project, with fd
   writeScript(file, { command: 'node', args: ['--version', "it's"], env: { FD_BRIDGE_TOKEN: 'secret' } }, '/tmp/my project');
   const script = fs.readFileSync(file, 'utf8');
   assert.match(script, /^#!\/bin\/sh\ncd '\/tmp\/my project' \|\| exit 1\nexport PATH=/);
-  assert.match(script, /export FD_BRIDGE_TOKEN='secret'\necho \$\$ > '[^']+\/fork\.command\.pid'\nexec '\/[^']+\/node' '--version' 'it'\\''s'\n$/);
+  assert.match(script, /export FD_BRIDGE_TOKEN='secret'\necho \$\$ > '[^']+\/fork\.command\.pid'\ntty > '[^']+\/fork\.command\.tty' 2>\/dev\/null\nexec '\/[^']+\/node' '--version' 'it'\\''s'\n$/);
   assert.equal(fs.statSync(file).mode & 0o777, 0o700, 'owner-only: it holds the bridge token');
   // An agent that waits for Enter on a prompt as it starts: in a window the operator is not at, fdc answers it.
   const asking = path.join(dir, 'asking.command'), expect = path.join(dir, 'expect'); fs.writeFileSync(expect, '');
@@ -81,6 +81,35 @@ test("the fork's window runs the agent by its full path, in the project, with fd
     assert.deepEqual(ran[1], ['open', '-a', 'Terminal', file]);
     assert.throws(() => openWindow(file, {}, () => ({ status: 1, stderr: 'no such app' })), /Terminal did not open a window: no such app/);
   }
+});
+
+test("on the way back, the fork's agent is hung up on and its window closed, by its terminal, in the app that opened it; one whose agent won't end is left open", async t => {
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR ?? '/tmp', 'fd-close-')), script = path.join(dir, 'fork.command');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const agent = spawn('/bin/sleep', ['60']); t.after(() => agent.kill('SIGKILL'));
+  const ended = new Promise(resolve => agent.on('exit', (_code, signal) => resolve(signal)));
+  fs.writeFileSync(`${script}.pid`, `${agent.pid}\n`); fs.writeFileSync(`${script}.tty`, '/dev/ttys042\n');
+  const ran: string[][] = [], run = (command: string, args: string[]) => { ran.push([command, ...args]); return { status: 0 }; };
+  const closed = await closeWindow(script, 'Terminal', run);
+  assert.equal(await ended, 'SIGHUP', 'hung up on, as closing the window by hand would');
+  if (process.platform === 'darwin') {
+    assert.equal(closed, 'closed');
+    assert.equal(ran[0][0], 'osascript');
+    assert.match(ran[0][2], /set wanted to "\/dev\/ttys042"\nif application "Terminal" is running then\ntell application "Terminal"\nrepeat with w in windows\nrepeat with t in tabs of w\nif tty of t is wanted then\nclose w/);
+    await closeWindow(script, 'iTerm', run);
+    assert.match(ran[1][2], /tell application "iTerm"[\s\S]*sessions of t\nif tty of s is wanted then\nclose w/);
+    assert.equal(await closeWindow(script, 'Ghostty', run), 'ended', 'Ghostty closes the window as its program ends');
+    assert.equal(ran.length, 2);
+  }
+  // An agent that ignores the hangup ends at SIGTERM; one that won't end keeps its window.
+  const stubborn = spawn(process.execPath, ['-e', "process.on('SIGHUP', () => {}); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"]); t.after(() => stubborn.kill('SIGKILL'));
+  await settle(300);
+  fs.writeFileSync(`${script}.pid`, `${stubborn.pid}\n`);
+  assert.equal(await closeWindow(script, 'Terminal', run), 'the agent did not end: its window is left open');
+  assert.equal(ran.length, 2, 'never closed over a running process');
+  // fdc's own process (as tests write it) is never signalled.
+  fs.writeFileSync(`${script}.pid`, `${process.pid}\n`); fs.rmSync(`${script}.tty`);
+  assert.equal(await closeWindow(script, 'Terminal', run), 'ended');
 });
 
 test("the turn's request asks whether the words belong in a fork while one can open or one is in focus, and, with one in focus, also whether the operator has left its matter", async () => {
@@ -104,6 +133,7 @@ test("the turn's request asks whether the words belong in a fork while one can o
 test("a fork opens in a window of its own: Claude's fork of the session, with its hooks and channel on routes of its own; requests and the voice follow the focus; on the way back the fork is left behind", async t => {
   const { h, lives, sessionId } = await harness(t, { features: ['instructions'] }); conversed(h);
   const scripts: string[] = []; h.forks.open = script => { scripts.push(script); return 'Terminal'; };
+  const shut: string[] = []; h.forks.shut = async script => { shut.push(script); return 'closed'; };
   await h.voiceSessions.start('sdp', page('p'), 'fresh');
   const mediator = h.voiceSessions.mediator!;
   const delivered: { at: string; id: string }[] = [];
@@ -155,6 +185,7 @@ test("a fork opens in a window of its own: Claude's fork of the session, with it
   assert.match(h.forks.back('the operator moved on')!, /^<fork ended> Back to the main session of Claude Code \(the operator moved on\)/);
   assert.equal(mediator.observer, h.observer);
   assert.equal(h.forks.adapter, undefined, 'fdc follows the fork no more');
+  assert.deepEqual(shut, [scripts[0]], 'and its window is closed');
   assert.equal((await post('/fork/1/hook', { session_id: 'fork-session', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_response: { stdout: 'late' } })).status, 409);
   h.deliver({ id: 'main-again', content: 'Now add the legend.', voiceSessionId: lives[0].id, said: 'Now add the legend.' });
   await until(() => delivered.length === 2);

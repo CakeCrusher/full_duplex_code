@@ -191,7 +191,7 @@ export const forkNote = ({ profile: { name } }: Agent) =>
 export const forkOpened = ({ profile: { product } }: Agent, how: string) =>
   `The operator turned aside, to ask something or for a fork: it goes to a fork of ${product}'s session, opening in a new ${how} window (it may ask them to confirm there before it starts). What is passed on now goes to the fork; the main session stays as it was, goes on with any work it had under way, and you won't hear from it until the voice tool moves back to it.`;
 export const forkBack = ({ profile: { product } }: Agent, state: string, why: string) =>
-  `Back to the main session of ${product} (${why}): what is passed on goes there again, and you hear its work from now; it is ${state}. The fork is left behind; its window stays open.`;
+  `Back to the main session of ${product} (${why}): what is passed on goes there again, and you hear its work from now; it is ${state}. The fork is left behind, and its window closed.`;
 export const forkFailed = ({ profile: { product } }: Agent, message: string) =>
   `A fork of ${product}'s session for the operator's words could not open (${message.slice(0, 160)}): it goes to the main session.`;
 // Told the words went, the voice then hears when their delivery failed: they go again with the next request.
