@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -11,9 +12,11 @@ import WebSocket from 'ws';
 import { forkArgs } from '../src/adapters/claude/arguments.ts';
 import { piForkArgs } from '../src/adapters/pi/arguments.ts';
 import { codexForkArgs } from '../src/adapters/codex/arguments.ts';
-import { pi } from '../src/adapters/pi/index.ts';
+import { pi, PiAdapter, sessionTitle as piTitle } from '../src/adapters/pi/index.ts';
+import { sessionTitle as claudeTitle } from '../src/adapters/claude/index.ts';
+import { AgyAdapter } from '../src/adapters/agy/index.ts';
 import { closeWindow, openWindow, writeScript } from '../src/core/window.ts';
-import { Forks } from '../src/core/forks.ts';
+import { forkName, Forks } from '../src/core/forks.ts';
 import { Jev } from '../src/core/jev.ts';
 import { claude } from '../src/adapters/claude/index.ts';
 import { codex } from '../src/adapters/codex/index.ts';
@@ -112,6 +115,107 @@ test("on the way back, the fork's agent is hung up on and its window closed, by 
   assert.equal(await closeWindow(script, 'Terminal', run), 'ended');
 });
 
+test("a fork is called after the session it forks, then \"fork\" and when it was made: one name for every agent, from the main session's adapter, or the start of its ID", async t => {
+  assert.equal(forkName('main', new Date(2026, 10, 20, 14, 32, 59)), 'main-fork-2026-11-20-1432');
+  assert.equal(forkName('  Fix the\nparser  ', new Date(2026, 0, 5, 9, 7)), 'Fix the parser-fork-2026-01-05-0907');
+  const { h, sessionId } = await harness(t, { features: ['instructions'] }); conversed(h);
+  const names: string[] = [];
+  h.forks.open = () => 'Terminal'; h.forks.shut = async () => 'closed';
+  const create = h.agent.create;
+  h.agent = { ...h.agent, create: session => { names.push(session.name!); return create(session); } };
+  const fork = async (sessionName: (() => Promise<string | undefined>) | undefined) => { (h.adapter as any).sessionName = sessionName; await h.forks.start('By the way?'); h.forks.back('the operator moved on'); return names.at(-1); };
+  assert.match((await fork(async () => 'data'))!, /^data-fork-\d{4}-\d{2}-\d{2}-\d{4}$/);
+  assert.match((await fork(async () => undefined))!, new RegExp(`^${sessionId.slice(0, 8)}-fork-`), 'no name: the start of its ID');
+  assert.match((await fork(async () => { throw new Error('no server'); }))!, new RegExp(`^${sessionId.slice(0, 8)}-fork-`), "the agent can't say");
+  Forks.NAME_MS = 30; t.after(() => { Forks.NAME_MS = 3000; });
+  assert.match((await fork(() => new Promise(() => {})))!, new RegExp(`^${sessionId.slice(0, 8)}-fork-`), "or doesn't answer in time: the fork doesn't wait for it");
+});
+
+test("each agent reads its session's name its own way: Claude's and Pi's from their session files, Codex's and Antigravity's from their servers", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-names-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  // Claude: the operator's name (--name, /rename) over the title Claude made up, the latest of each.
+  const transcript = path.join(dir, 'claude.jsonl'), record = (fields: object) => JSON.stringify({ sessionId: 's', ...fields }) + '\n';
+  fs.writeFileSync(transcript, record({ type: 'user', message: { content: 'hi' } }) + record({ type: 'ai-title', aiTitle: 'Parser fix' }));
+  assert.equal(claudeTitle(transcript), 'Parser fix');
+  fs.appendFileSync(transcript, record({ type: 'custom-title', customTitle: 'old' }) + record({ type: 'custom-title', customTitle: 'data' }) + record({ type: 'ai-title', aiTitle: 'Later title' }));
+  assert.equal(claudeTitle(transcript), 'data');
+  assert.equal(claudeTitle(path.join(dir, 'none.jsonl')), undefined);
+  assert.equal(claudeTitle(undefined), undefined);
+  // Pi: the session file's latest session_info entry (an empty one clears it), else the name Pi reported as it changed.
+  const piFile = path.join(dir, '2026-11-20T10-00-00-000Z_pi-session.jsonl'), entry = (fields: object) => JSON.stringify(fields) + '\n';
+  fs.writeFileSync(piFile, entry({ type: 'session', id: 'pi-session' }) + entry({ type: 'session_info', name: 'first' }) + entry({ type: 'message', message: { role: 'user', content: 'hi' } }) + entry({ type: 'session_info', name: 'Refactor auth' }));
+  assert.equal(piTitle(piFile), 'Refactor auth');
+  const piAdapter = new PiAdapter({ root: '/r', runDir: dir, cwd: dir, observation: 'events', agentArgs: [], instructions: '', clean: String, log: () => {}, sessionId: 'pi-session' });
+  piAdapter.observations.hook({ type: 'session_start', session_id: 'pi-session', session_file: piFile });
+  assert.equal(await piAdapter.sessionName(), 'Refactor auth');
+  fs.appendFileSync(piFile, entry({ type: 'session_info', name: '' }));
+  assert.equal(await piAdapter.sessionName(), undefined, 'cleared');
+  piAdapter.observations.hook({ type: 'session_info_changed', session_id: 'pi-session', name: 'renamed' });
+  fs.rmSync(piFile);
+  assert.equal(await piAdapter.sessionName(), 'renamed', 'not in the file yet: as Pi reported it');
+  piAdapter.close();
+  // Codex: the thread's name, from the app server.
+  const codexAdapter: any = codex.create({ root: '/r', runDir: dir, cwd: dir, observation: '', agentArgs: [], instructions: '', clean: String, log: () => {} });
+  assert.equal(await codexAdapter.sessionName(), undefined, 'no thread yet');
+  codexAdapter.observations.sessionId = 'main-thread';
+  codexAdapter.delivery.call = async (method: string, params: any) => method === 'thread/read' && params.threadId === 'main-thread' ? { result: { thread: { id: 'main-thread', name: 'Parser work', preview: 'Fix the parser' } } } : { error: { message: 'unexpected' } };
+  assert.equal(await codexAdapter.sessionName(), 'Parser work');
+  codexAdapter.delivery.call = async () => ({ result: { thread: { id: 'main-thread', name: null, preview: 'Fix the parser' } } });
+  assert.equal(await codexAdapter.sessionName(), undefined, 'a thread nobody named has none');
+  // Antigravity: the conversation's title in agy's list (the operator's, or the one agy made up), else its summary.
+  const agyAdapter = new AgyAdapter({ root: '/r', runDir: dir, cwd: dir, observation: '', agentArgs: [], instructions: '', clean: String, log: () => {} });
+  assert.equal(await agyAdapter.sessionName(), undefined, 'no conversation yet');
+  agyAdapter.observations.home = dir; agyAdapter.observations.adopt('conv-1');
+  agyAdapter.server.port = 1;
+  let summaries: Record<string, any> = { 'conv-1': { summary: 'One Word Reply', annotations: { title: 'data' } }, other: { summary: 'x' } };
+  agyAdapter.server.call = async (method: string) => method === 'GetAllCascadeTrajectories' ? { trajectorySummaries: summaries } : {};
+  assert.equal(await agyAdapter.sessionName(), 'data');
+  summaries = { 'conv-1': { summary: 'One Word Reply' } };
+  assert.equal(await agyAdapter.sessionName(), 'One Word Reply');
+  await agyAdapter.close();
+});
+
+test("each agent names its fork its own way: Claude and Pi with --name, Codex and Antigravity through their servers as the fork is made; a fork that can't be named still opens", async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-fork-names-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const name = 'data-fork-2026-11-20-1432', base = { root: '/r', runDir: dir, cwd: dir, observation: 'events', instructions: 'fdc', clean: String, log: () => {}, prefix: '/fork/1', name };
+  // Claude: --name on its own fork, the operator's own --name left out.
+  const claudeFork = claude.create({ ...base, agentArgs: ['--name', 'main', '--model', 'opus'], forkOf: 'main-session' });
+  const claudeArgs = (await claudeFork.launch({ baseUrl: 'http://127.0.0.1:1', token: 't' })).args;
+  assert.deepEqual(claudeArgs.slice(claudeArgs.indexOf('--resume'), claudeArgs.indexOf('--resume') + 5), ['--resume', 'main-session', '--fork-session', '--name', name]);
+  assert.equal(claudeArgs.filter(arg => arg === '--name').length, 1);
+  await claudeFork.close();
+  // Pi: the same, after --fork.
+  const piFork = pi.create({ ...base, agentArgs: ['-n', 'main', '--model', 'x'], forkOf: 'abcd1234' });
+  assert.deepEqual((await piFork.launch({ baseUrl: 'http://127.0.0.1:1', token: 't' })).args.slice(2), ['--model', 'x', '--fork', 'abcd1234', '--name', name]);
+  await piFork.close();
+  // Codex: the forked thread is named on the app server that made it, before its window resumes it.
+  const codexFork: any = codex.create({ ...base, agentArgs: [], forkOf: 'main-thread' });
+  const calls: [string, any][] = [];
+  codexFork.delivery.call = async (method: string, params: any) => { calls.push([method, params]); return method === 'thread/fork' ? { result: { thread: { id: 'fork-thread' } } } : { result: {} }; };
+  assert.deepEqual(await codexFork.fork('main-thread', dir), ['resume', 'fork-thread']);
+  assert.deepEqual(calls.map(([method]) => method), ['thread/fork', 'thread/name/set']);
+  assert.deepEqual(calls[1][1], { threadId: 'fork-thread', name });
+  codexFork.delivery.call = async (method: string) => method === 'thread/fork' ? { result: { thread: { id: 'fork-2' } } } : { error: { message: 'unknown method' } };
+  assert.deepEqual(await codexFork.fork('main-thread', dir), ['resume', 'fork-2'], 'not named: still opens');
+  // Antigravity: the fork is made by the main session's server, which names it (it starts with the main conversation's title).
+  const main = new AgyAdapter({ ...base, prefix: '', name: undefined, agentArgs: [] });
+  const mainFile = path.join(dir, 'main.jsonl');
+  fs.writeFileSync(mainFile, JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: new Date().toISOString(), content: 'hi' }) + '\n'
+    + JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: new Date().toISOString(), content: 'Hello' }) + '\n');
+  main.observations.adopt('main-conv', mainFile);
+  main.server.port = 1;
+  const agyCalls: [string, any][] = [];
+  main.server.call = async (method: string, body: any) => { agyCalls.push([method, body]); return method === 'ForkConversation' ? { newCascadeId: 'fork-conv' } : {}; };
+  const agyFork = new AgyAdapter({ ...base, agentArgs: [], forkOf: 'main-conv' });
+  agyFork.observations.home = dir;
+  assert.equal(await agyFork.fork('main-conv'), 'fork-conv');
+  assert.deepEqual(agyCalls, [['ForkConversation', { sourceCascadeId: 'main-conv', forkAtStepIndex: 1 }], ['UpdateConversationAnnotations', { cascadeId: 'fork-conv', annotations: { title: name }, mergeAnnotations: true }]]);
+  main.server.call = async (method: string) => { if (method === 'ForkConversation') return { newCascadeId: 'fork-conv-2' }; throw new Error('unknown method'); };
+  const unnamed = new AgyAdapter({ ...base, agentArgs: [], forkOf: 'main-conv' }); unnamed.observations.home = dir;
+  assert.equal(await unnamed.fork('main-conv'), 'fork-conv-2', 'not named: still opens');
+  for (const adapter of [main, agyFork, unnamed]) await adapter.close();
+});
+
 test("the turn's request asks whether the words belong in a fork while one can open or one is in focus, and, with one in focus, also whether the operator has left its matter", async () => {
   const bodies: any[] = [];
   const jev = new Jev({ apiKey: 'k', log: () => {}, fetch: async (_url: string, init: any) => { bodies.push(JSON.parse(String(init.body))); return { ok: true, status: 200, json: async () => ({ answers: { standby: { noul: .1 }, needs_agent: { noul: .9 }, tangent: { noul: .9 }, settled: { noul: .2 } } }) }; } } as any);
@@ -152,7 +256,7 @@ test("a fork opens in a window of its own: Claude's fork of the session, with it
   assert.match(told!, /goes to a fork of Claude Code's session, opening in a new Terminal window/);
   assert.equal(h.forks.focus, 'fork');
   const script = fs.readFileSync(scripts[0], 'utf8');
-  assert.match(script, new RegExp(`'--resume' '${sessionId}' '--fork-session'`));
+  assert.match(script, new RegExp(`'--resume' '${sessionId}' '--fork-session' '--name' '${sessionId.slice(0, 8)}-fork-\\d{4}-\\d{2}-\\d{2}-\\d{4}'`), "named after the session it forks: its ID's start, for a session without a name");
   const dir = path.dirname(scripts[0]), settings = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8')), mcp = JSON.parse(fs.readFileSync(path.join(dir, 'mcp.json'), 'utf8'));
   assert.ok(settings.hooks.Stop[0].hooks[0].args.at(-1).endsWith('/fork/1/hook'), "the fork's hooks have a route of their own");
   assert.ok(mcp.mcpServers.voice.env.FD_BRIDGE_URL.endsWith('/fork/1/channel'));
@@ -191,7 +295,9 @@ test("a fork opens in a window of its own: Claude's fork of the session, with it
   await until(() => delivered.length === 2);
   assert.deepEqual(delivered[1], { at: 'main', id: 'main-again' });
   // The next question aside opens a new fork, on a route of its own: the one left behind, its window still open, can't take its place.
+  (h.adapter as any).sessionName = async () => ' Parser\n work ';
   await h.forks.start('And what does CNS mean?');
+  assert.match(fs.readFileSync(scripts[1], 'utf8'), /'--name' 'Parser work-fork-\d{4}-\d{2}-\d{2}-\d{4}'/, "named after the main session's name, as Claude lists it");
   assert.equal(h.forks.route, '/fork/2');
   assert.equal(scripts.length, 2);
   await new Promise<void>(resolve => { const stale = new WebSocket(h.baseUrl.replace('http:', 'ws:') + '/fork/1/channel', { headers: { Authorization: `Bearer ${h.agentToken}` } }); stale.on('error', () => resolve()); stale.on('open', () => { stale.terminate(); assert.fail("the first fork's channel was taken again"); }); });

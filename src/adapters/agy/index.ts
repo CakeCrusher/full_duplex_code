@@ -80,12 +80,16 @@ export class AgyAdapter extends EventEmitter implements AgentAdapter {
     const step = forkPoint(main.observations.transcriptPath);
     const id = await main.server.fork(forkOf, step);
     this.session.log({ type: 'agy.forked', from: forkOf, conversation: id, step });
+    // Named before its window opens (it starts with the forked conversation's title); a fork that can't be named still opens.
+    const { name } = this.session;
+    if (name) await main.server.rename(id, name).catch(error => this.session.log({ type: 'agy.fork_unnamed', conversation: id, message: (error as Error).message }));
     this.observations.adopt(id);
     return id;
   }
   deliver(request: VoiceRequest) { return this.delivery.deliver(request); }
   answer(event: Record<string, any>) { return this.delivery.answer(event); }
   history() { return this.observations.observations; }
+  async sessionName() { const id = this.observations.sessionId; return id && this.server.port !== undefined ? this.server.title(id) : undefined; }
   async close() {
     this.delivery.close(); this.observations.close(); this.server.close();
     for (const [id, adapter] of sessions) if (adapter === this) sessions.delete(id);

@@ -15,6 +15,17 @@ import { INSTRUCTIONS_VARIABLE } from './extension.ts';
 
 // Pi: observed and reached through the companion's extension, which Pi loads
 // for this run only. It forwards Pi's events to /hook and takes requests at /pi.
+/** A session's name, as Pi shows it: its file's latest session_info entry (--name, /name; an empty one clears it). */
+export function sessionTitle(file: string | undefined): string | undefined {
+  if (!file) return;
+  let lines: string[]; try { lines = fs.readFileSync(file, 'utf8').split('\n'); } catch { return; }
+  for (const line of lines.reverse()) {
+    if (!line.includes('"session_info"')) continue;
+    let entry: any; try { entry = JSON.parse(line); } catch { continue; }
+    if (entry?.type === 'session_info') return typeof entry.name === 'string' && entry.name.trim() ? entry.name.trim() : undefined;
+  }
+}
+
 export class PiAdapter extends EventEmitter implements AgentAdapter {
   readonly profile = piProfile;
   readonly observations: PiObserver;
@@ -32,12 +43,16 @@ export class PiAdapter extends EventEmitter implements AgentAdapter {
   }
   launch({ baseUrl, token }: { baseUrl: string; token: string }): AgentLaunch {
     const { forkOf, prefix } = this.session;
-    // A fork (forks.ts): Pi's own --fork of the session, with the operator's options but not their choice of session.
-    const args = forkOf ? [...piForkArgs(this.session.agentArgs), '--fork', forkOf] : this.session.agentArgs;
+    // A fork (forks.ts): Pi's own --fork of the session, named (--name), with the operator's options but not their choice
+    // of session or name.
+    const { name } = this.session;
+    const args = forkOf ? [...piForkArgs(this.session.agentArgs), '--fork', forkOf, ...name ? ['--name', name] : []] : this.session.agentArgs;
     return { command: 'pi', args: piArgs(this.session.root, args), env: { FD_BRIDGE_URL: baseUrl, FD_BRIDGE_TOKEN: token, [INSTRUCTIONS_VARIABLE]: this.session.instructions, ...prefix && { FD_BRIDGE_PREFIX: prefix } }, files: {} };
   }
   deliver(request: VoiceRequest) { return this.delivery.deliver(request); }
   history() { return this.observations.observations; }
+  /** Its name in the session file (written as Pi goes), else the one Pi reported last, should the file not have it yet. */
+  async sessionName() { return sessionTitle(this.observations.sessionFile) ?? this.observations.name; }
   close() { this.delivery.close(); this.observations.close(); }
 }
 

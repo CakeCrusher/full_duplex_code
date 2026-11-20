@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -106,9 +107,19 @@ try {
   await until(() => run!.events().some(e => e.type === 'agent.input' && e.fork && String(e.text).includes(aside.id)), { label: 'the fork took the question', timeout: 120000 });
   const forkAnswer = await until(() => { const t = run!.text(since, true); return /idle\.txt/.test(t) && /steer\.txt/.test(t) ? t : ''; }, { label: "the fork's answer, from the session's history and files", timeout: 120000 });
   assert.equal(run.harness.sessionId, sessionId, 'the main session is still the one followed');
+  // Named after the main conversation, as agy lists it, once the fork has run turns of its own: what its own server says.
+  const named = run.events().find(e => e.type === 'fork.opened')?.name as string | undefined, mainTitle = await run.harness.adapter.sessionName?.();
+  const forkTitle = await (run.harness.forks.adapter as AgyAdapter).server.title(forkId!);
+  assert.match(named ?? '', /-fork-\d{4}-\d{2}-\d{2}-\d{4}$/, `the fork's name: ${named}`);
+  assert.equal(forkTitle, named, "the fork's title in agy");
+  // Back to the main session: fdc ends the fork's agy (its window, here a pseudo-terminal, has no app to close it).
+  const forkExited = new Promise(resolve => fork!.onExit(resolve));
   run.harness.forks.back('the test is done with the fork');
-  evidence.steps.fork = { conversation: forkId, forkedAt: run.events().find(e => e.type === 'agy.forked')?.step, answer: forkAnswer.slice(0, 200) };
-  fork?.write('/exit'); await delay(600); fork?.write('\r');
+  const closed = await until(() => run!.events().find(e => e.type === 'fork.closed'), { label: "the fork's window closed", timeout: 20000 });
+  await Promise.race([forkExited, delay(5000).then(() => assert.fail("the fork's agy still runs"))]);
+  const kept = (() => { try { return fs.readFileSync(path.join(os.homedir(), '.gemini', 'antigravity-cli', 'annotations', `${forkId}.pbtxt`), 'utf8'); } catch { return ''; } })();
+  assert.ok(kept.includes(JSON.stringify(named)), `the title kept with the conversation after its agy ended: ${kept}`);
+  evidence.steps.fork = { conversation: forkId, forkedAt: run.events().find(e => e.type === 'agy.forked')?.step, answer: forkAnswer.slice(0, 200), mainTitle, name: named, forkTitle, closed: closed.closed };
 
   // 6. Resumed with --conversation: the conversation, named by agy's log as it starts, remembers.
   await run.quit(); await run.harness.close(); run = undefined;

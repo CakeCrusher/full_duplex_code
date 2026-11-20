@@ -116,5 +116,16 @@ export class AgyServer extends EventEmitter {
     if (typeof reply?.newCascadeId !== 'string') throw new Error('Antigravity named no fork.');
     return reply.newCascadeId;
   }
+  /**
+   * A conversation's title, as agy lists it: the operator's, or the one agy made up from its first message (its summary
+   * when it has no title). From the list of conversations: the server's method for one conversation carries no title.
+   */
+  async title(conversation: string): Promise<string | undefined> {
+    const summary = (await this.call('GetAllCascadeTrajectories', {}))?.trajectorySummaries?.[conversation];
+    const title = summary?.annotations?.title ?? summary?.summary;
+    return typeof title === 'string' && title.trim() ? title.trim() : undefined;
+  }
+  /** Names a conversation: its title in agy's lists, kept with it (annotations/<id>.pbtxt). A fork starts with the title of the conversation it forks. */
+  async rename(conversation: string, title: string) { await this.call('UpdateConversationAnnotations', { cascadeId: conversation, annotations: { title }, mergeAnnotations: true }); }
   close() { this.tail?.stop(); }
 }

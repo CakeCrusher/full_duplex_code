@@ -35,6 +35,8 @@ export class PiObserver extends AgentObserver {
   /** How the run's last assistant message ended: an error makes a failed turn, unless Pi retries. */
   lastStop?: string;
   restored = new Set<string>();
+  /** The session's file, as Pi names it on starting it, and the name Pi last reported for it (session_info_changed: /name). */
+  sessionFile?: string; name?: string;
   /** What each running tool call was asked (tool_execution_start), until it ends: Pi's end event carries only the result. */
   started = new Map<string, Record<string, any>>();
   constructor({ sessionId, clean = String, log = () => {} }: { sessionId?: string; clean?: (text: string) => string; log?: Logger }) {
@@ -100,7 +102,7 @@ export class PiObserver extends AgentObserver {
     const id = typeof event.session_id === 'string' && event.session_id ? event.session_id : undefined;
     if (id && (this.sessionId === undefined || (event.type === 'session_start' && id !== this.sessionId))) {
       const previous = this.sessionId;
-      this.sessionId = id; this.log({ type: 'agent.session', sessionId: id, previous }); this.emit('session', id);
+      this.sessionId = id; this.sessionFile = this.name = undefined; this.log({ type: 'agent.session', sessionId: id, previous }); this.emit('session', id);
     }
     if (!id || id !== this.sessionId) {
       this.log({ type: 'agent.hook_refused', name: event.type, session_id: event.session_id, sessionId: this.sessionId });
@@ -108,7 +110,8 @@ export class PiObserver extends AgentObserver {
     }
     event = JSON.parse(this.clean(JSON.stringify(event)));
     const name = event.type;
-    if (name === 'session_start') this.restore(event.session_file);
+    if (name === 'session_start') { if (typeof event.session_file === 'string') this.sessionFile = event.session_file; this.restore(event.session_file); }
+    if (name === 'session_info_changed') this.name = typeof event.name === 'string' && event.name.trim() ? event.name.trim() : undefined;
     // Pi's own `type` is the event's name; the log record keeps its own type.
     this.log({ ...event, type: 'agent.hook', name });
     this.observe(event);

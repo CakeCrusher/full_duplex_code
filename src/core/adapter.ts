@@ -185,6 +185,11 @@ export interface AgentSession {
   log: (event: Record<string, unknown>) => void;
   /** This session is a fork of that one (its ID), opened in its own window for a tangent (forks.ts). */
   forkOf?: string;
+  /**
+   * The name this session is to have in the agent's own list of sessions: a fork's, after the session it forks
+   * (forks.ts, forkName). Each adapter gives it the agent's own way.
+   */
+  name?: string;
   /** The script a fork's window runs (window.ts): what the adapter keeps running for that window ends with it. */
   window?: string;
   /** Where this session's hooks and sockets are served on the bridge, before their paths: '' for the main session, '/fork/<n>' for the run's nth fork. */
@@ -235,6 +240,11 @@ export interface AgentAdapter extends EventEmitter {
   answer?(event: Record<string, any>): unknown;
   /** Observations so far, oldest first, including any restored from a resumed session. */
   history(): readonly Observation[];
+  /**
+   * The session's name in the agent's own list of sessions (the operator's, or one the agent made up for it), if it has
+   * one: its fork is named after it (forks.ts). Each adapter reads it the agent's own way.
+   */
+  sessionName?(): Promise<string | undefined>;
   readonly sockets: Readonly<Record<string, AgentSocket>>;
   /** Stops delivering and observing, and anything launch() started. */
   close(): void | Promise<void>;

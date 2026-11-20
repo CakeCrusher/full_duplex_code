@@ -64,6 +64,9 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     const thread = forked.result?.thread;
     if (forked.error || typeof thread?.id !== 'string') throw new Error(`Codex could not fork the session: ${forked.error?.message ?? 'it named no fork'}`);
     this.session.log({ type: 'codex.forked', from: forkOf, threadId: thread.id, sandbox: forked.result.sandbox, approvalPolicy: forked.result.approvalPolicy });
+    // Named as the operator sees it in Codex's lists (what /rename does); a fork that can't be named still opens.
+    const { name } = this.session;
+    if (name) { const named = await this.delivery.call('thread/name/set', { threadId: thread.id, name }); if (named.error) this.session.log({ type: 'codex.fork_unnamed', threadId: thread.id, message: named.error.message }); }
     return ['resume', thread.id, ...args];
   }
   /** Codex unobserved would be no use: every companion hook must be on and trusted. */
@@ -76,10 +79,18 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
   }
   deliver(request: VoiceRequest) { return this.delivery.deliver(request); }
   history() { return this.observations.observations; }
+  /** The thread's name, as Codex lists it (the operator's, from /rename), read from the app server. */
+  async sessionName() {
+    const threadId = this.observations.sessionId;
+    if (!threadId) return;
+    const read = await this.delivery.call('thread/read', { threadId, includeTurns: false });
+    const name = read.result?.thread?.name;
+    return typeof name === 'string' && name.trim() ? name.trim() : undefined;
+  }
   async close() {
     this.delivery.close(); this.observations.close();
-    // A fork left behind keeps its window, the operator's from then on (forks.ts): Codex there runs on this adapter's app
-    // server, which goes on until that window's process ends, or fdc does.
+    // A fork's Codex runs on this adapter's app server, which goes on until that window's process ends (on the way back to
+    // the main session, forks.ts, unless its Codex won't end), or fdc does.
     const { forkOf, window } = this.session;
     if (forkOf && window) while (windowAlive(window)) await new Promise(resolve => setTimeout(resolve, 5000).unref());
     await this.server?.stop();

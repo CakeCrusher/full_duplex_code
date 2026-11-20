@@ -21,6 +21,16 @@ export const FORK_STARTED = '<fork started>', FORK_ENDED = '<fork ended>';
 
 export type Focus = 'main' | 'fork';
 
+/**
+ * What a fork is called in the agent's list of sessions: the forked session's name, "fork" and when it was made (local
+ * time, to the minute), as the operator asked (Nov 20): main-fork-2026-11-20-1432. One way for every agent; each adapter
+ * reads the session's name and gives the fork its own the agent's way (AgentAdapter.sessionName, AgentSession.name).
+ */
+export function forkName(original: string, at = new Date()) {
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${original.replace(/\s+/g, ' ').trim().slice(0, 80)}-fork-${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}-${two(at.getHours())}${two(at.getMinutes())}`;
+}
+
 export class Forks {
   bridge: Harness;
   focus: Focus = 'main';
@@ -62,7 +72,8 @@ export class Forks {
     if (!this.possible || this.focus === 'fork') return;
     const n = ++this.count, runDir = path.join(b.runDir, `fork-${n}`), script = path.join(runDir, 'fork.command');
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
-    const adapter = b.agent.create({ ...b.agentSession, runDir, sessionId: undefined, forkOf: b.sessionId, window: script, prefix: this.route = `/fork/${n}`, instructions: this.instructions = `${b.agentInstructions}\n\n${forkNote(b.agent)}`, log: event => b.log({ ...event, fork: n }) });
+    const name = forkName(await this.originalName());
+    const adapter = b.agent.create({ ...b.agentSession, runDir, sessionId: undefined, forkOf: b.sessionId, name, window: script, prefix: this.route = `/fork/${n}`, instructions: this.instructions = `${b.agentInstructions}\n\n${forkNote(b.agent)}`, log: event => b.log({ ...event, fork: n }) });
     try {
       // Followed from before its launch: Codex's fork is made there, and can take requests as the launch returns.
       this.adapter = adapter; this.ready = false; this.wire(adapter, n);
@@ -74,7 +85,7 @@ export class Forks {
       // A fork that doesn't start (its window waits for the operator, or the agent failed there) gives the focus, and what was sent to it, back to the main session.
       this.starting = setTimeout(() => { if (this.adapter === adapter && !this.ready) { const told = this.back('the fork did not start'); if (told) b.tell(told); } }, Forks.START_MS);
       this.starting.unref();
-      b.log({ type: 'fork.opened', n, from: b.sessionId, window: how, said: said.slice(-160) });
+      b.log({ type: 'fork.opened', n, from: b.sessionId, name, window: how, said: said.slice(-160) });
       b.focusChanged();
       return this.record(`${FORK_STARTED} ${forkOpened(b.agent, how)}`);
     } catch (error) {
@@ -84,6 +95,18 @@ export class Forks {
       return forkFailed(b.agent, (error as Error).message);
     }
   }
+  /**
+   * The main session's name, as its agent lists it, for the fork's: asked of its adapter for a few seconds at most, and the
+   * start of its ID when it has none (or the agent doesn't answer).
+   */
+  async originalName() {
+    const b = this.bridge;
+    const asked = Promise.resolve().then(() => b.adapter.sessionName?.()).catch(error => { b.log({ type: 'fork.unnamed', message: (error as Error).message }); return undefined; });
+    let timer: NodeJS.Timeout | undefined;
+    const named = await Promise.race([asked, new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), Forks.NAME_MS); })]).finally(() => clearTimeout(timer));
+    return named?.trim() || b.sessionId!.slice(0, 8);
+  }
+  static NAME_MS = 3000;
   /** Back to the main session: requests go to it again, the voice hears its work from its latest, and the fork is left behind, its window closed. */
   back(why: string, record = true): string | undefined {
     const b = this.bridge;
