@@ -182,7 +182,7 @@ export class Harness {
     // While a fork is in focus, the main session's work weighs nothing for Standby, as for the voice (forks.ts).
     observer.on('observation', (observation: Observation) => { if (!observation.child && observation.kind !== 'event' && this.forks.focus === 'main') this.voiceSessions.activity.add(observation.kind); });
     observer.on('observation', (observation: Observation) => { if (!observation.child) this.stage.observe(observer.toolUse(observation), observation.name === this.agent.profile.turnEnd); });
-    // What the voice hears of it, live or not: its work while it is in focus, not while a fork is (forks.ts, heard).
+    // What the voice hears of it, live or not: its work while it is in focus; while a fork is, on the way back, as one batch (forks.ts, heard).
     observer.on('observation', (observation: Observation) => this.forks.hear(observer, observation));
     observer.on('status', event => { this.log({ type: 'agent.status', ...event }); this.publish({ type: 'agent_status', ...event }); });
     // The agent's turn, by its own events: it begins with a prompt or a tool call and ends where the agent reports its end.

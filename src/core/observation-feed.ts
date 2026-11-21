@@ -21,6 +21,8 @@ const LARGE_TOKENS = 1200;
 const digest = (text: string) => createHash('sha256').update(text).digest('hex');
 
 export interface Projection { text: string; name: string; tokens: number }
+/** A record ready for Live, with its kind, when the feed got it and when the agent's event arrived. */
+type Prepared = Projection & { kind: string; receivedAt: number; at: number };
 
 // Turns one observation into the context record Live receives.
 export class ObservationProjector {
@@ -80,7 +82,7 @@ export class ObservationFeed {
   projector: ObservationProjector;
   label: string;
   /** Waiting to be sent: each record with when the feed got it and when the agent's event arrived. */
-  pending: (Projection & { kind: string; receivedAt: number; at: number })[] = [];
+  pending: Prepared[] = [];
   first = 0; due = 0;
   stopped = false;
   timer: NodeJS.Timeout | null = null;
@@ -115,16 +117,32 @@ export class ObservationFeed {
   flush() {
     if (this.timer) clearTimeout(this.timer); this.timer = null;
     if (this.stopped || !this.pending.length) return;
-    const records = this.pending.splice(0), tools = records.filter(record => record.kind === 'tool');
+    const records = this.pending.splice(0);
+    this.send(records, Math.min(...records.map(record => record.at)));
+  }
+  /**
+   * Work from earlier, heard now (`since`) as one batch of its own, ahead of what waits: what the main session did while a
+   * fork had the focus, on the way back (forks.ts, back).
+   */
+  catchUp(observations: readonly FeedObservation[], since = Date.now()) {
+    if (this.stopped) return;
+    const now = Date.now(), records = observations.flatMap(observation => {
+      const projection = observation.child ? null : this.projector.project(observation);
+      return projection ? [{ ...projection, kind: observation.kind, receivedAt: now, at: observation.at ?? now }] : [];
+    });
+    if (records.length) this.send(records, since, true);
+  }
+  send(records: Prepared[], since: number, caughtUp = false) {
+    const tools = records.filter(record => record.kind === 'tool');
     let lines = records.map(record => record.text);
     if (tools.reduce((sum, record) => sum + record.tokens, 0) > this.compactTokens) {
       const at = records.indexOf(tools[0]);
       lines = records.flatMap((record, i) => i === at ? [toolWork(this.agent, tools)] : record.kind === 'tool' ? [] : [record.text]);
     }
     const content = lines.join('\n');
-    this.log({ type: 'context.prepared', sources: records.map(({ text, ...source }) => source), content, compacted: lines.length < records.length ? tools.length : undefined });
+    this.log({ type: 'context.prepared', sources: records.map(({ text, ...source }) => source), content, compacted: lines.length < records.length ? tools.length : undefined, ...caughtUp && { caughtUp } });
     // All observations remain in order. In-flight ACKs do not stall new events.
-    this.context.add('thinking', content, null, this.label, Math.min(...records.map(record => record.at)));
+    this.context.add('thinking', content, null, this.label, since);
   }
   stop() { this.stopped = true; if (this.timer) clearTimeout(this.timer); this.pending.length = 0; }
 }

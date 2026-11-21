@@ -240,7 +240,7 @@ test("the agent's news wakes it, a few tool calls don't, and what it did meanwhi
   assert.ok(news >= 0 && news < appended.length - 1, 'the cue comes after the work it is about');
 });
 
-test("a fork's answer that comes on Standby wakes it and arrives as it would have live: before the way back, and the main session's work only from there", async t => {
+test("a fork's answer that comes on Standby wakes it and arrives as it would have live: before the way back; after it, what the main session did meanwhile, once, then its work since", async t => {
   const { h, lives, sent, goQuiet } = await quiet(t);
   // The main session has a conversation to fork, and the operator turned aside: the fork has their question.
   h.observer.observations.push({ kind: 'text', name: 'MessageDisplay', text: JSON.stringify({ hook_event_name: 'MessageDisplay', delta: 'Started on the toggle.' }), raw: {}, at: Date.now(), state: 'turn_finished', child: false });
@@ -266,10 +266,11 @@ test("a fork's answer that comes on Standby wakes it and arrives as it would hav
   await until(() => lives[1]?.state === 'active');
   await until(() => lives[1].appended.some(([, text]) => /main session after the fork/.test(text)));
   const appended = lives[1].appended.map(([kind, text]) => `${kind}: ${text}`), at = (pattern: RegExp) => appended.findIndex(a => pattern.test(a));
-  const answer = at(/The build is slow because of the source maps/), back = at(/<fork ended> Back to the main session of Claude Code \(the conversation went quiet\)/), after = at(/main session after the fork/);
+  const answer = at(/The build is slow because of the source maps/), back = at(/<fork ended> Back to the main session of Claude Code \(the conversation went quiet\)/), meanwhile = at(/main session busy meanwhile/), after = at(/main session after the fork/);
   assert.ok(answer >= 0, "the fork's answer reaches the voice");
-  assert.ok(answer < back && back < after, `in the order it came: the answer, the way back, the main session's work since: ${appended.join(' | ')}`);
-  assert.equal(at(/main session busy meanwhile/), -1, "the main session's work while the fork was in focus weighs nothing for the voice, as live");
+  assert.ok(answer < back && back < meanwhile && meanwhile <= after, `in the order it came: the answer, the way back, what the main session did meanwhile, its work since: ${appended.join(' | ')}`);
+  assert.match(appended[back], /what it did while the fork had the focus follows/);
+  assert.equal(appended.filter(a => /main session busy meanwhile/.test(a)).length, 1, 'once');
   assert.match(appended.at(-1)!, /^commentary: Tell the operator now, in a sentence or two, what Claude has done since/, 'then the cue to report it');
 });
 

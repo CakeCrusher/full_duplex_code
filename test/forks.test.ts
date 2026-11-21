@@ -22,7 +22,7 @@ import { claude } from '../src/adapters/claude/index.ts';
 import { codex } from '../src/adapters/codex/index.ts';
 import { perceivedText } from '../src/core/perceived.ts';
 import { pageTurn } from '../src/core/turn.ts';
-import { fakeJev, harness, page, turn, until } from './live-fake.ts';
+import { decides, fakeJev, harness, page, turn, until } from './live-fake.ts';
 
 const settle = (ms = 30) => new Promise(resolve => setTimeout(resolve, ms));
 // The hook command Claude runs for each event: what it complains about, if anything.
@@ -516,4 +516,63 @@ test("a voice connection that continues an earlier one, with a fork in focus, ca
   const caught = lives[1].appended.find(([, text]) => /continues an earlier one/.test(text))![1];
   assert.match(caught, /The build is slow because of the source maps/, "the fork's work, which the voice hears while it is in focus");
   assert.doesNotMatch(caught, /main session busy meanwhile/, "not the main session's, which weighs nothing for it then");
+});
+
+test("on the way back, the voice picks up what the main session did while the fork had the focus: one batch, right after the way back; never anything it heard already, and nothing later repeats it", async t => {
+  const { h, lives, sessionId } = await harness(t); conversed(h);
+  h.forks.open = () => 'Terminal'; h.forks.shut = async () => 'closed';
+  await h.voiceSessions.start('sdp', page('p'), 'fresh');
+  const mediator = h.voiceSessions.mediator!;
+  const main = (data: Record<string, unknown>) => (h.observer as any).observe({ session_id: sessionId, ...data });
+  const tool = (stdout: string) => main({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'npm run lint' }, tool_response: { stdout } });
+  const said = (live: typeof lives[0]) => live.appended.map(([kind, text]) => `${kind}: ${text}`);
+  // Heard live, before the fork.
+  tool('main work the voice heard');
+  await until(() => said(lives[0]).some(a => /main work the voice heard/.test(a)));
+  await h.forks.start('By the way, why is the build slow?');
+  const fork = (data: Record<string, unknown>) => (h.forks.adapter!.observations as any).observe({ session_id: 'fork-session', ...data });
+  fork({ hook_event_name: 'SessionStart' });
+  fork({ hook_event_name: 'MessageDisplay', message_id: 'f1', index: 0, final: true, delta: 'The build is slow because of the source maps.' });
+  fork({ hook_event_name: 'Stop', last_assistant_message: 'The build is slow because of the source maps.' });
+  await until(() => said(lives[0]).some(a => /source maps/.test(a)));
+  // The main session works meanwhile: none of it reaches the voice while the fork has the focus.
+  tool('main work while the fork had the focus');
+  main({ hook_event_name: 'MessageDisplay', message_id: 'm1', index: 0, final: true, delta: 'The parser is done.' });
+  await settle(1500);
+  assert.ok(!said(lives[0]).some(a => /while the fork had the focus|The parser is done/.test(a)));
+  // The operator moves on: the turn that moves back ends by telling the voice what fdc did (mediator.ts, decided).
+  (mediator as any).route = decides(async () => ({ send: false, told: h.forks.back('the operator moved on') }));
+  mediator.history.add({ type: 'session.input_transcript.delta', delta: 'Okay, got it.', start_ms: 0, end_ms: 1000 });
+  mediator.quiet();
+  await until(() => said(lives[0]).some(a => /The parser is done/.test(a)));
+  let appended = said(lives[0]);
+  const back = appended.findIndex(a => /<fork ended> Back to the main session of Claude Code \(the operator moved on\)/.test(a)), batch = appended.findIndex(a => /main work while the fork had the focus/.test(a));
+  assert.ok(back >= 0 && batch === back + 1, `the batch right after the way back: ${appended.join(' | ')}`);
+  assert.match(appended[back], /what it did while the fork had the focus follows/);
+  assert.match(appended[batch], /^thinking: \[Claude hooks; part 1\/1\]/, 'as the feed sends work, which no request carries back to the agent');
+  assert.match(appended[batch], /The parser is done/, 'one batch: its messages with its tool work');
+  assert.doesNotMatch(appended[batch], /main work the voice heard/, 'never what the voice heard already');
+  // From there, the main session's work as it comes.
+  tool('main work after the way back');
+  await until(() => said(lives[0]).some(a => /main work after the way back/.test(a)));
+  appended = said(lives[0]);
+  assert.equal(appended.filter(a => /main work while the fork had the focus/.test(a)).length, 1, 'once');
+  // A connection that continues this one has it all already; a new one is told it once, in its place.
+  await lives[0].close('operator ended voice');
+  await h.startLive(undefined, page('p'), 'resume');
+  assert.equal(h.voiceSessions.run!.plan, 'fork');
+  await until(() => lives[1].appended.some(([, text]) => /continues an earlier one/.test(text)));
+  assert.doesNotMatch(said(lives[1]).join('\n'), /while the fork had the focus|The parser is done|after the way back/, 'nothing repeated');
+  await lives[1].close('operator ended voice');
+  await h.startLive(undefined, page('p'), 'fresh');
+  const startup = JSON.stringify(lives[2].options.input), times = (pattern: RegExp) => startup.match(new RegExp(pattern, 'g'))?.length ?? 0;
+  assert.deepEqual([times(/main work the voice heard/), times(/source maps/), times(/main work while the fork had the focus/), times(/The parser is done/), times(/main work after the way back/)], [1, 1, 1, 1, 1], startup);
+  assert.ok(startup.indexOf('source maps') < startup.indexOf('main work while the fork had the focus') && startup.indexOf('The parser is done') < startup.indexOf('main work after the way back'), 'in the order the voice heard it');
+  // A fork while the main session does nothing: nothing to pick up, and nothing more goes.
+  await h.forks.start('One more aside?');
+  const before = lives[2].appended.length;
+  h.tell(h.forks.back('the operator moved on')!);
+  await settle(50);
+  assert.equal(lives[2].appended.length, before + 1, 'just the way back');
+  assert.match(lives[2].appended.at(-1)![1], /you hear its work from now/);
 });

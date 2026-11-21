@@ -7,6 +7,7 @@ import { QUIET_TURN_MS, TURN_ENDS, type Harness } from './bridge.ts';
 import { forkBack, forkFailed, forkNote, forkOpened } from './prompts.ts';
 import { closeWindow, openWindow, windowAlive, writeScript } from './window.ts';
 import { perceive } from './perceived.ts';
+import { contextData } from './context-rules.ts';
 
 /** The tags the conversation record (perceived.ts) carries where a fork began and ended: the voice, Jev and both sessions read them as they are. */
 export const FORK_STARTED = '<fork started>', FORK_ENDED = '<fork ended>';
@@ -16,10 +17,12 @@ export const FORK_STARTED = '<fork started>', FORK_ENDED = '<fork ended>';
 // which words, and when the operator has left the matter: jev.ts, turn.ts).
 // Delegation doesn't change: the conversation from the cursor to the latest words goes to whichever session is in focus,
 // and GPT Live carries what it learns in either. The voice hears the focused session's work; the main session's weighs
-// nothing for it (nor for Standby) meanwhile. What a voice that wasn't live missed (on Standby, or reconnecting) it gets
-// the same way (heard): a fork's answer that came on Standby is its news. A fork doesn't last: on the way back to the
-// main session fdc stops following it and closes its window (the agent there ends; its conversation is saved), and the
-// next words for a fork open a new one. One fork at a time: a fork of a fork is not offered.
+// nothing for it (nor for Standby) meanwhile, and on the way back the voice picks up what the main session did meanwhile,
+// as one batch after the way back, never anything it heard already (the operator, Nov 20). What a voice that wasn't live
+// missed (on Standby, or reconnecting) it gets the same way (heard): a fork's answer that came on Standby is its news. A
+// fork doesn't last: on the way back to the main session fdc stops following it and closes its window (the agent there
+// ends; its conversation is saved), and the next words for a fork open a new one. One fork at a time: a fork of a fork is
+// not offered.
 
 export type Focus = 'main' | 'fork';
 
@@ -70,24 +73,33 @@ export class Forks {
   /**
    * What the voice hears of the agent's work, in the order it came: each observation of the session in focus as it comes
    * (the fork's while fdc follows it, the main session's otherwise), as the voice's feed takes it (mediator.ts, observe),
-   * whether a voice was live or not. Every observation either session sent, for telling the main session's own earlier
-   * history (a resumed session's, which it never sent) from its work while a fork had the focus.
+   * whether a voice was live or not; and on the way back, what the main session did while the fork had the focus (`away`),
+   * heard then (`heardAt`). Every observation either session sent, for telling the main session's own earlier history (a
+   * resumed session's, which it never sent) from its work while a fork had the focus.
    */
-  log: Observation[] = []; sent = new WeakSet<Observation>();
-  hear(from: AgentObserver, observation: Observation) { this.sent.add(observation); if (from === this.observer()) this.log.push(observation); }
+  log: Observation[] = []; logged = new WeakSet<Observation>(); heardAt = new WeakMap<Observation, number>(); away: Observation[] = []; sent = new WeakSet<Observation>();
+  hear(from: AgentObserver, observation: Observation) {
+    this.sent.add(observation);
+    if (from === this.observer()) { this.log.push(observation); this.logged.add(observation); }
+    else if (from === this.bridge.observer && this.focus === 'fork') this.away.push(observation);
+  }
   /**
-   * The agent's work the voice heard, or would have heard live, after one time and up to another: the main session's
-   * earlier history, then each session's work in its time in focus. A voice that wasn't live (on Standby, or reconnecting)
-   * catches up from here (voice-sessions.ts, connect), so a fork's answer that came meanwhile reaches it.
+   * The agent's work the voice heard, or would have heard live, after one time and up to another (when it was heard): the
+   * main session's earlier history, then each session's work in its time in focus, and the main session's while a fork had
+   * the focus where the way back brought it. A voice that wasn't live (on Standby, or reconnecting) catches up from here
+   * (voice-sessions.ts, connect), so a fork's answer that came meanwhile reaches it.
    */
   heard(after = 0, until = Infinity): Observation[] {
-    const earlier = this.bridge.adapter.history().filter(o => !this.sent.has(o));
-    return [...earlier, ...this.log].filter(o => o.at > after && o.at <= until);
+    const earlier = this.bridge.adapter.history().filter(o => !this.sent.has(o) && o.at > after && o.at <= until);
+    return [...earlier, ...this.log.filter(o => { const at = this.heardAt.get(o) ?? o.at; return at > after && at <= until; })];
   }
-  /** What the voice missed after a time (heard), before and after the way back made on Standby that it is still to be told (untold). */
+  /**
+   * What the voice missed after a time (heard), before and after the way back made on Standby that it is still to be told
+   * (untold): everything heard since that way back, whenever it happened, as voice has been on Standby since.
+   */
   missed(after: number) {
-    const later = new Set(this.log.slice(this.untold?.heard ?? this.log.length)), heard = this.heard(after);
-    return { before: heard.filter(o => !later.has(o)), after: heard.filter(o => later.has(o)) };
+    const later = this.log.slice(this.untold?.heard ?? this.log.length), since = new Set(later);
+    return { before: this.heard(after).filter(o => !since.has(o)), after: later };
   }
   adapterFor(target?: Focus) { return target === 'fork' && this.adapter ? this.adapter : this.bridge.adapter; }
   /** Opens a fork for the tangent and moves the focus to it; returns what the voice is told. */
@@ -105,7 +117,7 @@ export class Forks {
       const how = this.open(writeScript(script, launch, b.cwd));
       this.window = { script, how };
       this.watch(adapter, script);
-      this.focus = 'fork'; this.cursors.fork = this.cursors.main; this.asked = this.answered = this.active = 0;
+      this.focus = 'fork'; this.cursors.fork = this.cursors.main; this.asked = this.answered = this.active = 0; this.away = [];
       // A fork that doesn't start (its window waits for the operator, or the agent failed there) gives the focus, and what was sent to it, back to the main session.
       this.starting = setTimeout(() => { if (this.adapter === adapter && !this.ready) { const told = this.back('the fork did not start'); if (told) b.tell(told); } }, Forks.START_MS);
       this.starting.unref();
@@ -131,8 +143,14 @@ export class Forks {
     return named?.trim() || b.sessionId!.slice(0, 8);
   }
   static NAME_MS = 3000;
-  /** Back to the main session: requests go to it again, the voice hears its work from its latest, and the fork is left behind, its window closed. */
-  back(why: string, record = true): string | undefined {
+  /**
+   * Back to the main session: requests go to it again, and the fork is left behind, its window closed. The voice picks up
+   * what the main session did while the fork had the focus, as one batch, then hears its work as it comes: told now
+   * (`now`), the batch follows the way back once whoever made it has told it (as it returns, or as the turn that made it
+   * ends: turn.ts, mediator.ts decided); told when the voice wakes (quiet), it follows it then (voice-sessions.ts). Heard
+   * from here (heard), none of it comes again.
+   */
+  back(why: string, now = true): string | undefined {
     const b = this.bridge;
     if (this.focus !== 'fork') return;
     this.focus = 'main';
@@ -140,9 +158,13 @@ export class Forks {
     const untaken = this.retire(), window = this.window; this.window = undefined;
     if (window) void this.shut(window.script, window.how).then(closed => b.log({ type: 'fork.closed', n: this.count, closed }), error => b.log({ type: 'fork.closed', n: this.count, error: (error as Error).message }));
     b.focusChanged();
-    const text = `${FORK_ENDED} ${forkBack(b.agent, b.observer.state, why)}`, told = record ? this.record(text) : text;
+    const at = Date.now(), meanwhile = this.away.filter(o => !this.logged.has(o)); this.away = [];
+    for (const observation of meanwhile) { this.log.push(observation); this.logged.add(observation); this.heardAt.set(observation, at); }
+    const caught = meanwhile.some(o => !o.child && contextData(b.agent, o) !== undefined);
+    const text = `${FORK_ENDED} ${forkBack(b.agent, b.observer.state, why, caught)}`, told = now ? this.record(text) : text;
+    const mediator = b.mediator, live = b.live;
+    if (now && caught && mediator && live?.state === 'active') setImmediate(() => { if (b.mediator === mediator && live.state === 'active') mediator.feed.catchUp(meanwhile, at); });
     // What the fork hadn't taken goes to the main session now, after the decisions under way (which may send it themselves).
-    const mediator = b.mediator;
     if (untaken && mediator) mediator.inTurn(() => mediator.send(randomUUID(), [], null));
     return told;
   }
@@ -153,10 +175,10 @@ export class Forks {
    */
   quiet() {
     if (this.focus !== 'fork' || this.busy) return;
-    const text = this.back('the conversation went quiet', false);
-    if (text) this.untold = { text, heard: this.log.length };
+    const heard = this.log.length, text = this.back('the conversation went quiet', false);
+    if (text) this.untold = { text, heard };
   }
-  /** What a waking voice session is still to be told: the way back made while it was going on Standby, and how much the voice had heard by then (it comes after that). */
+  /** What a waking voice session is still to be told: the way back made while it was going on Standby, and how much the voice had heard by then (it comes after that, the main session's batch first). */
   untold?: { text: string; heard: number };
   /** What the fork does reaches the page, the record, the voice, Standby and the stage for as long as fdc follows it: until the way back. */
   wire(adapter: AgentAdapter, n: number) {
